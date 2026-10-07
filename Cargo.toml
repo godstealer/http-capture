@@ -1,0 +1,29 @@
+[workspace]
+members = ["crates/browser-profiles", "crates/transport-wreq", "crates/transport-api", "crates/transport-httpcloak", "crates/capture-core", "crates/capture-service", "apps/desktop/src-tauri"]
+default-members = ["crates/capture-core"]
+resolver = "2"
+exclude = ["vendor/h2"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+[patch.crates-io]
+h2 = { path = "vendor/h2" }
+
+# Keep local development artifacts small. All workspace builds use target/ by
+# default; avoid separate target directories for individual test suites.
+[profile.dev]
+debug = 1
+incremental = false
+
+[profile.test]
+debug = 1
+incremental = false

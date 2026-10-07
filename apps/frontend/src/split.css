@@ -1,0 +1,35 @@
+.split-pane { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; gap: 0; }
+.split-column { flex-direction: column; }
+.split-row { flex-direction: row; }
+.split-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; flex: var(--split-ratio) 1 0; }
+.split-content:last-child { flex: var(--split-rest) 1 0; }
+.split-content:only-child { flex: 1; }
+.split-handle { flex: 0 0 8px; position: relative; background: #11171c; touch-action: none; outline: none; z-index: 2; }
+.split-row > .split-handle { cursor: col-resize; }
+.split-column > .split-handle { cursor: row-resize; }
+.split-handle::after { content: ''; position: absolute; border-radius: 3px; background: #495b65; }
+.split-row > .split-handle::after { width: 2px; height: 30px; top: calc(50% - 15px); left: 3px; }
+.split-column > .split-handle::after { height: 2px; width: 30px; left: calc(50% - 15px); top: 3px; }
+.split-handle:hover, .split-handle:focus-visible, .is-dragging > .split-handle { background: #28483f; }
+.split-handle:hover::after, .split-handle:focus-visible::after, .is-dragging > .split-handle::after { background: #70d8b4; }
+.is-dragging, .is-dragging * { user-select: none !important; }
+.split-content > .capture-inspector { flex: 1; height: auto; min-height: 0; border-top: 0; overflow: hidden; }
+.split-content > .session-table-wrap { min-height: 0; }
+.inspector-split .split-content > section { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+.inspector-tabs { gap: 12px; overflow-x: auto; }
+.inspector-tabs > * { flex-shrink: 0; }
+.capture-notes { flex-shrink: 0; }
+.main-grid.split-pane { display: flex; gap: 0; }
+.main-grid .split-content > .panel { flex: 1; min-height: 0; min-width: 0; }
+.replay-request, .replay-response { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; }
+.replay-request .request-content { flex: 1; min-height: 65px; }
+.replay-request .headers-scroll { max-height: none; }
+.replay-response .response-content { min-height: 0; }
+.replay-request > .tabs { overflow-x: auto; }
+.layout-direction { display: flex; gap: 3px; flex-shrink: 0; }
+.layout-direction button { padding: 4px 7px; color: #8596a1; font-size: 10px; border-radius: 3px; }
+.layout-direction button[aria-pressed="true"] { color: #83d9bb; background: #253c34; }
+@media(max-width:850px) {
+  .capture-page { min-height: 0; }
+  .main-grid.split-pane { margin: 8px; }
+}

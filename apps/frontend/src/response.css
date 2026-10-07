@@ -1,0 +1,17 @@
+.formatted-response { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.format-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 6px 12px; border-bottom: 1px solid #2c363e; flex-shrink: 0; font-size: 10px; }
+.format-toolbar button { padding: 5px 8px; border-radius: 4px; }
+.format-toolbar button[aria-pressed="true"] { color: #85dfbd; background: #294238; }
+.format-toolbar select { padding: 4px; background: #222b33; }
+.format-toolbar > span { color: #839eab; }
+.format-toolbar > button:last-child { margin-left: auto; }
+.format-note { padding: 7px 12px; color: #d2b783; font-size: 11px; }
+.formatted-scroll { flex: 1; min-height: 0; overflow: auto; }
+.formatted-scroll pre { margin: 0; padding: 14px 16px; tab-size: 2; white-space: pre; font: 12px/1.8 Consolas, monospace; color: #b4d2c0; }
+.formatted-scroll > p { padding: 12px; color: #84929d; }
+.response-preview { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.response-preview iframe { width: 100%; flex: 1; min-height: 0; border: 0; background: white; }
+.split-column.second-collapsed > .split-content:first-child { flex: 1; }
+.split-column.second-collapsed > .split-content:last-child { flex: 0 0 42px; }
+.response-collapse { display: flex; align-items: center; gap: 6px; color: #a5d4c2; font-size: 11px; padding: 6px; }
+.second-collapsed .replay-response > .response-tabs, .second-collapsed .replay-response > .response-content { display: none; }

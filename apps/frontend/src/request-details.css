@@ -1,0 +1,25 @@
+.request-details{width:100%;min-width:0;font-size:13px;overflow:auto}
+.request-content>.request-details{height:100%}
+.property-table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:left}
+.property-table th,.property-table td{padding:9px 18px;vertical-align:top;overflow-wrap:anywhere;line-height:1.5}
+.property-table th{font-weight:500;border-bottom:1px solid #39414c;opacity:.8}
+.property-table th:first-child,.property-table td:first-child{width:30%;max-width:240px}
+.property-table tbody tr:nth-child(even){background:#ffffff06}
+.request-details summary{cursor:pointer;padding:10px 16px;font-weight:600;background:#ffffff09;border-bottom:1px solid #ffffff0a}
+.request-details details .property-table thead{display:none}
+.request-details details .property-table td:first-child{padding-left:32px}
+.request-details .detail-note{margin:10px 16px;font-size:12px;line-height:1.7;opacity:.7}
+.header-order.request-details{padding:0}
+.request-details p:not(.detail-note){padding:0 16px}
+.replay-request>.tabs,.inspector-tabs{overflow-x:auto;flex-shrink:0}
+.replay-request>.tabs .tab,.inspector-tabs .tab{flex-shrink:0;white-space:nowrap}
+.replay-request>.tabs .tabs-right{display:none}
+[data-theme=light] .property-table th{border-color:#e1e3e6}
+[data-theme=light] .property-table tbody tr:nth-child(even){background:#f4f4f5}
+[data-theme=light] .request-details summary{background:#f0f1f2;border-color:#e5e6e8}
+
+.order-copy-actions{display:flex;gap:16px;padding:10px 16px}.certificate-download{display:inline-block;margin:10px 16px;color:inherit;text-decoration:underline}.request-details details details>summary{padding-left:30px}.property-table td{white-space:pre-wrap}
+
+.header-order .order-comparison thead{display:table-header-group}.header-order .order-comparison th:first-child,.header-order .order-comparison td:first-child{width:50%}
+
+.upstream-settings{border:1px solid #8885;border-radius:6px;margin:18px 0;padding:14px;min-width:0}.upstream-settings legend{padding:0 6px}.upstream-settings label{display:flex;flex-direction:column;gap:6px;margin:10px 0}.upstream-settings .upstream-toggle{flex-direction:row;align-items:center}.upstream-settings input:not([type=checkbox]){border:1px solid #8885;padding:8px;border-radius:4px;width:100%;min-width:0}.upstream-auth{display:flex;gap:12px}.upstream-auth label{flex:1;min-width:0}.modal:has(.upstream-settings){max-height:90vh;overflow:auto;width:600px}.upstream-settings p{font-size:11px}

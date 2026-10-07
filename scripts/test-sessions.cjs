@@ -1,0 +1,11 @@
+const {buildSync}=require('esbuild');
+const assert=require('node:assert/strict');
+const result=buildSync({entryPoints:['apps/frontend/src/sessions.ts'],bundle:true,platform:'node',format:'cjs',write:false});
+const m={exports:{}};new Function('module','exports',result.outputFiles[0].text)(m,m.exports);
+const entry={startedDateTime:'2026-09-29T00:00:00Z',time:10,request:{method:'GET',url:'https://example.com',httpVersion:'HTTP/2',headers:[{name:'x-a',value:'1'},{name:'x-b',value:'2'},{name:'x-a',value:'3'}]},response:{status:200,httpVersion:'HTTP/2',headers:[{name:'Content-Encoding',value:'br'}],content:{text:'SGVsbG8=',encoding:'base64'}}};
+const rows=m.exports.readSession(JSON.stringify({log:{version:'1.2',entries:[entry]}}));
+assert.deepEqual(rows[0].request.headers.map(h=>h.name),['x-a','x-b','x-a']);assert.equal(rows[0].response.bodyBase64,'SGVsbG8=');assert.equal(rows[0].response.headers.length,0);
+assert.deepEqual(m.exports.readSession(JSON.stringify({format:'http-capture-session',version:1,flows:rows})),rows);
+assert.throws(()=>m.exports.readSession('{}'));
+entry.response.content.encoding='unsupported';assert.throws(()=>m.exports.readSession(JSON.stringify({log:{entries:[entry]}})));
+console.log('HAR import and session round-trip: passed');

@@ -1,0 +1,20 @@
+[package]
+name = "capture-service"
+default-run = "capture-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+browser-replay = ["capture-core/browser-replay"]
+
+[dependencies]
+base64 = "0.22"
+serde_json.workspace = true
+capture-core = { path = "../capture-core" }
+anyhow.workspace = true
+serde.workspace = true
+tokio.workspace = true
+axum = "0.8"
+uuid = { version = "1", features = ["v4"] }

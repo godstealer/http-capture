@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HTTP Capture",
+  "version": "0.1.0",
+  "identifier": "dev.httpcapture.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev --workspace @http-capture/frontend",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build --workspace @http-capture/frontend",
+    "frontendDist": "../../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HTTP Capture",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1000,
+        "minHeight": 680
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

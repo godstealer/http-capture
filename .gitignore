@@ -1,0 +1,26 @@
+node_modules/
+dist/
+target/
+target-protocol/
+target-auto/
+.local/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.key
+.DS_Store
+
+# Local configuration, credentials and generated desktop files
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+control.token
+upstream-profiles.json
+apps/desktop/src-tauri/gen/
+.idea/
+.vscode/
+Thumbs.db

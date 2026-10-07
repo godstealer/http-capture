@@ -1,0 +1,22 @@
+[package]
+name = "http-capture-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+browser-replay = ["capture-core/browser-replay"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+capture-core = { path = "../../../crates/capture-core" }
+serde.workspace = true
+tokio.workspace = true
+
+[[bin]]
+name = "http-capture"
+path = "src/main.rs"

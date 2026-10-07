@@ -1,0 +1,24 @@
+{
+  "name": "http-capture",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run dev --workspace @http-capture/frontend",
+    "build": "npm run build --workspace @http-capture/frontend",
+    "preview": "npm run preview --workspace @http-capture/frontend",
+    "test": "node scripts/cargo.mjs test --locked -p capture-core --no-default-features",
+    "tauri": "npm run tauri --workspace @http-capture/desktop --",
+    "desktop": "npm run tauri --workspace @http-capture/desktop -- dev",
+    "capture": "node scripts/capture.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "desktop:build": "npm run tauri --workspace @http-capture/desktop -- build",
+    "check:service": "node scripts/cargo.mjs check --locked -p capture-service",
+    "capture:browser": "node scripts/capture.mjs --browser-replay",
+    "desktop:browser": "npm run tauri --workspace @http-capture/desktop -- dev --features browser-replay"
+  },
+  "workspaces": [
+    "apps/frontend",
+    "apps/desktop"
+  ]
+}

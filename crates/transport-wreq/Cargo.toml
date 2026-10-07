@@ -1,0 +1,13 @@
+[package]
+name = "transport-wreq"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+transport-api = { path = "../transport-api" }
+browser-profiles = { path = "../browser-profiles", features = ["browser-replay"] }
+anyhow.workspace = true
+base64 = "0.22"
+futures-util = "0.3"
+url = "2"
+wreq = { version = "=0.16.1", features = ["stream", "socks"] }
