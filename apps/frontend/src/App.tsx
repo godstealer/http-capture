@@ -104,7 +104,7 @@ export default function App() {
   const flow = flows.find(f => f.id === selected);
   const engines = status.sendEngines ?? [];
   const selectedEngine = engines.find(e => e.id === (draft.engine ?? 'auto'));
-  function merge(f: Flow) { setFlows(previous => [f, ...previous.filter(x => x.id !== f.id)].slice(0, 200)); }
+  function merge(f: Flow) { setFlows(previous => [f, ...previous.filter(x => x.id !== f.id)]); }
   function notify(text: string) { setNotice(text); }
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => {

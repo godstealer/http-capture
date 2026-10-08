@@ -35,16 +35,20 @@ cargo check -p http-capture-desktop
 
 Rust workspace 在根目录维护 `Cargo.lock`；npm workspace 在根目录维护 `package-lock.json`，子模块无需各自安装和维护锁文件。可选浏览器发送引擎分别通过 `capture-service/browser-replay` 或 `http-capture-desktop/browser-replay` feature 启用。
 
-Windows 需要 MSVC C++ 工具链和 WebView2，macOS 需要 Xcode Command Line Tools；Linux 的 core 凭据库需 D-Bus 开发依赖及运行时 Secret Service，Tauri 另需 WebKitGTK 等平台依赖。CI 验证三个平台的 core 和服务以及前端构建，尚不执行桌面安装包发布。
+Windows 需要 MSVC C++ 工具链和 WebView2，macOS 需要 Xcode Command Line Tools；Linux 的 core 凭据库需 D-Bus 开发依赖及运行时 Secret Service，Tauri 另需 WebKitGTK 等平台依赖。CI 配置覆盖三个平台的 core/服务及前端构建；具体运行结果需在 Actions 核对，尚不执行桌面安装包发布。
 
 ## GitHub 提交
 
-提交 `apps/`、`crates/`、`vendor/`、`scripts/`、`docs/`、`.github/`、根目录清单与锁文件、README 和 `.gitignore`。构建产物、依赖目录、`.local/`、CA 私钥、抓包数据库、代理配置、令牌和本地环境变量均不提交。
+提交 `apps/`、`crates/`、`helpers/`（含 Go 模组及许可）、`vendor/`、`scripts/`、`docs/`、`.github/`、根目录清单与锁文件、README 和 `.gitignore`。构建产物、依赖目录、`.local/`、CA 私钥、抓包数据库、代理配置、令牌和本地环境变量均不提交。
 
 系统凭据库中的密码不属于仓库文件；不要把真实凭据放进测试或示例。当前 Cargo 清单声明 MIT，正式公开前应确认项目自身的授权及署名，并保留第三方源码许可证。
 
-创建 GitHub 仓库后，可在根目录初始化 Git，先检查暂存文件，再提交并推送。仓库地址及公开/私有属性由维护者选择。
+公开仓库已建立：[godstealer/http-capture](https://github.com/godstealer/http-capture)，默认分支 main。后续先检查差异及待提交文件，再提交和推送。
 
 ## 可选 TUN 接入
 
 `helpers/tun` 是独立 Go 模块和进程，以应用规则筛选流量并转发至 core 专用回环 CONNECT 接口。Rust 负责配置、启动确认、状态和停止，stdin EOF 是父进程生命周期信号。构建、权限、协议边界、验证及 GPL 许可见 [TUN 文档](tun.md)。
+
+## 本地构建空间
+
+统一使用 Cargo 默认 target/，不再为临时测试新建 target-auto/、target-protocol/。dev/test 配置保留精简调试信息（debug=1），关闭增量缓存以降低磁盘占用，代价是重编译可能更慢。清理前停止相关进程并保留需要的安装包；.local 包含工具链、证书与运行数据，不应作为普通构建缓存整体删除。

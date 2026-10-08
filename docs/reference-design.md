@@ -1,31 +1,26 @@
 # 抓包与浏览器重放的参考设计
 
-## 参考来源
+更新时间：2026-10-08。最初参考日期为 2026-09-22；本文描述当前采用的边界，不作为历史测试报告。
 
-- HTTP Toolkit 的 Mockttp 类型定义：https://github.com/httptoolkit/mockttp/blob/main/src/types.ts
-- httpcloak：https://github.com/sardanioss/httpcloak
+## 参考来源与用途
 
-参考日期：2026-09-22。这里记录设计取舍，不复制上游实现，也没有引入两个项目的运行时依赖。
+- [HTTP Toolkit / Mockttp](https://github.com/httptoolkit/mockttp/blob/main/src/types.ts)：参考代理生命周期、原始字段与解析字段的区分。
+- [httpcloak](https://github.com/sardanioss/httpcloak)：通过独立 Go 辅助进程接入浏览器发送能力；已是可选运行时依赖，不再只是参考项目。
 
-## 已采用
+## 已采用的设计
 
-Mockttp 区分解析后的字段、原始字段序列以及正文数据。我们继续用有序 Header 数组保存大小写和交错重复字段，用 Base64 保存原始 HTTP/1 头部；GUI 提供解析头部、原始头部、正文文本、正文 Base64 四种视图。二进制或压缩正文不会为了展示而覆盖存储数据。正文已解除 chunked 分帧，不代表整段原始 TCP 流。
+保留 Tauri、React、Rust core。传输契约、浏览器版本选择、wreq 和 httpcloak 分成独立模块；core 负责脚本、拦截、代理选择及持久化。多个引擎并存，每个手动请求动态选择，能力与不可用原因由后端返回，不静默回退。
 
-捕获记录与发出的请求必须分开理解：Host、Content-Length、Connection 等可能因代理转发而调整，详情提供转发说明。原始请求头是客户端发给代理的字节；原始响应头是上游发给代理的字节，均不冒充代理输出快照。
+捕获输入与上游输出分开记录。H1 保留原始请求头字节和有序字段；H2 保留解码后的普通字段及伪头顺序。发送结果中的 sentRequestHeaders 表示 H1/H2 编码器输入快照，不冒充 TLS 密文或压缩后的协议字节。正文已解除 chunked 分帧，不等于原始 TCP 流。
 
-httpcloak 将 TLS、HTTP/2 和头部顺序纳入浏览器配置。我们保留 RequestDraft.headers 与 TlsProfile 的独立边界；选择 TLS 预设不能覆盖用户编辑的 HTTP 字段。不能表达交错重复字段的浏览器后端必须报错，不得静默合并。
+TLS 预设不能覆盖用户编辑的 UA。可跟随 UA、显式指定版本或选择当前库支持的最新预设；不支持的版本明确报错。各引擎的保序范围与参数支持并不相同，详见 [发送引擎](transport-engines.md) 和 [协议说明](protocols.md)。
 
-## 后续实现与验收
+普通抓包按客户端协议使用相应原生路径；手动请求可选择 native、auto、h2、h3、wreq 或 httpcloak。wreq 需要 browser-replay 构建，httpcloak 需要 helper 和能力清单。H3 TUN 接管仍未验收，当前暂缓。
 
-1. 生命周期前移到请求头到达：receiving、forwarding、completed、failed、aborted；使用单调时钟记录正文接收、连接、TLS、首字节与完成阶段。当前记录从正文接收完成后开始，耗时不含客户端上传阶段。
-2. 浏览器配置固定版本，导入配置必须校验后端能力；不仅比较 JA3，还需在本地 TLS 服务端验证 ClientHello 扩展、ALPN，以及 HTTP/2 SETTINGS、伪头和普通字段顺序。
-3. wreq 与 httpcloak 并存，通过独立 SendEngine 接口接入；每次请求携带 engine 字段动态选择，TLS 预设单独配置。对比结果用于说明各引擎能力，不淘汰其他后端。Go sidecar 接入后注册为 httpcloak。当前默认构建仅启用 native；浏览器功能仍未完成编译和线缆级验证，不能宣称 Chrome/Firefox 完全一致。
-4. 为发送后的头部添加独立快照，避免用捕获输入或预设配置推断实际输出。HTTP/2 不适用 HTTP/1 的大小写和原始文本报文概念。
+## 已有验证与待办
 
-保留 Rust/Tauri 架构。HTTP Toolkit 用于参考代理生命周期和数据呈现；httpcloak 用于参考浏览器配置和后端验收。
-
-## 多引擎接口落地
-
-transport.rs 提供 SendEngine 与 SendEngines 注册表。内核状态返回引擎列表、可用性、支持的预设和不可用原因；UI 按此列表选择。未知或未启用的引擎报错，不静默回退；请求记录保留 engine 字段。旧记录缺省为 native。切换引擎时保留兼容的 TLS 配置，不兼容时切到新引擎的默认预设。抓包转发当前仍使用 native；这里的动态选择作用于编辑后的重放。
-
-当前验证：engines.rs 验证同一 TLS 预设在并发请求中选择不同注册后端、拒绝不可用后端；fidelity.rs 提供共用 HTTP/1 线上观察夹具，检查头部大小写与顺序、二进制正文、禁止自动重定向及不修改草稿。native 为默认基线，wreq 在 browser-replay 构建下运行同一夹具。httpcloak 尚未接入，ClientHello 与 HTTP/2 专项夹具尚待补齐；未运行项不能视为通过。
+- 多引擎注册、并发隔离、不可用后端拒绝及 H1/H2 请求保序已有自动化测试。
+- wreq/httpcloak HTTP/SOCKS5 请求、UA 保留和部分浏览器预设已有实际回显验证；原生 H3 经 SOCKS5 已通过公网测试。
+- 回显成功不代表完全复制 Chrome/Firefox 的全部网络行为；各阶段证据见 [组件实测](tls-components-test.md)。
+- 完整 ClientHello 扩展编辑、HTTP/2 SETTINGS/优先级控制、接收正文前的生命周期记录及分段耗时仍待完善。
+- 用户已取消两引擎指纹对比项目，不恢复这项任务；保留保证功能正确性和声明能力所需的测试。

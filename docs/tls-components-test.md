@@ -1,5 +1,8 @@
 # TLS 组件实测
 
+当前状态（2026-10-08）：wreq/httpcloak 已接入 HTTP/SOCKS5；原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 已实测成功。TUN H3 接管未验收且暂缓，三平台安装包未完成。以下按日期保留历史验证；早期失败或不支持项以文末后续记录更新，不代表当前能力。
+
+
 时间：2026-09-29T16:07:06.711Z
 
 目标：https://tls.peet.ws/api/all 。通过前端 /__capture/replay 调用；UA 使用用户提供的 Chrome 152。HTTP/SOCKS5 使用本机 7897 代理。httpcloak 覆盖全部公布版本；wreq 每个浏览器抽测最新版本，未逐个验证旧版本。

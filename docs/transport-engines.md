@@ -1,5 +1,8 @@
 # 独立发送引擎与 httpcloak
 
+当前状态（2026-10-08）：wreq/httpcloak 已接入 HTTP/SOCKS5；原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 已实测成功。TUN H3 接管未验收且暂缓，三平台安装包未完成。以下按日期保留历史验证；早期失败或不支持项以文末后续记录更新，不代表当前能力。
+
+
 ## 已完成的拆分
 
 - `crates/transport-api`：请求、响应、TLS 数据模型和通用 SendEngine 契约；不依赖抓包、数据库、脚本运行时或桌面界面。请求的脚本类型是泛型，传输层不执行脚本。

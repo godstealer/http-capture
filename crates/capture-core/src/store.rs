@@ -45,7 +45,7 @@ impl Store {
     }
     pub fn list(&self) -> Result<Vec<Flow>> {
         let conn = self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
-        let mut stmt = conn.prepare("SELECT data FROM flows ORDER BY rowid DESC LIMIT 200")?;
+        let mut stmt = conn.prepare("SELECT data FROM flows ORDER BY rowid DESC")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
@@ -100,6 +100,23 @@ impl Store {
 #[cfg(test)]
 mod session_tests {
  use super::*;
+ #[test]
+ fn history_beyond_200_survives_updates_deletion_and_reopen() {
+  let directory=tempfile::tempdir().unwrap();
+  let path=directory.path().join("history.db");
+  let mut flow:Flow=serde_json::from_value(serde_json::json!({"id":"0","parentId":null,"startedAt":1,"durationMs":1,"source":"capture","request":{"method":"GET","url":"https://example.com/","headers":[],"bodyBase64":""},"response":null,"error":null,"notes":[]})).unwrap();
+  {
+   let store=Store::open(&path).unwrap();
+   for i in 0..251 { flow.id=i.to_string();store.insert(&flow).unwrap(); }
+   let rows=store.list().unwrap();
+   assert_eq!(rows.len(),251);assert_eq!(rows.first().unwrap().id,"250");assert_eq!(rows.last().unwrap().id,"0");
+   flow.id="0".into();flow.notes.push("updated".into());store.insert(&flow).unwrap();
+   assert_eq!(store.list().unwrap().last().unwrap().notes,vec!["updated"]);
+   store.delete_flows(vec!["0".into(),"250".into()]).unwrap();
+  }
+  let rows=Store::open(&path).unwrap().list().unwrap();
+  assert_eq!(rows.len(),249);assert_eq!(rows.first().unwrap().id,"249");assert_eq!(rows.last().unwrap().id,"1");
+ }
  #[test]
  fn deleted_flow_cannot_return_and_import_is_persistent() {
   let path=std::env::temp_dir().join(format!("capture-store-{}.db",uuid::Uuid::new_v4()));

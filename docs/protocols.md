@@ -2,7 +2,7 @@
 
 Auto is the default engine for newly composed requests: HTTPS advertises h2 and http/1.1 in a single TLS handshake; HTTP uses HTTP/1.1. ALPN chooses the upstream protocol before any HTTP request is sent. A failed request is never retried by changing protocols. The native engine explicitly selects HTTP/1.1. Select `h2` or `h3`
 under Settings to send using that protocol. These engines validate the
-server certificate, require HTTPS and default TLS settings, and fail rather
+server certificate, require HTTPS and compatible per-request TLS settings (H3 requires TLS 1.3), and fail rather
 than silently falling back to HTTP/1.1. H3 sends QUIC over UDP directly to the
 URL's port; it does not discover alternative ports through Alt-Svc.
 
@@ -11,7 +11,7 @@ support concurrent streams and forward strictly with h2. H1 capture forwards wit
 currently have a 60-second lifetime. Bodies are limited to 8 MiB; trailers,
 extended CONNECT, WebSockets and server push are not supported.
 
-H3 capture uses an explicit loopback QUIC reverse proxy, not the system HTTP
+H3 currently has a fixed-target loopback QUIC reverse proxy and an experimental dynamic-SNI TUN ingress. The latter has local tests but has not passed Windows end-to-end acceptance; investigation is paused as of 2026-10-08 (see [TUN notes](tun.md)). The fixed-target reverse proxy is separate from the system HTTP
 proxy. Start it with a fixed origin (not a URL containing a path):
 
 ```powershell
@@ -75,6 +75,6 @@ CONNECT followed by the existing verified TLS + H1/H2 transport. SOCKS5 forwards
 both HTTP and HTTPS streams, sending domain names to the proxy for resolution.
 Authentication headers are sent only to the HTTP proxy, never through a tunnel
 to the origin, and redacted in recorded transmitted headers. Failures never fall
-back to direct access. H3, wreq and httpcloak do not support this route yet.
+back to direct access. wreq and httpcloak support HTTP/SOCKS5 upstreams. Native H3 supports SOCKS5 UDP ASSOCIATE; ordinary HTTP upstreams and CONNECT-UDP are unsupported.
 Self-proxy loops are rejected before a request is written. End-to-end header
 ordering remains intact; upstream proxies may independently rewrite traffic.
