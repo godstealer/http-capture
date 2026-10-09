@@ -75,7 +75,7 @@ curl --noproxy "" -x http://127.0.0.1:8080 --cacert .local/capture/certificates/
 | 会话 | SQLite、工作区恢复、会话 JSON 保存/导入、HAR 导入、Ctrl/Command+A 和批量删除 | 全量读取，不分页；HAR 导出、独立全库导出及大列表性能仍待完善 |
 | 界面 | 主题切换、中英文及跟随系统、可拖动分栏 | 大列表虚拟滚动、部分实际 GUI 回归待补 |
 | TUN | Windows 指定应用 HTTP/HTTPS 捕获，停止及父进程退出清理有实测 | H3 动态 SNI 入口有本地测试，Windows 接管未验收且暂缓；macOS/Linux TUN 未实测 |
-| 发布 | Windows EXE 曾构建，GitHub 仓库及三平台 core CI 配置已建立 | 现有 EXE 不代表最新源码；桌面安装包、辅助程序集成、签名和自动更新待完成 |
+| 发布 | 三平台 core CI 已通过；新增[自动桌面预览版流程](docs/releases.md)，包括两种 Mac 架构及 httpcloak | 首次自动安装包待验证；实机安装验收、签名/公证和自动更新待完成 |
 
 H3 手动发送经 SOCKS5 到 tls3.peet.ws 已实测成功，不能据此宣称通用 TUN H3 抓包完成。详细证据见 [组件实测](docs/tls-components-test.md) 和 [TUN 文档](docs/tun.md)。长连接流式处理、trailers、请求集合/环境分组、数据库保留策略仍待实现。
 

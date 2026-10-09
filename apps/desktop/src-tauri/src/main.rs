@@ -107,6 +107,12 @@ async fn save_request_workspace(workspace:capture_core::store::Workspace,state:S
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
+            // Resources have different locations in .app, Debian and Windows bundles.
+            // Resolve before constructing the engine so helper discovery works off-repo.
+            let helper = app.path().resource_dir()?.join("helpers").join(if cfg!(windows) { "http-capture-httpcloak.exe" } else { "http-capture-httpcloak" });
+            if std::env::var_os("HTTP_CAPTURE_HTTPCLOAK").is_none() && helper.is_file() {
+                std::env::set_var("HTTP_CAPTURE_HTTPCLOAK", helper);
+            }
             let engine = Engine::open(&app.path().app_data_dir()?)?;
             let mut events = engine.events.subscribe();
             let handle = app.handle().clone();

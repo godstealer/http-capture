@@ -24,3 +24,6 @@ apps/desktop/src-tauri/gen/
 .idea/
 .vscode/
 Thumbs.db
+apps/desktop/src-tauri/release-resources/
+apps/desktop/src-tauri/tauri.release.json
+release-assets/
