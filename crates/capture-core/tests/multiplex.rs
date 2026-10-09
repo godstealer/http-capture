@@ -45,6 +45,49 @@ async fn auto_uses_h1_when_server_selects_h1_or_has_no_alpn() {
 }
 
 #[tokio::test]
+async fn h2_capture_negotiates_h1_upstream_without_losing_fields() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let dir = tempfile::tempdir().unwrap();
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let ca = CertificateAuthority::load_or_create(&dir.path().join("origin")).unwrap();
+        for alpn in [vec![b"http/1.1".to_vec()], vec![]] {
+            let engine = Engine::open_with_roots(&dir.path().join(if alpn.is_empty() { "no-alpn" } else { "h1" }), roots(&ca)).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("https://localhost:{}/echo", listener.local_addr().unwrap().port());
+            let mut config = (*ca.server_config("localhost").unwrap()).clone();
+            config.alpn_protocols = alpn;
+            let origin = tokio::spawn(async move {
+                let (io, _) = listener.accept().await.unwrap();
+                let mut io = BufReader::new(tokio_rustls::TlsAcceptor::from(Arc::new(config)).accept(io).await.unwrap());
+                let head = capture_core::http1::read_head(&mut io).await.unwrap();
+                let (_, _, fields) = capture_core::http1::parse_request(&head).unwrap();
+                let names: Vec<_> = fields.iter().filter(|h| h.name.starts_with("x-")).map(|h| (h.name.as_str(), h.value.as_str())).collect();
+                assert_eq!(names, [("x-test", "one"), ("x-middle", "between"), ("x-test", "two")]);
+                io.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
+            });
+            let (client, proxy_io) = tokio::io::duplex(65536);
+            let proxy_engine = engine.clone();
+            let target = url.parse().unwrap();
+            let capture = tokio::spawn(async move { multiplex::h2_capture(proxy_io, proxy_engine, target).await });
+            let (mut sender, connection) = h2::client::handshake(client).await.unwrap();
+            let driver = tokio::spawn(connection);
+            let mut request = http::Request::builder().uri(url).header("x-test", "one").header("x-middle", "between").header("x-test", "two").body(()).unwrap();
+            request.extensions_mut().insert(h2::ext::HeaderOrder([":method", ":scheme", ":authority", ":path", "x-test", "x-middle", "x-test"].map(str::to_owned).to_vec()));
+            let (response, _) = sender.send_request(request, true).unwrap();
+            let response = response.await.unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(multiplex::recv_h2_body(&mut response.into_body()).await.unwrap(), b"ok");
+            let flow = engine.store.list().unwrap().remove(0);
+            assert_eq!(flow.client_protocol.as_deref(), Some("HTTP/2"));
+            assert_eq!(flow.request.engine, "auto");
+            assert_eq!(flow.response.unwrap().version, "HTTP/1.1");
+            origin.await.unwrap();
+            driver.abort(); capture.abort();
+        }
+    }).await.unwrap();
+}
+
+#[tokio::test]
 async fn h2_verified_capture_multiplexes_and_handles_flow_control() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let dir = tempfile::tempdir().unwrap();
@@ -110,7 +153,7 @@ async fn h2_verified_capture_multiplexes_and_handles_flow_control() {
         for flow in &flows {
             let original: Vec<_> = flow.request.pseudo_headers.iter().chain(&flow.request.headers).cloned().collect();
             assert_eq!(flow.response.as_ref().unwrap().sent_request_headers.as_ref().unwrap(), &original);
-            assert_eq!(flow.request.engine, "h2");
+            assert_eq!(flow.request.engine, "auto");
             assert_eq!(flow.client_tls.as_ref().unwrap().alpn.as_deref(), Some("h2"));
             assert!(flow.client_tls.as_ref().unwrap().offered_alpn.contains(&"h2".to_string()));
             assert_eq!(flow.response.as_ref().unwrap().upstream_tls.as_ref().unwrap().alpn.as_deref(), Some("h2"));

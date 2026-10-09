@@ -64,7 +64,8 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
         ensure!(status != 101, "WebSocket / protocol upgrade is not supported yet");
         if status < 200 { continue; }
         let no_body = draft.method == "HEAD" || status == 204 || status == 304;
-        let (body, trailers) = if no_body { (Vec::new(), false) } else { read_body(&mut reader, &headers, true).await? };
+        let streaming = !no_body && crate::sse::head(&CapturedResponse { upstream_tls: upstream_tls.clone(), sent_request_headers: Some(sent_request_headers.clone()), tls_version: tls_version.clone(), status, version: version.clone(), headers: headers.clone(), body_base64: String::new(), raw_head_base64: Some(STANDARD.encode(&raw)) }).await?;
+        let (body, trailers) = if no_body { (Vec::new(), false) } else { read_body_observed(&mut reader, &headers, true, streaming).await? };
         ensure!(!trailers, "Response trailers are not supported yet; refusing to silently discard them");
         return Ok((CapturedResponse { upstream_tls, sent_request_headers: Some(sent_request_headers), tls_version, status, version, headers, body_base64: STANDARD.encode(body), raw_head_base64: Some(STANDARD.encode(raw)) }, notes));
     }

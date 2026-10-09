@@ -15,7 +15,8 @@
     "desktop:build": "npm run tauri --workspace @http-capture/desktop -- build",
     "check:service": "node scripts/cargo.mjs check --locked -p capture-service",
     "capture:browser": "node scripts/capture.mjs --browser-replay",
-    "desktop:browser": "npm run tauri --workspace @http-capture/desktop -- dev --features browser-replay"
+    "desktop:browser": "npm run tauri --workspace @http-capture/desktop -- dev --features browser-replay",
+    "test:frontend": "node scripts/test-frontend.mjs"
   },
   "workspaces": [
     "apps/frontend",

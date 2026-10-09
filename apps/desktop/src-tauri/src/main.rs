@@ -5,6 +5,20 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 #[tauri::command]
+async fn save_response_file(app: tauri::AppHandle, bytes: Vec<u8>, original: bool) -> Result<String,String> {
+    if bytes.len() > 8 * 1024 * 1024 { return Err("Response exceeds 8 MiB".into()); }
+    let directory = app.path().download_dir().map_err(|e|e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Write;
+        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
+        let kind = if original { "original" } else { "decoded" };
+        let path = directory.join(format!("response-{kind}-{timestamp}.bin"));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e|e.to_string())?;
+        file.write_all(&bytes).map_err(|e|e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    }).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
 async fn save_session_file(app: tauri::AppHandle, content: String) -> Result<String,String> {
     let directory = app.path().download_dir().map_err(|e|e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -128,7 +142,7 @@ fn main() {
             app.manage(AppState { engine, proxy: Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {

@@ -31,17 +31,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .capture-filter .filter { flex-shrink: 0; font-size: 12px; color: #92979b; padding: 4px 7px; }
 .capture-filter .filter.selected { background: #eee; color: #565c62; }
 .capture-total { display: none; }
-.session-table { font-size: 12px; min-width: 800px; }
+.session-table { font-size: 12px; min-width: 1140px; }
 .session-table th { height: 36px; background: #fff; border-color: #e8e8e8; font-size: 12px; color: #85898d; }
 .session-table th:nth-child(1) { width: 26px; }
 .session-table th:nth-child(2) { width: 48px; }
 .session-table th:nth-child(3) { width: 48px; }
 .session-table th:nth-child(4) { width: 80px; }
 .session-table th:nth-child(5) { width: auto; }
-.session-table th:nth-child(6) { width: 65px; }
-.session-table th:nth-child(7) { width: 90px; }
-.session-table th:nth-child(8) { width: 75px; }
-.session-table th:nth-child(9) { width: 85px; }
+.session-table th:nth-child(6) { width: 90px; }
+.session-table th:nth-child(7) { width: 65px; }
+.session-table th:nth-child(8) { width: 90px; }
+.session-table th:nth-child(9) { width: 90px; }
+.session-table th:nth-child(10) { width: 85px; }
+.session-table th:nth-child(11) { width: 75px; }
+.session-table th:nth-child(12) { width: 85px; }
 .session-table td { height: 30px; color: #686e73; border: 0; font-family: inherit; }
 .session-table td svg { vertical-align: middle; color: #6d7479; }
 .session-table tbody tr:nth-child(even) { background: #f5f5f5; }
@@ -108,3 +111,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .tun-settings { margin: 20px 0; padding: 16px 0; border-block: 1px solid #8c939b; }
 .tun-settings textarea { display: block; width: 100%; min-height: 88px; margin: 8px 0; border: 1px solid #8c939b; border-radius: 4px; padding: 8px; resize: vertical; }
 .tun-settings code { overflow-wrap: anywhere; }
+.response-media { padding: 16px; } .response-media img, .response-media video { max-width: 100%; max-height: 65vh; object-fit: contain; }
+.id-sort-button { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer; white-space: nowrap; }
+
+.session-table tbody tr:not(.virtual-spacer) { height: 32px; }
+.session-table tbody tr:not(.virtual-spacer) td { height: 32px; box-sizing: border-box; padding-top: 0; padding-bottom: 0; }
+.session-table .virtual-spacer td { padding: 0; border: 0; }

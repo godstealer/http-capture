@@ -51,3 +51,11 @@ const h3Proxy=renderToStaticMarkup(React.createElement(ui.RequestProxySelector,{
 assert.ok(h3Proxy.includes('UDP ASSOCIATE'), 'H3 must describe the SOCKS5 UDP requirement');
 assert.ok(!h3Proxy.includes('This engine does not support upstream proxies'), 'H3 supports SOCKS5 proxies');
 
+
+// All records remain available; only viewport rows render.
+const many = Array.from({length: 12001}, (_, i) => ({id:String(i), source:'capture', request:{method:'GET',url:`https://example.invalid/${i}`,headers:[],bodyBase64:''},response:null,error:null,durationMs:0,notes:[]}));
+const large = renderToStaticMarkup(React.createElement(ui.CaptureView,{...props, flows:many}));
+assert.ok(large.includes('12001'));
+assert.ok((large.match(/aria-haspopup="menu"/g) || []).length < 100);
+assert.ok(large.includes('virtual-spacer'));
+console.log('Capture list: 12,001 records retained with fewer than 100 rendered rows.');

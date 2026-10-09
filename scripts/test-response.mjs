@@ -18,3 +18,30 @@ assert.equal(await formatResponse('  original\n\ttext', 'text'), '  original\n\t
 await assert.rejects(() => formatResponse('function { broken', 'babel'));
 await assert.rejects(() => formatResponse('x'.repeat(1024 * 1024 + 1), 'html'));
 console.log('Response formatting: HTML, JS, CSS, JSON, MIME detection, original text and failure/size handling passed.');
+const typeSource = fs.readFileSync(new URL('../apps/frontend/src/responseType.ts', import.meta.url), 'utf8');
+const typePath = new URL('../.local/response-type-test.mjs', import.meta.url);
+fs.writeFileSync(typePath, ts.transpileModule(typeSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
+const { responseType } = await import(typePath.href);
+const bytes = text => new TextEncoder().encode(text);
+assert.equal(responseType(bytes('hello'), 'application/octet-stream').kind, 'binary');
+assert.equal(responseType(new Uint8Array([0, 1, 2]), '').kind, 'binary');
+assert.equal(responseType(bytes('hello'), '').kind, 'text');
+for (const mime of ['application/javascript', 'text/css', 'application/problem+json', 'image/svg+xml']) assert.equal(responseType(bytes('test'), mime).kind, 'text');
+assert.deepEqual(responseType(new Uint8Array([137,80,78,71,13,10,26,10]), 'application/octet-stream'), { kind: 'image', mime: 'image/png' });
+assert.equal(responseType(bytes('RIFF1234WAVE'), 'application/octet-stream').kind, 'audio');
+assert.equal(responseType(bytes('0000ftypisom'), 'application/octet-stream').kind, 'video');
+assert.equal(responseType(bytes('0000ftypavif'), 'application/octet-stream').mime, 'image/avif');
+assert.equal(responseType(bytes('test'), 'video/webm').kind, 'video');
+console.log('Response type: binary, media signatures, SVG, JS/CSS and missing MIME passed.');
+const sseSource = fs.readFileSync(new URL('../apps/frontend/src/sse.ts', import.meta.url), 'utf8');
+const ssePath = new URL('../.local/sse-test.mjs', import.meta.url);
+fs.writeFileSync(ssePath, ts.transpileModule(sseSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
+const { parseSse } = await import(ssePath.href);
+assert.deepEqual(parseSse('\uFEFF: heartbeat\r\nid: 7\r\nevent: update\r\nretry: 1000\r\ndata: a\r\ndata: b\r\n\r\ndata: next\n\n'), [
+  { event: 'update', id: '7', data: 'a\nb', retry: '1000' }, { event: 'message', id: '7', data: 'next', retry: '1000' },
+]);
+assert.equal(parseSse('data: incomplete\n').length, 0);
+assert.equal(parseSse('data:\n\n')[0].data, '');
+assert.equal(parseSse('id: a\nid: bad\0id\ndata: x\n\n')[0].id, 'a');
+assert.equal(parseSse(': heartbeat\n\n').length, 0);
+console.log('SSE event parsing: CRLF, BOM, multiline data, id, retry, heartbeats and incomplete events passed.');

@@ -7,9 +7,25 @@ than silently falling back to HTTP/1.1. H3 sends QUIC over UDP directly to the
 URL's port; it does not discover alternative ports through Alt-Svc.
 
 The CONNECT proxy negotiates `h2` or `http/1.1` using ALPN. H2 connections
-support concurrent streams and forward strictly with h2. H1 capture forwards with the native H1 engine; upstream h2 support does not upgrade a captured H1 request. Connections
+support concurrent streams and use Auto for the independent upstream TLS negotiation: h2 when selected, otherwise HTTP/1.1. The captured client protocol remains HTTP/2; the response records the actual upstream protocol. Manually selecting the h2 engine still requires h2 and never silently downgrades. H1 capture forwards with the native H1 engine; upstream h2 support does not upgrade a captured H1 request. Connections
 currently have a 60-second lifetime. Bodies are limited to 8 MiB; trailers,
-extended CONNECT, WebSockets and server push are not supported.
+extended CONNECT and server push are not supported. WebSocket uses HTTP/1 Upgrade as described below.
+
+## SSE (2026-10-09)
+
+Native Auto/H1/H2 sends and H1/H2 capture now stream `text/event-stream` response headers and entity bytes through bounded channels. HTTP/1 chunked framing is removed incrementally, including events inside an unfinished chunk; downstream H1 is close-delimited, downstream H2 uses DATA frames. Content-Encoding bytes remain unchanged. Snapshots are persisted at up to four updates per second and displayed by the existing UI refresh mechanism.
+
+Manual sends use the existing cancel button; captured SSE has a Stop SSE button. Cancellation and stream errors retain received body bytes. Sessions have an explicit 300-second / 8-MiB bound; regular requests retain the 30-second timeout. No automatic reconnect or replay is performed. Response scripts and matching response interception rules reject streaming before forwarding its headers; request-side processing remains supported.
+
+The SSE viewer shows blank-line-terminated events, event type, inherited ID, multi-line data and retry. Heartbeats and partial events remain visible in raw text. Compressed streams are forwarded live, but incremental event viewing of unfinished compressed bodies is not guaranteed (use identity encoding for live event inspection). H3, wreq and httpcloak still use buffered responses.
+
+## WebSocket capture (2026-10-09)
+
+HTTP/1 Upgrade WS and CONNECT + TLS + HTTP/1 Upgrade WSS can now be captured. The native TLS client validates upstream certificates; clients must trust the capture CA for WSS. HTTP and SOCKS upstream routing uses the existing connection layer. Upgrade validates the request key/version, server accept key and selected subprotocol. Non-101 upstream responses are recorded as handshake errors; they are not upgraded.
+
+Bidirectional frame bytes are relayed unchanged, including masking, fragmentation and negotiated permessage-deflate. The persisted WebSocket frame list contains direction, elapsed time, opcode, FIN, compression flag and unmasked Base64 payload. The UI offers text for complete uncompressed text frames, Hex/Base64, direction filters and Stop connection. Close is relayed both ways; cancellation terminates the transport and retains captured frames. Proxy shutdown also records a stopped session. The last queued frame is drained before normal completion.
+
+This is frame capture, not a full WebSocket composer: active connections from the editor, message editing/replay, fragment reassembly, decompression, H2 extended CONNECT and H3 WebSocket are not implemented. Only rules matching this handshake and stage can block this initial path: nonempty enabled capture scripts or enabled capture-scoped interception are explicitly rejected when matched. Unrelated rules, empty scripts and replay-only interception do not block WebSocket capture. Response status conditions are evaluated after the upstream handshake response arrives. Native TLS is used for WSS, not browser fingerprint presets. Limits: 300 seconds per session, 8 MiB per frame, approximately 8 MiB total captured payload and 10000 frames. Stopping or exceeding limits closes the transport; it does not synthesize a graceful Close handshake.
 
 H3 currently has a fixed-target loopback QUIC reverse proxy and an experimental dynamic-SNI TUN ingress. The latter has local tests but has not passed Windows end-to-end acceptance; investigation is paused as of 2026-10-08 (see [TUN notes](tun.md)). The fixed-target reverse proxy is separate from the system HTTP
 proxy. Start it with a fixed origin (not a URL containing a path):
@@ -78,3 +94,5 @@ to the origin, and redacted in recorded transmitted headers. Failures never fall
 back to direct access. wreq and httpcloak support HTTP/SOCKS5 upstreams. Native H3 supports SOCKS5 UDP ASSOCIATE; ordinary HTTP upstreams and CONNECT-UDP are unsupported.
 Self-proxy loops are rejected before a request is written. End-to-end header
 ordering remains intact; upstream proxies may independently rewrite traffic.
+
+响应查看支持 gzip、deflate、br 和 zstd 解压；原始下载保留 Content-Encoding 对应的实体字节，解压下载保留解码后的二进制字节（不会写入格式化文本）。解压输出上限 8 MiB。

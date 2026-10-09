@@ -29,6 +29,7 @@ export class RequestRuns {
     this.runs.set(id, run); this.changed();
     try {
       run.executionId = await this.invoke<string>('prepare_replay');
+      this.changed();
       if (run.cancelling) await this.invoke('cancel_replay', { executionId: run.executionId });
       const flow = await this.invoke<Flow>('replay_request', { request, parentId, executionId: run.executionId });
       completed(flow);

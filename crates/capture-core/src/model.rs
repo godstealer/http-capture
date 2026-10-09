@@ -6,6 +6,8 @@ pub type RequestDraft = transport_api::RequestDraft<crate::scripts::Scripts>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Flow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket: Option<crate::websocket::Session>,
     #[serde(default)]
     pub original_request: Option<RequestDraft>,
     #[serde(default)]

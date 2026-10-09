@@ -8,6 +8,10 @@ use std::{path::Path, sync::Mutex};
 pub struct Store(Mutex<Connection>);
 
 impl Store {
+    pub fn get(&self, id: &str) -> Result<Option<Flow>> {
+        let raw: Option<String> = self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?.query_row("SELECT data FROM flows WHERE id=?1", [id], |r| r.get(0)).optional()?;
+        raw.map(|s| serde_json::from_str(&s).map_err(Into::into)).transpose()
+    }
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS flows (

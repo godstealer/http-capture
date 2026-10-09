@@ -86,6 +86,9 @@ pub fn values<'a>(headers: &'a [Header], name: &'a str) -> impl Iterator<Item = 
 
 /// Returns (decoded entity bytes, trailers were present).
 pub async fn read_body<R: AsyncBufRead + Unpin>(reader: &mut R, headers: &[Header], eof_body: bool) -> Result<(Vec<u8>, bool)> {
+    read_body_observed(reader, headers, eof_body, false).await
+}
+pub async fn read_body_observed<R: AsyncBufRead + Unpin>(reader: &mut R, headers: &[Header], eof_body: bool, streaming: bool) -> Result<(Vec<u8>, bool)> {
     let lengths: Vec<_> = values(headers, "content-length").collect();
     let transfers: Vec<_> = values(headers, "transfer-encoding").collect();
     ensure!(lengths.len() <= 1, "Duplicate Content-Length is not accepted");
@@ -111,8 +114,7 @@ pub async fn read_body<R: AsyncBufRead + Unpin>(reader: &mut R, headers: &[Heade
                     trailers = true;
                 }
             }
-            let start = body.len(); body.resize(start + size, 0);
-            reader.read_exact(&mut body[start..]).await?;
+            read_piece(reader, &mut body, size, streaming).await?;
             let mut crlf = [0; 2]; reader.read_exact(&mut crlf).await?;
             ensure!(crlf == *b"\r\n", "Invalid chunk terminator");
         }
@@ -121,16 +123,35 @@ pub async fn read_body<R: AsyncBufRead + Unpin>(reader: &mut R, headers: &[Heade
         ensure!(!length.is_empty() && length.bytes().all(|b| b.is_ascii_digit()), "Invalid Content-Length");
         let length: usize = length.parse()?;
         ensure!(length <= MAX_BODY, "Body exceeds 8 MiB limit");
-        let mut body = vec![0; length]; reader.read_exact(&mut body).await?;
+        let mut body = Vec::new(); read_piece(reader, &mut body, length, streaming).await?;
         return Ok((body, false));
     }
     if eof_body {
         let mut body = Vec::new();
-        reader.take((MAX_BODY + 1) as u64).read_to_end(&mut body).await?;
+        let mut buf = [0; 16384];
+        loop {
+            let count = reader.read(&mut buf).await?;
+            if count == 0 { break; }
+            ensure!(body.len() + count <= MAX_BODY, "Body exceeds 8 MiB limit");
+            body.extend_from_slice(&buf[..count]);
+            if streaming { crate::sse::emit(crate::sse::Event::Data(buf[..count].to_vec())).await?; }
+        }
         ensure!(body.len() <= MAX_BODY, "Body exceeds 8 MiB limit");
         return Ok((body, false));
     }
     Ok((Vec::new(), false))
+}
+
+async fn read_piece<R: AsyncBufRead + Unpin>(reader: &mut R, body: &mut Vec<u8>, mut remaining: usize, streaming: bool) -> Result<()> {
+    let mut buf = [0; 16384];
+    while remaining > 0 {
+        let len = remaining.min(buf.len());
+        let count = reader.read(&mut buf[..len]).await?;
+        ensure!(count > 0, "Unexpected EOF in response body");
+        body.extend_from_slice(&buf[..count]); remaining -= count;
+        if streaming { crate::sse::emit(crate::sse::Event::Data(buf[..count].to_vec())).await?; }
+    }
+    Ok(())
 }
 
 /// Remove hop-by-hop headers; retain the relative order and casing of all others.

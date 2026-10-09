@@ -30,9 +30,36 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
                             let ordered = ordered_headers(&parts.headers, &parts.extensions, Some(&parts.uri), Some(&parts.method))?;
                             let (pseudo_headers, fields): (Vec<_>, Vec<_>) = ordered.into_iter().partition(|h| h.name.starts_with(':'));
                             let body = recv_h2_body(&mut recv).await?;
-                            let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers, engine: "h2".into(), method: parts.method.to_string(), url: target,
+                            // Downstream h2 does not imply upstream h2 support. Negotiate each leg independently.
+                            let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers, engine: "auto".into(), method: parts.method.to_string(), url: target,
                                 headers: fields, body_base64: STANDARD.encode(body), tls: TlsProfile::default() };
-                            let flow = engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/2".into()), client_tls).await?;
+                            let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+                            let work = crate::sse::DOWNSTREAM.scope(tx, engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/2".into()), client_tls));
+                            tokio::pin!(work);
+                            let mut outgoing = None;
+                            let mut completed: Option<Result<Flow>> = None;
+                            let flow = loop {
+                                if completed.is_some() && rx.is_empty() { break completed.take().unwrap()?; }
+                                tokio::select! {
+                                    biased;
+                                    Some(event) = rx.recv() => match event {
+                                        crate::sse::Event::Head(response) => {
+                                            let mut head = http::Response::builder().status(response.status).body(())?;
+                                            for field in end_to_end(&response.headers).into_iter().filter(|h| !h.name.eq_ignore_ascii_case("content-length")) {
+                                                head.headers_mut().append(http::header::HeaderName::from_bytes(field.name.as_bytes())?, http::HeaderValue::from_bytes(&header_bytes(&field.value)?)?);
+                                            }
+                                            outgoing = Some(respond.send_response(head, false)?);
+                                        }
+                                        crate::sse::Event::Data(data) => if let Some(send) = &mut outgoing { send_h2_chunk(send, Bytes::from(data), false).await?; },
+                                    },
+                                    result = &mut work, if completed.is_none() => completed = Some(result),
+                                }
+                            };
+                            if let Some(mut send) = outgoing {
+                                if flow.error.is_some() { send.send_reset(h2::Reason::INTERNAL_ERROR); }
+                                else { send.send_data(Bytes::new(), true)?; }
+                                return Ok(());
+                            }
                             let response = response_for_flow(flow)?;
                             let (parts, body) = response.into_parts();
                             let mut send = respond.send_response(http::Response::from_parts(parts, ()), body.is_empty())?;
@@ -210,7 +237,9 @@ pub async fn h2_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, pr
     let config = crate::tls_config::config(&draft.tls, roots, "h2")?;
     let tcp = crate::upstream::connect(&url, proxy).await?.stream;
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(rustls::pki_types::ServerName::try_from(hostname(&url))?, tcp).await?;
-    ensure!(tls.get_ref().1.alpn_protocol() == Some(b"h2"), "Server did not negotiate h2");
+    ensure!(tls.get_ref().1.alpn_protocol() == Some(b"h2"),
+        "Server did not negotiate h2 (ALPN: {}). The selected h2 engine requires HTTP/2; select Auto to allow HTTP/1.1.",
+        tls.get_ref().1.alpn_protocol().map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_else(|| "none".into()));
     let mut details = crate::tls_details::negotiated(tls.get_ref().1);
     details.server_name = Some(hostname(&url));
     let version = tls.get_ref().1.protocol_version().map(|v| format!("{v:?}").replace("TLSv", "TLS ").replace('_', "."));
@@ -229,30 +258,38 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
     if !body.is_empty() { send_h2_body(&mut stream, Bytes::from(body)).await?; }
     let response = response.await?;
     let status = response.status().as_u16();
-    let fields = ordered_headers(response.headers(), response.extensions(), None, None)?.into_iter().filter(|h| !h.name.starts_with(':')).collect();
+    let fields: Vec<Header> = ordered_headers(response.headers(), response.extensions(), None, None)?.into_iter().filter(|h| !h.name.starts_with(':')).collect();
+    let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: String::new(), raw_head_base64: None }).await?;
     let mut recv = response.into_body();
-    let body = recv_h2_body(&mut recv).await?;
+    let body = recv_h2_body_observed(&mut recv, streaming).await?;
     Ok((CapturedResponse { upstream_tls: None, sent_request_headers: Some(sent_fields), tls_version: None, status, version: "HTTP/2".into(), headers: fields, body_base64: STANDARD.encode(body), raw_head_base64: None }, notes))
 }
 
 pub async fn recv_h2_body(stream: &mut h2::RecvStream) -> Result<Vec<u8>> {
+    recv_h2_body_observed(stream, false).await
+}
+async fn recv_h2_body_observed(stream: &mut h2::RecvStream, streaming: bool) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     while let Some(chunk) = stream.data().await {
         let chunk = chunk?;
         ensure!(body.len() + chunk.len() <= MAX_BODY, "Body exceeds 8 MiB limit");
         stream.flow_control().release_capacity(chunk.len())?;
         body.extend_from_slice(&chunk);
+        if streaming { crate::sse::emit(crate::sse::Event::Data(chunk.to_vec())).await?; }
     }
     ensure!(stream.trailers().await?.is_none(), "Trailers are not supported yet");
     Ok(body)
 }
-pub async fn send_h2_body(stream: &mut h2::SendStream<Bytes>, mut body: Bytes) -> Result<()> {
+pub async fn send_h2_body(stream: &mut h2::SendStream<Bytes>, body: Bytes) -> Result<()> {
+    send_h2_chunk(stream, body, true).await
+}
+async fn send_h2_chunk(stream: &mut h2::SendStream<Bytes>, mut body: Bytes, end: bool) -> Result<()> {
     while !body.is_empty() {
         stream.reserve_capacity(body.len().min(16384));
         let capacity = std::future::poll_fn(|cx| stream.poll_capacity(cx)).await.transpose()?.ok_or_else(|| anyhow::anyhow!("Stream closed"))?;
         if capacity == 0 { continue; }
         let chunk = body.split_to(capacity.min(body.len()));
-        stream.send_data(chunk, body.is_empty())?;
+        stream.send_data(chunk, end && body.is_empty())?;
     }
     Ok(())
 }

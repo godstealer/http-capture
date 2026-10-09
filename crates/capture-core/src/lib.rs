@@ -14,6 +14,8 @@ pub mod http1;
 pub mod model;
 pub mod proxy;
 pub mod replay;
+pub mod sse;
+pub mod websocket;
 pub mod store;
 pub mod transport;
 pub mod multiplex;
@@ -42,6 +44,8 @@ struct PendingFlow<'a> { engine: &'a Engine, flow: Option<Flow> }
 impl Drop for PendingFlow<'_> {
     fn drop(&mut self) {
         if let Some(mut flow) = self.flow.take() {
+            if let Ok(Some(saved)) = self.engine.store.get(&flow.id) { flow = saved; }
+            flow.notes.retain(|n| n != "SSE 接收中");
             flow.error = Some("请求已取消：代理停止或连接超时".into());
             if self.engine.store.insert(&flow).is_ok() { let _ = self.engine.events.send(flow); }
         }
@@ -78,7 +82,8 @@ impl Engine {
     }
     pub async fn execute_with_tls(&self, request: RequestDraft, parent_id: Option<String>, source: &str,
         raw_request_head_base64: Option<String>, client_protocol: Option<String>, client_tls: Option<TlsDetails>) -> Result<Flow> {
-        self.execute_inner(request, parent_id, source, raw_request_head_base64, client_protocol, client_tls, None).await
+        let execution = self.executions.begin(self.executions.prepare()?)?;
+        self.execute_inner(request, parent_id, source, raw_request_head_base64, client_protocol, client_tls, Some(execution)).await
     }
     pub async fn replay(&self, request: RequestDraft, parent_id: Option<String>, execution_id: Option<String>) -> Result<Flow> {
         let id = match execution_id { Some(id) => id, None => self.executions.prepare()? };
@@ -90,7 +95,7 @@ impl Engine {
         mut execution: Option<executions::Execution<'_>>) -> Result<Flow> {
         let started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
         let start = Instant::now();
-        let mut flow = Flow { original_request: None, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
+        let mut flow = Flow { websocket: None, original_request: None, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
             source: source.into(), request, response: None, error: None, raw_request_head_base64, notes: vec![], client_protocol };
         self.store.insert(&flow)?;
         let _ = self.events.send(flow.clone());
@@ -108,12 +113,12 @@ impl Engine {
                 if d.action == "modify" { flow.original_request.get_or_insert_with(||flow.request.clone()); flow.request = d.request.unwrap(); flow.notes.push("请求已通过拦截编辑；原始请求另行保留。".into()); }
                 if d.action == "replace" { flow.response = d.response; flow.notes.push("请求未发往上游，已返回自定义响应。".into()); return Ok(()); }
             }
-            let (response, notes) = self.send_engines.send_via(&flow.request, route).await?;
+            let (response, notes) = self.send_observed(&mut flow, route, script.enabled && !script.after.trim().is_empty()).await?;
             flow.response = Some(response); flow.notes.extend(notes);
             if script.enabled && !script.after.trim().is_empty() && (source != "capture" || rules.iter().any(|r|r.matches(&flow))) {
                 self.apply_script(&mut flow, &mut script, revision, true).await?;
             }
-            if let Some(d) = self.intercept.pause(&flow, "response").await? {
+            if let Some(d) = if flow.notes.iter().any(|n| n == "SSE 接收中") { None } else { self.intercept.pause(&flow, "response").await? } {
                 if d.action == "modify" || d.action == "replace" { if flow.original_response.is_none() { flow.original_response = flow.response.clone(); } flow.response = d.response; flow.notes.push("响应已通过拦截修改或替换；原始响应另行保留。".into()); }
             }
             Ok(())
@@ -123,14 +128,51 @@ impl Engine {
             _ = async { match execution.as_mut() { Some(e) => e.cancelled().await, None => std::future::pending::<()>().await } } => Err(anyhow::anyhow!("请求已取消：用户取消发送")),
             result = operation => result,
         };
-        if let Err(err) = outcome { flow.error = Some(format!("{err:#}")); flow.response = None; }
+        if let Err(err) = outcome { flow.error = Some(format!("{err:#}")); if !flow.response.as_ref().is_some_and(|r|sse::is_sse(&r.headers)) { flow.response = None; } }
         if let Ok(Some(proxy)) = upstream { flow.notes.push(format!("上游代理：{}；失败不回退直连。", proxy.url)); }
         if matches!(flow.client_protocol.as_deref(), Some("HTTP/3")) { flow.notes.push(crate::multiplex::HEADER_NOTE.into()); }
+        flow.notes.retain(|n| n != "SSE 接收中");
         flow.duration_ms = start.elapsed().as_millis() as u64;
         self.store.insert(&flow)?;
         pending.flow = None;
         let _ = self.events.send(flow.clone());
         Ok(flow)
+    }
+    async fn send_observed(&self, flow: &mut Flow, route: Option<&upstream::UpstreamProxy>, after_script: bool) -> transport::SendResult {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let context = sse::Context { tx, started: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
+        let request = flow.request.clone();
+        let send = sse::UPDATES.scope(context, self.send_engines.send_via(&request, route));
+        tokio::pin!(send);
+        let mut body = Vec::new();
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
+        let mut dirty = false;
+        let mut completed = None;
+        loop {
+            if completed.is_some() && rx.is_empty() { return completed.take().unwrap(); }
+            tokio::select! {
+                biased;
+                Some(event) = rx.recv() => {
+                    match &event {
+                        sse::Event::Head(response) => {
+                            let mut check = flow.clone(); check.response = Some(response.clone());
+                            let config = self.intercept.snapshot().config;
+                            anyhow::ensure!(!after_script && !(config.response && (config.scope == "all" || config.scope == flow.source) && config.rules.iter().any(|r|r.matches(&check))), "SSE streaming cannot use response scripts or response interception; disable the matching response rule/script and retry");
+                            flow.response = Some(response.clone());
+                            flow.notes.push("SSE 接收中".into());
+                            flow.notes.push("SSE 实时流：最多 300 秒 / 8 MiB；停止或超限保留已接收正文。".into());
+                        }
+                        sse::Event::Data(data) => body.extend_from_slice(data),
+                    }
+                    use base64::Engine as _;
+                    if let Some(response) = &mut flow.response { response.body_base64 = base64::engine::general_purpose::STANDARD.encode(&body); }
+                    dirty = true;
+                    sse::downstream(event).await?;
+                }
+                result = &mut send, if completed.is_none() => completed = Some(result),
+                _ = tick.tick(), if dirty => { self.store.insert(flow)?; let _ = self.events.send(flow.clone()); dirty = false; }
+            }
+        }
     }
     async fn apply_script(&self, flow:&mut Flow, script:&mut scripts::Scripts, revision:u64, after:bool)->Result<()> {
         let stage=if after {"响应后"} else {"请求前"};
@@ -145,7 +187,7 @@ impl Engine {
         flow.notes.push(format!("{stage}脚本执行完成")); Ok(())
     }
     pub fn record_failure(&self, request: RequestDraft, raw_head: String, error: String) -> Result<()> {
-        let flow = Flow { original_request: None, original_response: None, client_tls: None, id: uuid::Uuid::new_v4().to_string(), parent_id: None,
+        let flow = Flow { websocket: None, original_request: None, original_response: None, client_tls: None, id: uuid::Uuid::new_v4().to_string(), parent_id: None,
             started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
             duration_ms: 0, source: "capture".into(), request, response: None, error: Some(error),
             raw_request_head_base64: Some(raw_head), notes: vec!["请求未转发；正文可能未完整接收。".into()], client_protocol: None };

@@ -46,6 +46,7 @@ pub struct MultiplexEngine { pub protocol: &'static str, pub roots: rustls::Root
 impl EngineContract<RequestDraft,crate::upstream::UpstreamProxy> for MultiplexEngine {
     fn send_via<'a>(&'a self, draft: &'a RequestDraft, proxy: Option<&'a crate::upstream::UpstreamProxy>) -> SendFuture<'a> {
         if proxy.is_none() { return self.send(draft); }
+        if crate::sse::active() && self.protocol == "h2" { return Box::pin(crate::multiplex::h2_send_via(draft, &self.roots, proxy)); }
         Box::pin(async move { tokio::time::timeout(std::time::Duration::from_secs(45), async {
             if self.protocol == "h2" { crate::multiplex::h2_send_via(draft, &self.roots, proxy).await }
             else { crate::multiplex::h3_send_via(draft, &self.roots, proxy).await }
@@ -56,6 +57,7 @@ impl EngineContract<RequestDraft,crate::upstream::UpstreamProxy> for MultiplexEn
     fn send<'a>(&'a self, draft: &'a RequestDraft) -> SendFuture<'a> {
         Box::pin(async move {
             let work = async { if self.protocol == "h2" { crate::multiplex::h2_send(draft, &self.roots).await } else { crate::multiplex::h3_send(draft, &self.roots).await } };
+            if crate::sse::active() && self.protocol == "h2" { return work.await; }
             tokio::time::timeout(std::time::Duration::from_secs(45), work).await.map_err(|_| anyhow::anyhow!("Protocol request timed out"))?
         })
     }
@@ -132,8 +134,15 @@ impl SendEngines {
         if !info.profiles.contains(&draft.tls.preset) {
             bail!("{} does not support TLS profile {}", info.id, draft.tls.preset);
         }
-        tokio::time::timeout(std::time::Duration::from_secs(30), engine.send_via(draft, proxy))
-            .await.context("Request timed out after 30 seconds")?
-            .with_context(|| format!("{} send engine", engine.id()))
+        let send = engine.send_via(draft, proxy);
+        tokio::pin!(send);
+        let result = tokio::select! {
+            result = &mut send => result,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                anyhow::ensure!(crate::sse::started(), "Request timed out after 30 seconds");
+                tokio::time::timeout(std::time::Duration::from_secs(270), &mut send).await.context("SSE session reached 300 second limit")?
+            }
+        };
+        result.with_context(|| format!("{} send engine", engine.id()))
     }
 }

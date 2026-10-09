@@ -101,7 +101,7 @@ export default function App() {
     try { const request = importCurl(curlText ?? ''); openEditor(undefined, 'draft', request); setCurlText(null); }
     catch (error) { setCurlError(error instanceof Error ? error.message : String(error)); }
   }
-  const flow = flows.find(f => f.id === selected);
+  const flow = flows.find(f => f.id === (activeRun?.executionId ?? selected));
   const engines = status.sendEngines ?? [];
   const selectedEngine = engines.find(e => e.id === (draft.engine ?? 'auto'));
   function merge(f: Flow) { setFlows(previous => [f, ...previous.filter(x => x.id !== f.id)]); }
@@ -109,20 +109,24 @@ export default function App() {
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 5000); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => {
     let disposed = false;
+    let flowsDirty = true;
+    let refreshCount = 0;
     const subscriptions = desktop ? [
-      listen<Flow>('flow-recorded', () => { void invoke<Flow[]>('list_flows').then(v => { if (!disposed) setFlows(v); }).catch(() => {}); }),
-      listen('flows-refresh', () => { void invoke<Flow[]>('list_flows').then(v => { if (!disposed) setFlows(v); }); }),
+      listen<Flow>('flow-recorded', () => { flowsDirty = true; }),
+      listen('flows-refresh', () => { flowsDirty = true; }),
     ] : [];
     let timer: ReturnType<typeof setTimeout>;
     async function refresh() {
       try {
-        const [list, state] = await Promise.all([invoke<Flow[]>('list_flows'), invoke<ProxyStatus>('proxy_status')]);
+        const readFlows = !desktop || flowsDirty || refreshCount++ % 20 === 0;
+        flowsDirty = false;
+        const [list, state] = await Promise.all([readFlows ? invoke<Flow[]>('list_flows') : Promise.resolve(null), invoke<ProxyStatus>('proxy_status')]);
         const tunState = await invoke<TunStatus>('tun_status');
         if (!disposed) setTun(tunState);
         const interceptState = await invoke<InterceptSnapshot>('interception');
         if (!disposed) setInterception(interceptState);
-        if (!disposed) { setFlows(list); setStatus(state); setConnected(true); }
-      } catch { if (!disposed) { setConnected(false); setStatus(s => ({ ...s, running: false })); } }
+        if (!disposed) { if (list) setFlows(list); setStatus(state); setConnected(true); }
+      } catch { flowsDirty = true; if (!disposed) { setConnected(false); setStatus(s => ({ ...s, running: false })); } }
       finally { if (!disposed) timer = setTimeout(() => void refresh(), 1500); }
     }
     void refresh();
@@ -218,7 +222,7 @@ export default function App() {
 
           </div><div className="replay-response"><div className="response-heading"><button className="response-collapse" aria-expanded={!responseCollapsed} aria-label={responseCollapsed ? t("展开响应面板") : t("收起响应面板")} onClick={() => setResponseCollapsed(value => !value)}><ChevronDown size={15} style={{ transform: responseCollapsed ? 'rotate(-90deg)' : undefined }} />{t("响应 ·")}{responseCollapsed ? t("展开") : t("收起")}</button>{flow?.response && <div className="response-meta"><span className="response-protocol" title={t("代理到上游服务器的实际 TLS 版本")}>{flow.response.tlsVersion ?? (flow.request.url.startsWith('https:') ? t("TLS 未记录") : t("明文"))}</span><span className="response-protocol" aria-label={t("响应协议")} title={t("本次上游响应实际使用的协议")}>{flow.response.version}</span><span className={(flow.response.status >= 400 ? 'bad' : 'success')}>{flow.response.status} {flow.response.status === 200 ? 'OK' : ''}</span><span>{flow.durationMs} ms</span><span>{(flow.response.bodyBase64.length * 0.75 / 1024).toFixed(2)} KB</span></div>}</div>
           <div className="tabs response-tabs">{[['body', t("响应体")], ['headers', t("响应头")], ['notes', t("发送说明")]].map(([key, label]) => <button className={responseTab === key ? 'tab active' : 'tab'} key={key} onClick={() => setResponseTab(key)}>{label}</button>)}<div className="tabs-right"><FileJson size={13} />{responseTab === 'body' ? 'RESPONSE' : 'DETAILS'}<button hidden={responseTab === 'body'} className="icon-button" title={t("复制响应")} onClick={() => void copy(responseText)}><Copy size={13} /></button></div></div>
-          <div className="response-content">{flow?.error ? <div className="error-box">{flow.error}</div> : responseTab === 'body' ? flow?.response ? <ResponseBody key={flow.id} body={flow.response.bodyBase64} headers={flow.response.headers} onCopy={value => void copy(value)} /> : <div className="empty"><Code2 size={27} /><p>{busy ? t("正在发送；可以切换标签或继续编辑，改动将在下次发送时生效。") : t("发送请求后在这里查看响应")}</p></div> : responseTab === 'headers' ? <div className="response-header-list">{flow?.response?.headers.map((h, i) => <div key={i}><span>{h.name}</span><code>{h.value}</code></div>)}</div> : <div className="notes">{(flow?.notes ?? [t("尚未发送。")]).map((note, i) => <p key={i}><CircleHelp size={14} />{note}</p>)}</div>}</div>
+          <div className="response-content">{flow?.error && <div className="error-box">{flow.error}</div>}{responseTab === 'body' ? flow?.response ? <ResponseBody key={flow.id} body={flow.response.bodyBase64} headers={flow.response.headers} onCopy={value => void copy(value)} /> : <div className="empty"><Code2 size={27} /><p>{busy ? t("正在发送；可以切换标签或继续编辑，改动将在下次发送时生效。") : t("发送请求后在这里查看响应")}</p></div> : responseTab === 'headers' ? <div className="response-header-list">{flow?.response?.headers.map((h, i) => <div key={i}><span>{h.name}</span><code>{h.value}</code></div>)}</div> : <div className="notes">{(flow?.notes ?? [t("尚未发送。")]).map((note, i) => <p key={i}><CircleHelp size={14} />{note}</p>)}</div>}</div>
           </div></SplitPane>
         </section>
       </div>

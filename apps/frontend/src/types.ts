@@ -15,6 +15,7 @@ export interface RequestDraft { upstreamProfileId?:string|null; scripts?: Script
 export interface CertificateDetails { subject: string; issuer: string; serial: string; notBefore: string; notAfter: string; sha256: string; dnsNames: string[]; derBase64: string; parseError?: string | null }
 export interface TlsDetailsData { version?: string | null; cipherSuite?: string | null; alpn?: string | null; serverName?: string | null; handshakeKind?: string | null; offeredCipherSuites: string[]; offeredAlpn: string[]; signatureSchemes: string[]; supportedGroups: string[]; certificates: CertificateDetails[] }
 export interface Flow {
+  websocket?: { state: string; frames: { direction: string; atMs: number; opcode: number; fin: boolean; compressed: boolean; payloadBase64: string }[] } | null;
   originalRequest?: RequestDraft | null;
   originalResponse?: Flow['response'];
   clientTls?: TlsDetailsData | null;

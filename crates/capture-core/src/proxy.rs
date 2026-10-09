@@ -161,10 +161,14 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
     let url = if let Some(origin) = tunnel {
         ensure!(target.starts_with('/') && !target.starts_with("//"), "Only origin-form targets inside CONNECT are supported");
         validate_url(&format!("{}://{}{target}", origin.scheme(), authority(origin)))?
-    } else { validate_url(&target)? };
+    } else {
+        let normalized = if let Some(rest) = target.strip_prefix("ws://") { format!("http://{rest}") } else { target.clone() };
+        validate_url(&normalized)?
+    };
     prevent_loop(&url, address).await?;
     let mut request = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "native".into(), method: method.clone(), url: url.to_string(), headers, body_base64: String::new(),
         tls: TlsProfile { preset: "native".into(), ..Default::default() } };
+    if crate::websocket::requested(&request.headers) { return crate::websocket::capture(stream, request, head, engine, client_tls).await; }
     let body_result: Result<Vec<u8>> = async {
         ensure!(values(&request.headers, "upgrade").next().is_none(), "WebSocket/Upgrade is not supported yet");
         let expectations: Vec<_> = values(&request.headers, "expect").collect();
@@ -185,7 +189,34 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
             return Ok(());
         }
     }
-    let flow = engine.execute_with_tls(request, None, "capture", Some(STANDARD.encode(head)), Some("HTTP/1.1".into()), client_tls).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let work = crate::sse::DOWNSTREAM.scope(tx, engine.execute_with_tls(request, None, "capture", Some(STANDARD.encode(head)), Some("HTTP/1.1".into()), client_tls));
+    tokio::pin!(work);
+    let mut streamed = false;
+    let mut completed: Option<Result<Flow>> = None;
+    let flow = loop {
+        if completed.is_some() && rx.is_empty() { break completed.take().unwrap()?; }
+        tokio::select! {
+            biased;
+            Some(event) = rx.recv() => {
+                match event {
+                    crate::sse::Event::Head(response) => {
+                        streamed = true;
+                        let mut out = format!("HTTP/1.1 {} \r\n", response.status).into_bytes();
+                        for h in end_to_end(&response.headers).into_iter().filter(|h| !h.name.eq_ignore_ascii_case("content-length")) {
+                            out.extend_from_slice(h.name.as_bytes()); out.extend_from_slice(b": "); out.extend(header_bytes(&h.value)?); out.extend_from_slice(b"\r\n");
+                        }
+                        out.extend_from_slice(b"Connection: close\r\n\r\n");
+                        stream.write_all(&out).await?;
+                    }
+                    crate::sse::Event::Data(data) => stream.write_all(&data).await?,
+                }
+                stream.flush().await?;
+            }
+            result = &mut work, if completed.is_none() => completed = Some(result),
+        }
+    };
+    if streamed { return Ok(()); }
     if let Some(error) = flow.error { error_response(stream, 502, &error).await?; return Ok(()); }
     let response = flow.response.context("No response")?;
     let body = STANDARD.decode(&response.body_base64)?;
