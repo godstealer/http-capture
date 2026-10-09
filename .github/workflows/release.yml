@@ -63,7 +63,7 @@ jobs:
       - name: Prepare packaged helper and resources
         run: node scripts/prepare-release.mjs
       - name: Build installer
-        run: npm run tauri -- build --locked --config tauri.release.json --bundles ${{ matrix.bundles }}
+        run: npm run tauri -- build --config "${{ github.workspace }}/apps/desktop/src-tauri/tauri.release.json" --bundles ${{ matrix.bundles }} -- --locked
       - name: Collect installer and checksum
         run: node scripts/collect-release.mjs ${{ matrix.label }}
       - uses: actions/upload-artifact@v4

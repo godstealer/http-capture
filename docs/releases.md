@@ -20,7 +20,7 @@
 ```sh
 npm ci
 node scripts/prepare-release.mjs
-npm run tauri -- build --locked --config tauri.release.json --bundles dmg
+npm run tauri -- build --config src-tauri/tauri.release.json --bundles dmg -- --locked
 ```
 
 Windows 把 `dmg` 换为 `nsis`，Linux 换为 `deb`。生成的资源与配置不提交 Git。
