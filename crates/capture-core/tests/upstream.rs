@@ -184,6 +184,7 @@ async fn manual_missing_profile_and_unsupported_engine_never_fall_back() {
  let result=engine.execute(request.clone(),None,"replay",None).await.unwrap();assert!(result.error.unwrap().contains("代理配置不存在"));
  engine.upstream.save_profile(ProfileInput{id:None,name:"h3-test".into(),remember_password:false,config:input("http://127.0.0.1:9".into(),false)}).unwrap();
  request.upstream_profile_id=Some(engine.upstream.list_profiles()[0].id.clone());request.engine="h3".into();
- let result=engine.execute(request,None,"replay",None).await.unwrap();assert!(result.error.unwrap().contains("不支持此上游代理"));
+ request.url=format!("https://{}/",target.local_addr().unwrap());
+ let result=engine.execute(request,None,"replay",None).await.unwrap();let error=result.error.expect("HTTP upstream must be rejected for H3");assert!(error.contains("HTTP CONNECT 不支持 UDP"),"{error}");
  assert!(tokio::time::timeout(Duration::from_millis(50),target.accept()).await.is_err());
 }
