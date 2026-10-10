@@ -5,7 +5,7 @@
 | 系统 | 架构 | 安装包 |
 | --- | --- | --- |
 | Windows | x64 | NSIS `.exe` |
-| Linux | x64 | Debian `.deb` |
+| Linux | x64 | Debian `.deb` 和便携 `.AppImage` |
 | macOS Intel | x64 | `.dmg`，文件名前缀 `macos-x64` |
 | macOS Apple Silicon（M 系列） | arm64 | `.dmg`，文件名前缀 `macos-arm64` |
 
@@ -23,4 +23,25 @@ node scripts/prepare-release.mjs
 npm run tauri -- build --config src-tauri/tauri.release.json --bundles dmg -- --locked
 ```
 
-Windows 把 `dmg` 换为 `nsis`，Linux 换为 `deb`。生成的资源与配置不提交 Git。
+Windows 把 `dmg` 换为 `nsis`，Linux 换为 `deb,appimage`。生成的资源与配置不提交 Git。
+
+
+## Linux AppImage
+
+Linux x64 包在 Ubuntu 22.04 上原生构建，同时发布 deb 与 AppImage。AppImage 携带 WebKitGTK、媒体框架及 httpcloak 辅助程序，减少发行版包名/版本差异带来的安装问题。它仍依赖基础系统 ABI，不能保证在比构建基线更旧的 glibc 系统上运行。参考 [Tauri AppImage 文档](https://v2.tauri.app/distribute/appimage/)。
+
+从 Release 下载 `linux-x64-*.AppImage` 后，在文件所在目录执行：
+
+```sh
+chmod +x ./linux-x64-*.AppImage
+./linux-x64-*.AppImage
+```
+
+如果提示缺少 FUSE，可免挂载解包后启动（不需要 root）：
+
+```sh
+./linux-x64-*.AppImage --appimage-extract
+./squashfs-root/AppRun
+```
+
+CI 同时校验两种 Linux 产物存在，并分别计算 SHA256。打包成功仍需目标发行版实机验收。

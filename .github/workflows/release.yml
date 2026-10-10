@@ -27,7 +27,7 @@ jobs:
             bundles: nsis
           - os: ubuntu-22.04
             label: linux-x64
-            bundles: deb
+            bundles: deb,appimage
           - os: macos-15
             label: macos-arm64
             bundles: dmg
@@ -55,7 +55,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libdbus-1-dev libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libdbus-1-dev libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev libfuse2 patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good
       - run: npm ci
       - name: Verify httpcloak helper
         working-directory: helpers/httpcloak
@@ -97,7 +97,7 @@ jobs:
           Automated desktop preview from commit ${SOURCE_SHA}.
 
           Check passed for this exact commit; all four installer builds succeeded.
-          Windows x64: NSIS installer. Linux x64: Debian package. macOS Intel and Apple Silicon: separate DMGs.
+          Windows x64: NSIS installer. Linux x64: Debian package and portable AppImage (Ubuntu 22.04 baseline). macOS Intel and Apple Silicon: separate DMGs.
           Includes native HTTP/1, HTTP/2, HTTP/3 engines and the httpcloak helper.
           wreq and the optional TUN helper are not included in this package.
           Unsigned preview: no Windows signing or macOS notarization. Installer build success does not replace clean-machine installation and runtime testing.
