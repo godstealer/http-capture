@@ -24,6 +24,7 @@ self.onmessage = async (event: MessageEvent<{ body: string; contentType: string;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
     }
     const decodedBlob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
+    if (parser === 'bytes') { self.postMessage({ decodedBlob }); return; }
     const charset = /charset\s*=\s*["']?([^\s;"']+)/i.exec(contentType)?.[1] ?? 'utf-8';
     const type = responseType(bytes, contentType);
     if (parser === 'auto' && type.kind !== 'text') {

@@ -7,6 +7,45 @@ fn roots(ca: &CertificateAuthority) -> rustls::RootCertStore {
     let mut roots = rustls::RootCertStore::empty(); let pem = std::fs::read(&ca.cert_path).unwrap();
     for cert in rustls_pemfile::certs(&mut &pem[..]) { roots.add(cert.unwrap()).unwrap(); } roots
 }
+
+#[tokio::test]
+async fn active_ws_wss_text_binary_ping_and_close() {
+ for secure in [false,true] {
+  tokio::time::timeout(Duration::from_secs(10),async {
+   let dir=tempfile::tempdir().unwrap();let _=rustls::crypto::ring::default_provider().install_default();
+   let ca=CertificateAuthority::load_or_create(&dir.path().join("origin")).unwrap();
+   let engine=Engine::open_with_roots(&dir.path().join("capture"),roots(&ca)).unwrap();
+   let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let port=listener.local_addr().unwrap().port();let config=ca.server_config("localhost").unwrap();
+   let server=tokio::spawn(async move {
+    let (socket,_)=listener.accept().await.unwrap();
+    let socket:Stream=if secure {Box::new(tokio_rustls::TlsAcceptor::from(config).accept(socket).await.unwrap())}else{Box::new(socket)};
+    let mut socket=BufReader::new(socket);let head=read_head(&mut socket).await.unwrap();let (_,_,headers)=parse_request(&head).unwrap();
+    assert_eq!(values(&headers,"x-test").collect::<Vec<_>>(),vec!["first","second"]);
+    assert_eq!(values(&headers,"sec-websocket-key").count(),1);
+    let key=values(&headers,"sec-websocket-key").next().unwrap();
+    socket.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {}\r\n\r\n",websocket::accept(key)).as_bytes()).await.unwrap();
+    socket.write_all(&wire(0x89,b"heartbeat",false)).await.unwrap();
+    let mut pong=false;
+    loop{let (first,payload)=frame(&mut socket,true).await;
+     if first==0x8a {assert_eq!(payload,b"heartbeat");pong=true;continue;}
+     socket.write_all(&wire(if first==0x89{0x8a}else{first},&payload,false)).await.unwrap();
+     if first==0x88{assert!(pong);break;}
+    }
+   });
+   let draft=serde_json::from_value(serde_json::json!({"engine":"auto","method":"GET","url":format!("{}://localhost:{port}/echo",if secure{"wss"}else{"ws"}),"headers":[{"name":"X-Test","value":"first"},{"name":"x-test","value":"second"}],"bodyBase64":""})).unwrap();
+   let id=capture_core::websocket_client::connect(engine.clone(),draft).unwrap();
+   loop{if engine.store.get(&id).unwrap().is_some_and(|f|f.websocket.unwrap().state=="open"){break;}tokio::task::yield_now().await;}
+   for (opcode,payload) in [(1,"你好 websocket".as_bytes()),(2,&[0,255,1][..]),(9,b"probe".as_slice())]{capture_core::websocket_client::send(&engine,&id,opcode,&STANDARD.encode(payload)).await.unwrap();}
+   loop{if engine.store.get(&id).unwrap().unwrap().websocket.unwrap().frames.iter().filter(|f|f.direction=="server").count()>=4{break;}tokio::task::yield_now().await;}
+   capture_core::websocket_client::send(&engine,&id,8,"").await.unwrap();
+   loop{if engine.store.get(&id).unwrap().unwrap().websocket.as_ref().unwrap().state=="closed"{break;}tokio::task::yield_now().await;}
+   let saved=engine.store.get(&id).unwrap().unwrap();assert_eq!(saved.source,"replay");assert!(saved.error.is_none());assert_eq!(saved.response.as_ref().unwrap().status,101);assert_eq!(saved.response.unwrap().upstream_tls.is_some(),secure);
+   let ws=saved.websocket.unwrap();assert!(ws.frames.iter().any(|f|f.opcode==2&&STANDARD.decode(&f.payload_base64).unwrap()==[0,255,1]));assert!(ws.messages.iter().any(|m|m.opcode==1&&STANDARD.decode(&m.payload_base64).unwrap()=="你好 websocket".as_bytes()));
+   server.await.unwrap();
+   assert!(capture_core::websocket_client::send(&engine,&id,1,"").await.is_err());
+  }).await.expect("active WebSocket stalled");
+ }
+}
 fn wire(first: u8, payload: &[u8], mask: bool) -> Vec<u8> {
     let mut out = vec![first, payload.len() as u8 | if mask {128} else {0}];
     if mask { out.extend([1,2,3,4]); out.extend(payload.iter().enumerate().map(|(i,b)|b ^ [1,2,3,4][i%4])); }
@@ -69,3 +108,21 @@ async fn ws_and_wss_relay_fragments_ping_binary_close_and_preserve_frames() {
 
 #[test]
 fn rfc_accept_key() {assert_eq!(websocket::accept("dGhlIHNhbXBsZSBub25jZQ=="),"s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");}
+
+#[tokio::test]
+async fn active_upgrade_rejection_and_handshake_cancellation(){
+ for rejected in [false,true]{
+ tokio::time::timeout(Duration::from_secs(5),async{
+  let dir=tempfile::tempdir().unwrap();let engine=Engine::open(dir.path()).unwrap();
+  let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+  let draft=serde_json::from_value(serde_json::json!({"engine":"auto","method":"GET","url":format!("ws://{address}/"),"headers":[],"bodyBase64":""})).unwrap();
+  let id=capture_core::websocket_client::connect(engine.clone(),draft).unwrap();
+  let (socket,_)=listener.accept().await.unwrap();let mut socket=BufReader::new(socket);read_head(&mut socket).await.unwrap();
+  if rejected{socket.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n").await.unwrap();}else{assert!(engine.executions.cancel(&id));}
+  loop{if engine.store.get(&id).unwrap().is_some_and(|f|f.websocket.unwrap().state=="stopped"){break;}tokio::task::yield_now().await;}
+  let flow=engine.store.get(&id).unwrap().unwrap();assert!(flow.error.is_some());if rejected{assert_eq!(flow.response.unwrap().status,403);}
+  let mut byte=[0];assert_eq!(socket.read(&mut byte).await.unwrap(),0);
+  assert!(capture_core::websocket_client::send(&engine,&id,1,"").await.is_err());
+ }).await.unwrap();
+ }
+}

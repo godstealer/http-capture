@@ -1,0 +1,41 @@
+.ws-panel { --ws-bg:#fff; --ws-surface:#f7f8fa; --ws-border:#e3e6eb; --ws-text:#414b58; --ws-muted:#85909d; --ws-accent:#b97710; --ws-accent-bg:#fff4db; --ws-in:#24866b; color:var(--ws-text); background:var(--ws-bg); font-size:12px; }
+[data-theme="dark"] .ws-panel { --ws-bg:#191e25; --ws-surface:#20262f; --ws-border:#333d49; --ws-text:#c6d0dc; --ws-muted:#8593a5; --ws-accent:#72d8b5; --ws-accent-bg:#263f37; --ws-in:#82b7ee; }
+.ws-panel .ws-toolbar,.ws-panel .ws-compose-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ws-panel .ws-toolbar { padding:10px 12px; border-bottom:1px solid var(--ws-border); flex-shrink:0; }
+.ws-toolbar strong { margin-right:auto; font-size:12px; }
+.ws-toolbar label { display:flex; align-items:center; gap:5px; color:var(--ws-muted); }
+.ws-panel button,.ws-panel select { display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid var(--ws-border); border-radius:5px; padding:5px 9px; background:var(--ws-bg); color:var(--ws-text); font:inherit; min-height:28px; }
+.ws-panel button:hover:not(:disabled) { background:var(--ws-surface); border-color:var(--ws-muted); }
+.ws-panel button:disabled { opacity:.4; cursor:default; }
+.ws-panel button:focus-visible,.ws-panel select:focus-visible,.ws-message summary:focus-visible { outline:2px solid var(--ws-accent); outline-offset:2px; }
+.ws-panel .ws-composer { padding:12px; border-bottom:1px solid var(--ws-border); flex-shrink:0; }
+.ws-panel .ws-composer p { font-size:11px; color:var(--ws-muted); margin:0 0 10px; line-height:1.6; }
+.ws-compose-toolbar { margin-bottom:8px; }
+.ws-panel .ws-send { background:var(--ws-accent-bg); color:var(--ws-accent); border-color:transparent; font-weight:600; }
+.ws-panel .ws-composer textarea { display:block; box-sizing:border-box; width:100%; height:90px; min-height:64px; max-height:240px; resize:vertical; border:1px solid var(--ws-border); border-radius:6px; background:var(--ws-surface); color:var(--ws-text); padding:10px 12px; font:12px/1.7 "Cascadia Code","SFMono-Regular",Consolas,"Microsoft YaHei",monospace; }
+.ws-panel .ws-composer textarea:focus { outline:none; border-color:var(--ws-accent); }
+.ws-note { color:var(--ws-muted); font-size:10px; padding:8px 12px; line-height:1.5; flex-shrink:0; }
+.ws-messages { padding:0 12px 12px; }
+.ws-message { border:1px solid var(--ws-border); border-radius:6px; margin-bottom:7px; overflow:hidden; }
+.ws-message summary { padding:9px 12px; background:var(--ws-surface); cursor:pointer; font:11px/1.5 system-ui,sans-serif; color:var(--ws-muted); }
+.ws-message.ws-client summary { border-left:3px solid var(--ws-accent); }
+.ws-message.ws-server summary { border-left:3px solid var(--ws-in); }
+.ws-panel .ws-message > button { margin:6px 0 0 8px; padding:3px 7px; min-height:24px; font-size:11px; color:var(--ws-muted); }
+.ws-panel .ws-message > .text-button { float:right; margin-right:8px; }
+.ws-panel .ws-messages pre { clear:both; padding:10px 12px; margin:0; color:var(--ws-text); white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.7 "Cascadia Code","SFMono-Regular",Consolas,"Microsoft YaHei",monospace; max-height:360px; overflow:auto; }
+.ws-panel .ws-message summary { display:flex; align-items:center; gap:10px; list-style:none; padding:12px; border-left:0; }
+.ws-message summary::-webkit-details-marker { display:none; }
+.ws-message.ws-client { border-color:#e3d8f5; }
+.ws-message.ws-client summary { background:#faf6ff; color:#8950c6; }
+.ws-message.ws-server summary { background:#f7f9fb; }
+.ws-time { flex-shrink:0; color:var(--ws-muted); font-variant-numeric:tabular-nums; }
+.ws-direction { font-size:18px; line-height:1; font-weight:600; }
+.ws-server .ws-direction { color:var(--ws-in); }
+.ws-kind { flex-shrink:0; font-size:11px; }
+.ws-preview { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:12px/1.6 "Cascadia Code",Consolas,"Microsoft YaHei",monospace; }
+.ws-expand { color:var(--ws-muted); font-size:18px; transition:transform .15s; }
+.ws-message[open] .ws-expand { transform:rotate(90deg); }
+.ws-message[open] summary { border-bottom:1px solid var(--ws-border); }
+[data-theme="dark"] .ws-message.ws-client { border-color:#493959; }
+[data-theme="dark"] .ws-message.ws-client summary { background:#2a2235; color:#c9a3f1; }
+[data-theme="dark"] .ws-message.ws-server summary { background:var(--ws-surface); }

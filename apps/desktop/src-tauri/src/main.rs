@@ -5,6 +5,38 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 #[tauri::command]
+async fn websocket_connect(state:State<'_,AppState>,request:RequestDraft)->Result<String,String>{capture_core::websocket_client::connect(state.engine.clone(),request).map_err(|e|e.to_string())}
+#[tauri::command]
+async fn websocket_send(state:State<'_,AppState>,id:String,opcode:u8,body:String)->Result<(),String>{capture_core::websocket_client::send(&state.engine,&id,opcode,&body).await.map_err(|e|e.to_string())}
+#[tauri::command]
+fn decryption_hosts(state:State<'_,AppState>)->Result<Vec<String>,String>{Ok(state.engine.store.setting("decryption.bypass.v1").map_err(|e|e.to_string())?.unwrap_or_default())}
+#[tauri::command]
+fn save_decryption_hosts(state:State<'_,AppState>,hosts:Vec<String>)->Result<(),String>{capture_core::decryption::save(&state.engine.store,hosts).map_err(|e|e.to_string())}
+#[tauri::command]
+async fn test_upstream(state:State<'_,AppState>,id:String)->Result<u64,String>{capture_core::upstream::test_profile(&state.engine.upstream,&id).await.map_err(|e|format!("{e:#}"))}
+#[tauri::command]
+fn read_clipboard(app:tauri::AppHandle)->Result<String,String>{use tauri_plugin_clipboard_manager::ClipboardExt;app.clipboard().read_text().map_err(|e|e.to_string())}
+#[tauri::command]
+fn write_clipboard(app:tauri::AppHandle,text:String)->Result<(),String>{use tauri_plugin_clipboard_manager::ClipboardExt;app.clipboard().write_text(text).map_err(|e|e.to_string())}
+#[tauri::command]
+async fn flow_changes(state:State<'_,AppState>,since:Option<String>)->Result<capture_core::store::FlowChanges,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.changes(since.as_deref())).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+async fn request_library(state:State<'_,AppState>)->Result<capture_core::store::Library,String>{state.engine.store.library().map_err(|e|e.to_string())}
+#[tauri::command]
+async fn save_request_library(state:State<'_,AppState>,library:capture_core::store::Library)->Result<u64,String>{state.engine.store.save_library(library).map_err(|e|e.to_string())}
+#[tauri::command]
+async fn backup_database(state:State<'_,AppState>)->Result<String,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.backup()).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+async fn compact_database(state:State<'_,AppState>)->Result<(),String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.compact()).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+async fn clear_database(state:State<'_,AppState>)->Result<usize,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.clear()).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+async fn begin_import(state:State<'_,AppState>)->Result<String,String>{state.engine.store.begin_import().map_err(|e|e.to_string())}
+#[tauri::command]
+async fn append_import(state:State<'_,AppState>,id:String,offset:usize,flows:Vec<Flow>)->Result<usize,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.append_import(&id,offset,flows)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+async fn finish_import(state:State<'_,AppState>,id:String,commit:bool)->Result<usize,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.finish_import(&id,commit)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
 async fn save_response_file(app: tauri::AppHandle, bytes: Vec<u8>, original: bool) -> Result<String,String> {
     if bytes.len() > 8 * 1024 * 1024 { return Err("Response exceeds 8 MiB".into()); }
     let directory = app.path().download_dir().map_err(|e|e.to_string())?;
@@ -19,12 +51,13 @@ async fn save_response_file(app: tauri::AppHandle, bytes: Vec<u8>, original: boo
     }).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
-async fn save_session_file(app: tauri::AppHandle, content: String) -> Result<String,String> {
+async fn save_session_file(app: tauri::AppHandle, content: String, format: Option<String>) -> Result<String,String> {
+    let extension = match format.as_deref().unwrap_or("json") { "json" => "json", "har" => "har", _ => return Err("Unsupported export format".into()) };
     let directory = app.path().download_dir().map_err(|e|e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::Write;
         let timestamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
-        let path=directory.join(format!("capture-{timestamp}.json"));
+        let path=directory.join(format!("capture-{timestamp}.{extension}"));
         let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e|e.to_string())?;
         file.write_all(content.as_bytes()).map_err(|e|e.to_string())?;
         Ok(path.to_string_lossy().into_owned())
@@ -65,6 +98,12 @@ async fn stop_proxy(state: State<'_, AppState>) -> Result<(), String> {
     let mut handle = state.proxy.lock().await;
     if let Some(proxy) = handle.take() { proxy.stop().await; }
     Ok(())
+}
+#[tauri::command]
+async fn flow_revision(state: State<'_, AppState>) -> Result<String, String> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.store.revision().map_err(|e| e.to_string()))
+        .await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn list_flows(state: State<'_, AppState>) -> Result<Vec<Flow>, String> {
@@ -119,7 +158,7 @@ async fn save_request_workspace(workspace:capture_core::store::Workspace,state:S
  let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.save_workspace(workspace)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 fn main() {
-    tauri::Builder::default()
+    tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // Resources have different locations in .app, Debian and Windows bundles.
             // Resolve before constructing the engine so helper discovery works off-repo.
@@ -142,7 +181,7 @@ fn main() {
             app.manage(AppState { engine, proxy: Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {

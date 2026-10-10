@@ -72,7 +72,7 @@ curl --noproxy "" -x http://127.0.0.1:8080 --cacert .local/capture/certificates/
 | 浏览器预设 | wreq、httpcloak 独立引擎，UA 与 TLS 版本分开选择 | wreq 需 browser-replay；httpcloak 需单独构建 Go helper；不支持任意 ClientHello 编辑 |
 | 代理 | HTTP/SOCKS5 列表、认证、系统凭据库；手动请求独立选择 | H3 支持 SOCKS5 UDP，不支持普通 HTTP 上游/CONNECT-UDP；失败不回退直连 |
 | 查看和编辑 | 响应格式化/折叠/预览、gzip/deflate/br 查看解压、规则拦截及脚本 | 非 WebSocket/SSE 实时查看；原始正文与解码展示区分 |
-| 会话 | SQLite、工作区恢复、会话 JSON 保存/导入、HAR 导入、Ctrl/Command+A 和批量删除 | 全量读取，不分页；HAR 导出、独立全库导出及大列表性能仍待完善 |
+| 会话 | SQLite、工作区恢复、会话 JSON 保存/导入、HAR 导入、Ctrl/Command+A 和批量删除 | 首次全量读取，不分页；后续增量同步；HAR 导出、全库 SQLite 备份及虚拟列表已支持，大正文流式存储待完善 |
 | 界面 | 主题切换、中英文及跟随系统、可拖动分栏 | 大列表虚拟滚动、部分实际 GUI 回归待补 |
 | TUN | Windows 指定应用 HTTP/HTTPS 捕获，停止及父进程退出清理有实测 | H3 动态 SNI 入口有本地测试，Windows 接管未验收且暂缓；macOS/Linux TUN 未实测 |
 | 发布 | 三平台 core CI 已通过；新增[自动桌面预览版流程](docs/releases.md)，包括两种 Mac 架构及 httpcloak | 首次自动安装包待验证；实机安装验收、签名/公证和自动更新待完成 |
@@ -192,3 +192,5 @@ assert(plain === 'hello');
 ### 独立浏览器发送引擎
 
 新增 httpcloak Go 辅助进程，支持 Chrome 143–152，UA 版本与 TLS 预设可分别设置。使用 `scripts/build-httpcloak.ps1` 构建后重启开发服务；wreq、httpcloak 和原生引擎并存。模块拆分、验证结果、跨平台构建和限制见 [transport-engines.md](docs/transport-engines.md)。
+
+会话备份、HAR、请求集合、环境、脚本模板和表单编辑的用法及边界见 [会话与工作区](docs/sessions-workspaces.md)。

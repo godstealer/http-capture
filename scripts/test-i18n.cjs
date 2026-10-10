@@ -18,7 +18,7 @@ global.document = { documentElement: {} };
 global.localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
 Object.defineProperty(global, 'navigator', { configurable: true, value: { language: 'zh-CN' } });
 const source = `export {default as RequestProxySelector} from './apps/frontend/src/RequestProxySelector'; export * from './apps/frontend/src/i18n'; export {default as CaptureView} from './apps/frontend/src/CaptureView'; export {default as LanguageSelector} from './apps/frontend/src/LanguageSelector'; export {RequestOverview} from './apps/frontend/src/RequestDetails';`;
-const result = buildSync({ stdin: { contents: source, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react-dom/server'], write: false, logLevel: 'silent' });
+const result = buildSync({ stdin: { contents: source, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', loader: { '.css': 'empty' }, external: ['react', 'react-dom', 'react-dom/server'], write: false, logLevel: 'silent' });
 function load() { const m = { exports: {} }; new Function('require','module','exports',result.outputFiles[0].text)(require, m, m.exports); return m.exports; }
 const ui = load();
 assert.equal(ui.t('请求头'), '请求头');

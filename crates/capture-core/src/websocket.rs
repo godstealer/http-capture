@@ -11,8 +11,8 @@ use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
 #[serde(rename_all="camelCase")]
 pub struct Frame { pub direction: String, pub at_ms: u64, pub opcode: u8, pub fin: bool, pub compressed: bool, pub payload_base64: String }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session { pub state: String, pub frames: Vec<Frame> }
-fn token_header(headers: &[Header], name: &str, token: &str) -> bool {
+pub struct Session { pub state: String, pub frames: Vec<Frame>, #[serde(default)] pub messages:Vec<crate::websocket_messages::Message> }
+pub(crate) fn token_header(headers: &[Header], name: &str, token: &str) -> bool {
     values(headers, name).flat_map(|v|v.split(',')).any(|v|v.trim().eq_ignore_ascii_case(token))
 }
 pub fn requested(headers: &[Header]) -> bool { token_header(headers, "upgrade", "websocket") }
@@ -24,7 +24,7 @@ fn single<'a>(headers: &'a [Header], name: &str) -> Result<&'a str> {
 }
 
 fn check_handshake_rules(flow: &Flow, config: &crate::intercept::Config, script: &crate::scripts::Scripts, response: bool) -> Result<()> {
-    if !config.rules.iter().any(|rule| rule.matches(flow)) { return Ok(()); }
+    if !crate::intercept::matches_rules(&config.rules,flow) { return Ok(()); }
     let stage = if response { "响应" } else { "请求" };
     let code = if response { &script.after } else { &script.before };
     ensure!(!script.enabled || code.trim().is_empty(), "此 WebSocket 握手命中了{stage}脚本规则；当前尚不支持握手脚本，请调整匹配条件或停用该阶段脚本后重试");
@@ -45,20 +45,25 @@ impl Drop for Guard<'_> {
 }
 
 pub async fn capture<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S>, request: RequestDraft, raw_head: &[u8], engine: &Engine, client_tls: Option<TlsDetails>) -> Result<()> {
-    let mut execution = engine.executions.begin(engine.executions.prepare()?)?;
+    run(client,request,raw_head,engine,client_tls,"capture",None).await
+}
+
+pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S>, request: RequestDraft, raw_head: &[u8], engine: &Engine, client_tls: Option<TlsDetails>, source:&str, execution_id:Option<String>) -> Result<()> {
+    let mut execution = engine.executions.begin(match execution_id {Some(id)=>id,None=>engine.executions.prepare()?})?;
     let started = Instant::now();
     let mut guard = Guard { engine, done: false, flow: Flow {
-        websocket: Some(Session { state: "connecting".into(), frames: vec![] }), id: execution.id.clone(),
+        websocket: Some(Session { state: "connecting".into(), frames: vec![], messages:vec![] }), id: execution.id.clone(),
         started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64, duration_ms: 0, parent_id: None,
-        source: "capture".into(), request, response: None, error: None, client_protocol: Some("HTTP/1.1".into()), client_tls,
-        original_request: None, original_response: None, raw_request_head_base64: Some(STANDARD.encode(raw_head)),
-        notes: vec!["WebSocket 帧原样转发；正文列表为去掩码帧载荷。压缩帧不解压；单连接最多 300 秒、8 MiB 载荷或 10000 帧。".into()],
+        source: source.into(), request, response: None, error: None, client_protocol: Some("HTTP/1.1".into()), client_tls,
+        original_request: None, original_response: None, raw_request_head_base64: if raw_head.is_empty(){None}else{Some(STANDARD.encode(raw_head))},
+        notes: vec!["WebSocket 帧原样转发；正文列表为去掩码帧载荷。消息视图重组并尝试解压；单连接最多 300 秒、8 MiB 载荷或 10000 帧。".into()],
     }};
+    if source=="replay" {guard.flow.notes.push("主动 WebSocket：原生 HTTP/1 Upgrade，不协商压缩；握手专用字段自动生成。消息发送采用新随机掩码，历史记录不被修改。".into());}
     engine.store.insert(&guard.flow)?;
     let mut upgraded = false;
     let operation = async {
         let config = engine.intercept.snapshot().config;
-        let (script, _) = engine.scripts.snapshot();
+        let (script, _) = if source=="capture" {engine.scripts.snapshot()} else {(guard.flow.request.scripts.clone(),0)};
         check_handshake_rules(&guard.flow, &config, &script, false)?;
         let request = &guard.flow.request;
         ensure!(request.method == "GET" && token_header(&request.headers, "connection", "upgrade"), "Invalid WebSocket upgrade request");
@@ -66,8 +71,11 @@ pub async fn capture<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S
         let key = single(&request.headers, "sec-websocket-key")?.to_owned();
         ensure!(STANDARD.decode(&key)?.len() == 16, "Invalid WebSocket key");
         ensure!(values(&request.headers, "transfer-encoding").next().is_none() && values(&request.headers, "content-length").all(|v|v == "0"), "WebSocket handshake must not have a body");
-        let url = validate_url(&request.url)?;
-        let route = engine.upstream.snapshot();
+        let mut transport_url=url::Url::parse(&request.url)?;
+        if transport_url.scheme()=="ws" {transport_url.set_scheme("http").map_err(|_|anyhow::anyhow!("Invalid URL"))?;}
+        else if transport_url.scheme()=="wss" {transport_url.set_scheme("https").map_err(|_|anyhow::anyhow!("Invalid URL"))?;}
+        let url = validate_url(transport_url.as_str())?;
+        let route = if source=="capture" {engine.upstream.snapshot()} else {request.upstream_profile_id.as_deref().map(|id|engine.upstream.profile_snapshot(id)).transpose()?};
         let connection = crate::upstream::connect(&url, route.as_ref()).await?;
         let mut tls_details = None;
         let stream: crate::replay::Stream = if url.scheme() == "https" {
@@ -108,6 +116,7 @@ pub async fn capture<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S
         let left = relay(client_read, client_write, true, compressed, started, tx.clone());
         let right = relay(server_read, server_write, false, compressed, started, tx);
         let relays = async { tokio::try_join!(left, right)?; Ok::<_, anyhow::Error>(()) }; tokio::pin!(relays);
+        let mut assembler=crate::websocket_messages::Assembler::new(&fields);
         let mut count = 0usize; let mut dirty = false; let mut tick = tokio::time::interval(Duration::from_millis(250));
         let mut completed: Option<Result<()>> = None;
         loop {
@@ -118,6 +127,7 @@ pub async fn capture<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S
                 count += frame.payload_base64.len();
                 let ws = guard.flow.websocket.as_mut().unwrap();
                 ensure!(count <= MAX_BODY * 4 / 3 + 4 && ws.frames.len() < 10000, "WebSocket capture limit reached");
+                if let Some(message)=assembler.push(&frame){ws.messages.push(message);}
                 ws.frames.push(frame); dirty = true;
             }
             result = &mut relays, if completed.is_none() => { completed = Some(result); }
@@ -136,7 +146,7 @@ pub async fn capture<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S
     if upgraded { Ok(()) } else { result }
 }
 
-async fn relay<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader: R, mut writer: W, masked: bool, extensions: bool, started: Instant, tx: mpsc::Sender<Frame>) -> Result<()> {
+pub(crate) async fn relay<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader: R, mut writer: W, masked: bool, extensions: bool, started: Instant, tx: mpsc::Sender<Frame>) -> Result<()> {
     let mut fragmented = false; let mut compressed_message = false;
     loop {
         let mut head = [0; 2]; reader.read_exact(&mut head).await.context("WebSocket disconnected without Close frame")?;

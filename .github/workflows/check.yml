@@ -16,6 +16,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: cargo test --locked -p capture-core --no-default-features
       - run: cargo check --locked -p capture-service
+      - run: cargo test --locked -p capture-service --bin capture-service
   frontend:
     runs-on: ubuntu-latest
     steps:

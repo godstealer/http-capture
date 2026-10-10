@@ -277,3 +277,11 @@ mod credential_tests {
   vault.write(&id,None).unwrap();assert!(vault.read(&id).unwrap().is_none());
  }
 }
+
+/// Test only CONNECT/SOCKS tunnel establishment; do not change the active route.
+pub async fn test_profile(state:&UpstreamState,id:&str)->Result<u64>{
+ let proxy=state.profile_snapshot(id)?;
+ let start=std::time::Instant::now();
+ tokio::time::timeout(std::time::Duration::from_secs(10),connect(&url::Url::parse("https://example.com/")?,Some(&proxy))).await.context("Proxy tunnel test timed out")??;
+ Ok(start.elapsed().as_millis() as u64)
+}

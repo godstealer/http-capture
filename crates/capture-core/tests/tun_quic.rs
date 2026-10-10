@@ -37,13 +37,18 @@ async fn dynamic_sni_capture_records_multiple_origins_and_stops() {
             assert_eq!(received,content);
             let mut invalid=sender.send_request(http::Request::builder().uri("https://different.test/").body(()).unwrap()).await.unwrap();
             invalid.finish().await.unwrap();assert!(invalid.recv_response().await.is_err());
+            let mut wrong_port=sender.send_request(http::Request::builder().uri(format!("https://{name}:8443/")).body(()).unwrap()).await.unwrap();
+            wrong_port.finish().await.unwrap();assert!(wrong_port.recv_response().await.is_err());
+            // A rejected stream must not tear down other streams on this connection.
+            let mut valid=sender.send_request(http::Request::builder().uri(format!("https://{name}/after-rejection")).body(()).unwrap()).await.unwrap();
+            valid.finish().await.unwrap();assert_eq!(valid.recv_response().await.unwrap().status(),200);
             connection.close(0u32.into(),b"done");task.abort();
         }
-        let flows=engine.store.list().unwrap();assert_eq!(flows.len(),2);
+        let flows=engine.store.list().unwrap();assert_eq!(flows.len(),4);
         for flow in flows {
             assert_eq!(flow.client_protocol.as_deref(),Some("HTTP/3"));
-            assert_eq!(flow.request.url,format!("https://{}/test?q=1",flow.client_tls.unwrap().server_name.unwrap()));
-            assert_eq!(STANDARD.decode(flow.response.unwrap().body_base64).unwrap().len(),8192);
+            assert!(flow.request.url.starts_with(&format!("https://{}/",flow.client_tls.unwrap().server_name.unwrap())));
+            assert_eq!(STANDARD.decode(flow.response.unwrap().body_base64).unwrap().len(),if flow.request.url.ends_with("/after-rejection") {0}else{8192});
         }
         ingress.stop().await;
         // Quinn's endpoint driver releases the OS socket after its final wakeup.

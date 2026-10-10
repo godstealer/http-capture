@@ -2,6 +2,7 @@ pub mod browser_profiles;
 pub mod tls_config;
 pub mod tun;
 pub mod network;
+pub mod decryption;
 pub mod executions;
 pub mod script_tools;
 pub mod scripts;
@@ -16,6 +17,8 @@ pub mod proxy;
 pub mod replay;
 pub mod sse;
 pub mod websocket;
+pub mod websocket_client;
+pub mod websocket_messages;
 pub mod store;
 pub mod transport;
 pub mod multiplex;
@@ -28,6 +31,7 @@ use std::{path::Path, sync::Arc, time::{Instant, SystemTime, UNIX_EPOCH}};
 use tokio::sync::broadcast;
 
 pub struct Engine {
+    pub websocket_clients: websocket_client::Clients,
     pub tun: tun::TunState,
     pub executions: executions::Executions,
     pub scripts: scripts::ScriptState,
@@ -68,7 +72,7 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
+        Ok(Arc::new(Self { websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
             ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
             send_engines, upstream_roots }))
     }
@@ -106,7 +110,7 @@ impl Engine {
         let operation = async {
             let route=upstream.as_ref().map_err(|e|anyhow::anyhow!("{e:#}"))?.as_ref();
             script.validate()?;
-            if script.enabled && !script.before.trim().is_empty() && (source != "capture" || rules.iter().any(|r|r.matches(&flow))) {
+            if script.enabled && !script.before.trim().is_empty() && (source != "capture" || crate::intercept::matches_rules(&rules,&flow)) {
                 self.apply_script(&mut flow, &mut script, revision, false).await?;
             }
             if let Some(d) = self.intercept.pause(&flow, "request").await? {
@@ -115,7 +119,7 @@ impl Engine {
             }
             let (response, notes) = self.send_observed(&mut flow, route, script.enabled && !script.after.trim().is_empty()).await?;
             flow.response = Some(response); flow.notes.extend(notes);
-            if script.enabled && !script.after.trim().is_empty() && (source != "capture" || rules.iter().any(|r|r.matches(&flow))) {
+            if script.enabled && !script.after.trim().is_empty() && (source != "capture" || crate::intercept::matches_rules(&rules,&flow)) {
                 self.apply_script(&mut flow, &mut script, revision, true).await?;
             }
             if let Some(d) = if flow.notes.iter().any(|n| n == "SSE 接收中") { None } else { self.intercept.pause(&flow, "response").await? } {
@@ -157,7 +161,7 @@ impl Engine {
                         sse::Event::Head(response) => {
                             let mut check = flow.clone(); check.response = Some(response.clone());
                             let config = self.intercept.snapshot().config;
-                            anyhow::ensure!(!after_script && !(config.response && (config.scope == "all" || config.scope == flow.source) && config.rules.iter().any(|r|r.matches(&check))), "SSE streaming cannot use response scripts or response interception; disable the matching response rule/script and retry");
+                            anyhow::ensure!(!after_script && !(config.response && (config.scope == "all" || config.scope == flow.source) && crate::intercept::matches_rules(&config.rules,&check)), "SSE streaming cannot use response scripts or response interception; disable the matching response rule/script and retry");
                             flow.response = Some(response.clone());
                             flow.notes.push("SSE 接收中".into());
                             flow.notes.push("SSE 实时流：最多 300 秒 / 8 MiB；停止或超限保留已接收正文。".into());

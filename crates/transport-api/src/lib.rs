@@ -33,6 +33,8 @@ pub struct RequestDraft<S = serde_json::Value> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsProfile {
     #[serde(default)]
+    pub client_hello_hex: Option<String>,
+    #[serde(default)]
     pub browser_version: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
@@ -49,7 +51,7 @@ fn native() -> String { "native".into() }
 fn auto() -> String { "auto".into() }
 impl Default for TlsProfile {
     fn default() -> Self {
-        Self { browser_version: None, version: None, preset: native(), cipher_list: None, sigalgs_list: None, curves_list: None,
+        Self { client_hello_hex: None, browser_version: None, version: None, preset: native(), cipher_list: None, sigalgs_list: None, curves_list: None,
             grease: None, permute_extensions: None }
     }
 }

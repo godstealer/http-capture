@@ -12,6 +12,7 @@ browser-replay = ["capture-core/browser-replay"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+tauri-plugin-clipboard-manager = "2"
 tauri = { version = "2", features = [] }
 capture-core = { path = "../../../crates/capture-core" }
 serde.workspace = true

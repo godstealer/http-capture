@@ -25,7 +25,7 @@ HTTP/1 Upgrade WS and CONNECT + TLS + HTTP/1 Upgrade WSS can now be captured. Th
 
 Bidirectional frame bytes are relayed unchanged, including masking, fragmentation and negotiated permessage-deflate. The persisted WebSocket frame list contains direction, elapsed time, opcode, FIN, compression flag and unmasked Base64 payload. The UI offers text for complete uncompressed text frames, Hex/Base64, direction filters and Stop connection. Close is relayed both ways; cancellation terminates the transport and retains captured frames. Proxy shutdown also records a stopped session. The last queued frame is drained before normal completion.
 
-This is frame capture, not a full WebSocket composer: active connections from the editor, message editing/replay, fragment reassembly, decompression, H2 extended CONNECT and H3 WebSocket are not implemented. Only rules matching this handshake and stage can block this initial path: nonempty enabled capture scripts or enabled capture-scoped interception are explicitly rejected when matched. Unrelated rules, empty scripts and replay-only interception do not block WebSocket capture. Response status conditions are evaluated after the upstream handshake response arrives. Native TLS is used for WSS, not browser fingerprint presets. Limits: 300 seconds per session, 8 MiB per frame, approximately 8 MiB total captured payload and 10000 frames. Stopping or exceeding limits closes the transport; it does not synthesize a graceful Close handshake.
+Active editor connections and message editing/resending are now available as described below. H2 extended CONNECT and H3 WebSocket are not implemented. Only rules matching this handshake and stage can block this initial path: nonempty enabled capture scripts or enabled capture-scoped interception are explicitly rejected when matched. Unrelated rules, empty scripts and replay-only interception do not block WebSocket capture. Response status conditions are evaluated after the upstream handshake response arrives. Native TLS is used for WSS, not browser fingerprint presets. Limits: 300 seconds per session, 8 MiB per frame, approximately 8 MiB total captured payload and 10000 frames. Stopping or exceeding limits closes the transport; it does not synthesize a graceful Close handshake.
 
 H3 currently has a fixed-target loopback QUIC reverse proxy and an experimental dynamic-SNI TUN ingress. The latter has local tests but has not passed Windows end-to-end acceptance; investigation is paused as of 2026-10-08 (see [TUN notes](tun.md)). The fixed-target reverse proxy is separate from the system HTTP
 proxy. Start it with a fixed origin (not a URL containing a path):
@@ -96,3 +96,33 @@ Self-proxy loops are rejected before a request is written. End-to-end header
 ordering remains intact; upstream proxies may independently rewrite traffic.
 
 响应查看支持 gzip、deflate、br 和 zstd 解压；原始下载保留 Content-Encoding 对应的实体字节，解压下载保留解码后的二进制字节（不会写入格式化文本）。解压输出上限 8 MiB。
+
+
+## WebSocket inspection and HTTPS passthrough (2026-10-11)
+
+New captures also store complete reassembled data messages, separately from the original frame list. The message viewer decodes permessage-deflate with independent client/server dictionaries and negotiated no-context-takeover handling. Control frames remain in frame view. Decoded output has an 8 MiB session budget; an error is displayed instead of pretending compressed bytes are text. Existing frame-only records are not retroactively decoded. Active WebSocket sending is covered in the following section.
+
+Proxy Settings supports an explicit CONNECT passthrough list: exact hostnames or `*.example.com` (subdomains only, not the apex). A match forwards opaque TLS bytes through the current upstream route and records only the CONNECT tunnel, not internal HTTP requests, certificates or payloads. The client validates the actual origin certificate. Empty list retains MITM behavior. This applies to new explicit CONNECT connections, not TUN or QUIC, and does not alter OS trust/proxy settings.
+
+
+## Active WebSocket composer (2026-10-11)
+
+Enter `ws://` or `wss://` in a request tab and select Connect WebSocket. Use Auto or Native with the Native TLS preset. The connection uses HTTP/1 Upgrade, validates WSS certificates/hostnames, and honors the request-specific HTTP/SOCKS5 upstream profile; it never adopts the global capture proxy implicitly. Headers such as Cookie, Authorization, Origin and Sec-WebSocket-Protocol can be edited. Host, Connection, Upgrade, key and version are generated on each connection; framing/proxy headers and extension offers are removed. Request bodies are rejected. Active sessions do not negotiate compression or browser TLS fingerprints.
+
+The response pane becomes the message composer and existing frame/message viewer. Send UTF-8 text, Base64 binary, or Base64 Ping (up to 125 bytes). Load a complete text/binary frame or reassembled message into the editor, modify it, and Send to append a new transmission. Original records remain unchanged. Each client frame uses a new random mask. Incoming Ping is answered with Pong automatically. Normal Close sends an empty Close frame and waits up to five seconds for the peer; Stop or closing the request tab cancels the connection. Reconnect creates a new session, without automatically replaying old messages. The outgoing message draft is kept per open request tab across reconnects and view changes, but is not persisted across application restarts.
+
+Captured WS/WSS records sent to Edit/Replay are converted into fresh WebSocket drafts/connections; replaying establishes a connection, it does not automatically resend a captured conversation. Per-connection limits remain 300 seconds, approximately 8 MiB captured payload, 10000 frames; individual outgoing messages are bounded by 8 MiB. A send acknowledgement means the local send path accepted the frame, not application-level delivery; inspect returned messages/errors before retrying. The bounded send queue rejects overload.
+
+Handshake scripts and matching interception rules still reject unsupported stages explicitly. Message-level scripting/interception, active compression negotiation, H2/H3 WebSocket and reconnect across process restarts remain outside this implementation.
+
+Validation: local WS and WSS echo integration tests cover duplicate custom headers, automatic masking, Unicode text, binary data, Ping/Pong, close, rejected upgrades and handshake cancellation. GUI verification covers connect, send, load/edit/resend, binary echo and normal close. Frontend build/tests and default core regression pass. No public service or real credentials are required by these fixtures.
+
+### 自定义 ClientHello Hex（httpcloak）
+
+手动请求的 TLS 页选择 httpcloak，选择浏览器/版本作为 HTTP 配置，再启用“导入 ClientHello Hex”。粘贴包含 TLS record 头的完整 ClientHello 十六进制，支持空格、换行；HTTP/2 设置仍来自所选浏览器预设，User-Agent 不变。模板可命名保存并按请求选择，当前模板列表保存在前端 localStorage（桌面与浏览器各自独立）；收藏请求会将 Hex 随请求保存到工作空间。
+
+仅接受单个完整 TLS ClientHello record，最大 65540 字节。不支持碎片拼接、ECH、PSK 会话恢复、0-RTT、QUIC transport parameters 与 uTLS 不认识的扩展，发送前明确报错，不静默回退。包含 h2 ALPN 时使用 H2，否则使用 H1；非 HTTP ALPN 被拒绝。此功能仅限 HTTPS，暂不用于主动 WebSocket 或抓包上游连接。
+
+每次重新生成握手状态、密钥和目标 SNI，保留模板结构而非重放原始字节。发送说明记录模板 SHA-256 和 HTTP 配置来源。非 httpcloak 引擎拒绝此字段，旧辅助程序也会提示重新构建。依赖现有 httpcloak/uTLS 实现，没有引入 Awesome TLS 插件源码。
+
+验证：Go 测试从真实 TLS 客户端采集 ClientHello，再经 httpcloak 对本地受信任 H2 服务完成握手及响应读取；覆盖错误 Hex 和长度限制。运行 `go test ./...`（helpers/httpcloak）。

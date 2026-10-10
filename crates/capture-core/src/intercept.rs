@@ -11,6 +11,9 @@ pub struct Config { pub request: bool, pub response: bool, pub scope: String, #[
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub struct Rule {
+ #[serde(default)] pub disabled: bool,
+ #[serde(default)] pub exclude: bool,
+ #[serde(default)] pub group: String,
  #[serde(default)] pub url_regex: bool,
  #[serde(skip)] pub compiled_url: Option<regex::Regex>,
  #[serde(default)] pub url_contains: String,
@@ -23,12 +26,15 @@ pub struct Rule {
 impl Rule {
  fn nonempty(&self)->bool { !self.url_contains.is_empty() || !self.host.is_empty() || !self.method.is_empty() || self.status.is_some() || !self.header_name.is_empty() }
  pub(crate) fn matches(&self, f:&Flow)->bool {
-  self.nonempty() && (self.url_contains.is_empty() || if self.url_regex { self.compiled_url.as_ref().is_some_and(|r|r.is_match(&f.request.url)) } else { f.request.url.contains(&self.url_contains) })
+  !self.disabled && self.nonempty() && (self.url_contains.is_empty() || if self.url_regex { self.compiled_url.as_ref().is_some_and(|r|r.is_match(&f.request.url)) } else { f.request.url.contains(&self.url_contains) })
    && (self.host.is_empty() || url::Url::parse(&f.request.url).ok().and_then(|u|u.host_str().map(str::to_owned)).is_some_and(|h|h.eq_ignore_ascii_case(&self.host)))
    && (self.method.is_empty() || f.request.method.eq_ignore_ascii_case(&self.method))
    && self.status.is_none_or(|status|f.response.as_ref().is_some_and(|r|r.status==status))
    && (self.header_name.is_empty() || f.request.headers.iter().any(|h|h.name.eq_ignore_ascii_case(&self.header_name) && h.value.contains(&self.header_contains)))
  }
+}
+pub(crate) fn matches_rules(rules:&[Rule],flow:&Flow)->bool {
+ !rules.iter().any(|r|r.exclude&&r.matches(flow)) && rules.iter().any(|r|!r.exclude&&r.matches(flow))
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all="camelCase")]
@@ -37,9 +43,9 @@ pub struct Item { pub id: String, pub stage: String, pub flow: Flow }
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub struct Decision { pub id: String, pub action: String, pub request: Option<RequestDraft>, pub response: Option<CapturedResponse> }
 #[derive(Serialize)]
-pub struct Snapshot { pub config: Config, pub items: Vec<Item> }
+pub struct Snapshot { pub config: Config, pub items: Vec<Item>, pub hits:Vec<u64> }
 #[derive(Default)]
-struct Inner { config: Config, items: BTreeMap<String, (Item, oneshot::Sender<Decision>)> }
+struct Inner { hits:Vec<u64>, config: Config, items: BTreeMap<String, (Item, oneshot::Sender<Decision>)> }
 #[derive(Default)]
 pub struct Interceptor { store:Option<std::sync::Arc<crate::store::Store>>, inner: Mutex<Inner> }
 struct Guard<'a>(&'a Interceptor, String);
@@ -51,22 +57,22 @@ impl Interceptor {
   state.configure(config)?;state.store=Some(store);Ok(state)
  }
 
- pub fn snapshot(&self) -> Snapshot { let s=self.inner.lock().unwrap(); Snapshot { config:s.config.clone(), items:s.items.values().map(|x|x.0.clone()).collect() } }
+ pub fn snapshot(&self) -> Snapshot { let s=self.inner.lock().unwrap(); Snapshot { hits:s.hits.clone(), config:s.config.clone(), items:s.items.values().map(|x|x.0.clone()).collect() } }
  pub fn configure(&self, mut config:Config) -> Result<()> {
   ensure!(["all","capture","replay"].contains(&config.scope.as_str()), "无效的拦截范围");
   ensure!(config.rules.len()<=32,"最多支持 32 条规则");
   for r in &mut config.rules {
    ensure!(r.nonempty(),"规则至少需要一个条件");
-   ensure!(r.url_contains.len()<=2048 && r.host.len()<=253 && r.method.len()<=32 && r.header_name.len()<=256 && r.header_contains.len()<=2048,"规则条件过长");
+   ensure!(r.group.len()<=128 && r.url_contains.len()<=2048 && r.host.len()<=253 && r.method.len()<=32 && r.header_name.len()<=256 && r.header_contains.len()<=2048,"规则条件过长");
    r.compiled_url = if r.url_regex && !r.url_contains.is_empty() {
     Some(regex::RegexBuilder::new(&r.url_contains).size_limit(1024*1024).build().map_err(|e|anyhow::anyhow!("URL 正则表达式无效：{e}"))?)
    } else { None };
    ensure!(r.status.is_none_or(|v|(100..=599).contains(&v)),"无效状态码");
    ensure!(r.header_contains.is_empty() || !r.header_name.is_empty(),"请填写请求头名称");
   }
-  let mut s=self.inner.lock().unwrap(); if let Some(store)=&self.store{store.save_setting("interception.v1",&config)?;}s.config=config;
+  let mut s=self.inner.lock().unwrap(); if let Some(store)=&self.store{store.save_setting("interception.v1",&config)?;}s.hits=vec![0;config.rules.len()];s.config=config;
   // Disabling a breakpoint releases its waiting requests unchanged.
-  let ids:Vec<_>=s.items.iter().filter(|(_, (i,_))| !enabled(&s.config,&i.stage,&i.flow.source) || !s.config.rules.iter().any(|r|r.matches(&i.flow))).map(|(id,_)|id.clone()).collect();
+  let ids:Vec<_>=s.items.iter().filter(|(_, (i,_))| !enabled(&s.config,&i.stage,&i.flow.source) || !matches_rules(&s.config.rules,&i.flow)).map(|(id,_)|id.clone()).collect();
   for id in ids { if let Some((_,tx))=s.items.remove(&id) { let _=tx.send(Decision{id,action:"continue".into(),request:None,response:None}); } }
   Ok(())
  }
@@ -90,8 +96,10 @@ impl Interceptor {
  }
  pub async fn pause(&self, flow:&Flow, stage:&str)->Result<Option<Decision>> {
   let (tx,rx)=oneshot::channel(); let id=uuid::Uuid::new_v4().to_string();
-  { let mut s=self.inner.lock().unwrap(); if !enabled(&s.config,stage,&flow.source) || !s.config.rules.iter().any(|r|r.matches(flow)) { return Ok(None); }
+  { let mut s=self.inner.lock().unwrap(); if !enabled(&s.config,stage,&flow.source) || !matches_rules(&s.config.rules,flow) { return Ok(None); }
     ensure!(s.items.len()<64,"拦截队列已满，请求已终止");
+    let matched:Vec<usize>=s.config.rules.iter().enumerate().filter(|(_,r)|!r.exclude&&r.matches(flow)).map(|(i,_)|i).collect();
+    for index in matched {s.hits[index]=s.hits[index].saturating_add(1);}
     s.items.insert(id.clone(),(Item{id:id.clone(),stage:stage.into(),flow:flow.clone()},tx)); }
   let _guard=Guard(self,id);
   let d=tokio::time::timeout(Duration::from_secs(120),rx).await.map_err(|_|anyhow::anyhow!("拦截等待超过 120 秒，请求已终止"))??;
@@ -107,4 +115,19 @@ fn enabled(c:&Config,stage:&str,source:&str)->bool { (c.scope=="all" || c.scope=
  let mut r=Rule{host:"EXAMPLE.TEST".into(),method:"post".into(),url_contains:"/api?".into(),status:Some(403),header_name:"X-KEY".into(),header_contains:"second".into(),..Default::default()};assert!(r.matches(&f));
  r.method="GET".into();assert!(!r.matches(&f));r.method="".into();r.host="ample.test".into();assert!(!r.matches(&f));r.host="example.test".into();r.status=Some(200);assert!(!r.matches(&f));assert!(!Rule::default().matches(&f));
  }
+ #[tokio::test] async fn exclusion_priority_disable_and_reconfigure_release(){
+  let interceptor=std::sync::Arc::new(Interceptor::default());
+  let f:Flow=serde_json::from_value(serde_json::json!({"id":"test","parentId":null,"startedAt":0,"durationMs":0,"source":"capture","request":{"method":"GET","url":"https://example.test/api","headers":[],"bodyBase64":""},"response":null,"error":null,"notes":[]})).unwrap();
+  let positive=Rule{host:"example.test".into(),..Default::default()};
+  let excluded=Rule{exclude:true,url_contains:"/api".into(),..Default::default()};
+  let mut config=Config{request:true,response:false,scope:"all".into(),rules:vec![positive,excluded]};
+  interceptor.configure(config.clone()).unwrap();assert!(interceptor.pause(&f,"request").await.unwrap().is_none());assert_eq!(interceptor.snapshot().hits,vec![0,0]);
+  config.rules[1].disabled=true;interceptor.configure(config.clone()).unwrap();
+  let cloned=interceptor.clone();let task=tokio::spawn(async move{cloned.pause(&f,"request").await.unwrap()});
+  tokio::time::timeout(Duration::from_secs(2),async{while interceptor.snapshot().items.is_empty(){tokio::task::yield_now().await}}).await.unwrap();
+  assert_eq!(interceptor.snapshot().hits,vec![1,0]);
+  config.rules[1].disabled=false;interceptor.configure(config).unwrap();
+  assert_eq!(task.await.unwrap().unwrap().action,"continue");assert!(interceptor.snapshot().items.is_empty());
+ }
+
 }

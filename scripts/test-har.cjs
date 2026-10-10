@@ -1,0 +1,12 @@
+const {buildSync}=require('esbuild');
+const assert=require('node:assert/strict');
+function load(path){const r=buildSync({entryPoints:[path],bundle:true,platform:'node',format:'cjs',write:false,logLevel:'silent'});const m={exports:{}};new Function('module','exports',r.outputFiles[0].text)(m,m.exports);return m.exports;}
+const {createHar}=load('apps/frontend/src/har.ts');const {readSession}=load('apps/frontend/src/sessions.ts');
+(async()=>{
+const flow={id:'test',startedAt:1700000000000,durationMs:13,clientProtocol:'HTTP/2',request:{method:'POST',url:'https://example.invalid/?x=1&x=2',headers:[{name:'X-A',value:'1'},{name:'X-A',value:'2'}],bodyBase64:'/wAB'},response:{status:200,version:'HTTP/1.1',headers:[{name:'content-encoding',value:'gzip'},{name:'content-type',value:'application/octet-stream'}],bodyBase64:'eA=='}};
+const har=await createHar([flow],async()=>Uint8Array.from([0,255,12]));const entry=har.log.entries[0];assert.equal(har.log.version,'1.2');assert.equal(entry.response.content.text,'AP8M');assert.equal(entry.response.content.size,3);assert.equal(entry.response.bodySize,1);assert.deepEqual(entry.request.headers,flow.request.headers);assert.equal(entry.request.queryString.length,2);assert.equal(entry.request.postData._bodyBase64,'/wAB');const imported=readSession(JSON.stringify(har))[0];assert.equal(imported.request.bodyBase64,'/wAB');assert.equal(imported.response.bodyBase64,'AP8M');assert(!imported.response.headers.some(h=>h.name==='content-encoding'));
+const failed=await createHar([flow],async()=>{throw Error('broken compression')});assert.equal(failed.log.entries[0].response.content.text,undefined);assert.equal(readSession(JSON.stringify(failed))[0].response.bodyBase64,'eA==');assert.equal(readSession(JSON.stringify(failed))[0].response.headers[0].value,'gzip');
+const empty=await createHar([{...flow,response:null,error:'failed'}],async()=>{throw Error('unexpected')});assert.equal(empty.log.entries[0].response.status,0);assert.equal(empty.log.entries[0]._error,'failed');
+const text=await createHar([{...flow,request:{...flow.request,bodyBase64:Buffer.from('\ufeff中文').toString('base64')},response:null}],async()=>new Uint8Array());assert.equal(readSession(JSON.stringify(text))[0].request.bodyBase64,Buffer.from('\ufeff中文').toString('base64'));
+console.log('HAR export: duplicate headers/query, binary and BOM request round-trip, decoded response, decode failure recovery and missing response passed');
+})().catch(e=>{console.error(e);process.exitCode=1});

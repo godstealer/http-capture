@@ -6,7 +6,7 @@ use tokio::{io::{AsyncReadExt, AsyncWriteExt}, process::Command};
 use transport_api::{CapturedResponse, RequestDraft};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct Capabilities { pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>> }
+pub struct Capabilities { #[serde(default)] pub custom_client_hello: bool, pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>> }
 #[derive(Deserialize)]
 pub struct Reply { pub response: Option<CapturedResponse>, #[serde(default)] pub notes: Vec<String>, pub error: Option<String> }
 #[derive(Clone)]
@@ -19,6 +19,7 @@ impl Helper {
   Ok(Self{path,capabilities})
  }
  pub async fn send<S:Serialize>(&self,request:&RequestDraft<S>,preset:&str,proxy:Option<&transport_api::UpstreamProxyConfig>)->Result<(CapturedResponse,Vec<String>)>{
+  ensure!(request.tls.client_hello_hex.is_none() || self.capabilities.custom_client_hello,"This httpcloak helper does not support ClientHello Hex; rebuild the helper");
   let input=serde_json::to_vec(&serde_json::json!({"request":request,"preset":preset,"proxy":proxy}))?;
   ensure!(input.len()<=16*1024*1024,"Request exceeds helper IPC limit");
   let mut cmd=Command::new(&self.path);

@@ -43,3 +43,12 @@ async fn unavailable_engine_is_explicit_and_missing_engine_defaults_to_auto() {
     let legacy: RequestDraft = serde_json::from_str(r#"{"method":"GET","url":"http://localhost/","headers":[],"bodyBase64":""}"#).unwrap();
     assert_eq!(legacy.engine, "auto");
 }
+
+#[tokio::test]
+async fn custom_hello_never_silently_uses_another_engine() {
+ let mut engines=SendEngines::empty();let calls=Arc::new(AtomicUsize::new(0));
+ engines.register(Arc::new(Probe{id:"a",calls:calls.clone()})).unwrap();
+ let mut request=draft("a");request.tls.client_hello_hex=Some("160301".into());
+ assert!(engines.send(&request).await.unwrap_err().to_string().contains("httpcloak"));
+ assert_eq!(calls.load(Ordering::SeqCst),0);
+}

@@ -61,9 +61,11 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                 let engine = engine.clone(); let target = target.clone();
                 tasks.spawn(async move {
                     let work = async {
-                        let connection = incoming.await?;
+                        let connection = tokio::time::timeout(Duration::from_secs(10), incoming).await
+                            .map_err(|_| anyhow::anyhow!("H3 client handshake timed out after 10 seconds"))??;
                         let client_tls = crate::tls_details::quic(&connection);
-                        let redirected=target.is_none();
+                        let redirected = target.is_none();
+
                         let target = match target {
                             Some(target) => target,
                             None => {
@@ -82,11 +84,17 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                     let Some(resolver) = next? else { break };
                                     let engine = engine.clone(); let target = target.clone(); let client_tls = client_tls.clone();
                                     streams.spawn(async move {
-                                        let result: Result<()> = async {
+                                        let result = tokio::time::timeout(Duration::from_secs(300), async {
                                             let (request, mut stream) = resolver.resolve_request().await?;
-                                            ensure!(request.method() != http::Method::CONNECT, "CONNECT unsupported");
-                                            ensure!(request.uri().host() == Some(hostname(&target).as_str()), "Unexpected request host");
-                                            ensure!(request.uri().scheme_str()==Some("https") && (!redirected || request.uri().port_u16().unwrap_or(443)==443), "Unexpected H3 scheme or port");
+                                            let valid=request.method()!=http::Method::CONNECT
+                                                && request.uri().host()==Some(hostname(&target).as_str())
+                                                && request.uri().scheme_str()==Some("https")
+                                                && (!redirected || request.uri().port_u16().unwrap_or(443)==443);
+                                            if !valid {
+                                                stream.stop_sending(h3::error::Code::H3_REQUEST_REJECTED);
+                                                stream.stop_stream(h3::error::Code::H3_REQUEST_REJECTED);
+                                                anyhow::bail!("H3 request origin or method is unsupported");
+                                            }
                                             let mut body = Vec::new();
                                             while let Some(mut chunk) = stream.recv_data().await? {
                                                 ensure!(body.len() + chunk.remaining() <= MAX_BODY, "Body exceeds 8 MiB limit");
@@ -103,8 +111,8 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                             stream.send_response(http::Response::from_parts(parts, ())).await?;
                                             if !body.is_empty() { stream.send_data(Bytes::from(body)).await?; }
                                             stream.finish().await?;
-                                            Ok(())
-                                        }.await;
+                                            Ok::<(), anyhow::Error>(())
+                                        }).await.unwrap_or_else(|_| Err(anyhow::anyhow!("H3 stream timed out after 300 seconds")));
                                         if let Err(error) = result { eprintln!("h3 stream: {error:#}"); }
                                     });
                                 }

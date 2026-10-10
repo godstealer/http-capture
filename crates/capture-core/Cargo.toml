@@ -9,6 +9,7 @@ default = []
 browser-replay = ["dep:transport-wreq", "browser-profiles/browser-replay"]
 
 [dependencies]
+flate2 = "1"
 transport-api = { path = "../transport-api" }
 transport-httpcloak = { path = "../transport-httpcloak" }
 browser-profiles = { path = "../browser-profiles" }

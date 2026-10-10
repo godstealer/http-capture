@@ -1,12 +1,14 @@
 import { t } from './i18n';
 import { invoke } from './api';
-import { readSession, saveSession } from './sessions';
+import { importSession } from './importSession';
+import { saveSession } from './sessions';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Copy, Radio, Search, Send, X, Globe2, FileText, Braces } from 'lucide-react';
 import { decodeText, type Flow, type Header } from './types';
 import SplitPane from './SplitPane';
 import ResponseBody from './ResponseBody';
 import WebSocketFrames from './WebSocketFrames';
+import { captureColumns, readColumns, saveColumns } from './captureColumns';
 import { flowType } from './flowType';
 import HeaderOrder from './HeaderOrder';
 import { RequestOverview, TlsDetails } from './RequestDetails';
@@ -49,13 +51,31 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
   onReplay: (flow: Flow) => void; onCopy: (text: string) => void;
   onReplayNow: (flow: Flow) => void; busy: boolean; active: boolean;
 }) {
+  const [widths,setWidths]=useState<Record<string,number>>(()=>{try{const data=JSON.parse(localStorage.getItem('http-capture.capture.column-widths')??'{}');return Object.fromEntries(Object.entries(data).filter(([,v])=>typeof v==='number'&&v>=32&&v<=1200)) as Record<string,number>;}catch{return {};}});
+  function resizeColumn(id:string,width:number){setWidths(previous=>{const next={...previous,[id]:Math.max(32,Math.min(1200,Math.round(width)))};try{localStorage.setItem('http-capture.capture.column-widths',JSON.stringify(next));}catch{}return next;});}
+  const resizeStart=useRef<{id:string;x:number;width:number}|null>(null);
+  const [columns, setColumns] = useState(readColumns);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const columnPanel = useRef<HTMLDivElement>(null);
+  const columnButton = useRef<HTMLButtonElement>(null);
+  const visibleColumns = captureColumns.filter(c => columns.includes(c.id));
+  function updateColumns(next: string[]) { setColumns(next); saveColumns(next); }
+  useEffect(() => {
+    if (!columnsOpen) return;
+    const close = (e: PointerEvent) => { if (!columnPanel.current?.contains(e.target as Node) && !columnButton.current?.contains(e.target as Node)) setColumnsOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') { setColumnsOpen(false); columnButton.current?.focus(); } };
+    document.addEventListener('pointerdown', close); document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
+  }, [columnsOpen]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const anchor = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [fileBusy, setFileBusy] = useState(false);
   const [fileMessage, setFileMessage] = useState('');
-  async function save(items: Flow[]) {
-    try { setFileMessage(await saveSession(items)); } catch (e) { setFileMessage(String(e)); }
+  async function save(items: Flow[], format: 'json' | 'har' = 'json') {
+    if (fileBusy) return;
+    setFileBusy(true);
+    try { setFileMessage(await saveSession(items, format)); } catch (e) { setFileMessage(String(e)); } finally { setFileBusy(false); }
   }
   async function remove(ids: string[]) {
     if (fileBusy || !ids.length) return;
@@ -66,12 +86,19 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
   async function importFile(file: File) {
     setFileBusy(true);
     try {
-      if (file.size > 5 * 1024 * 1024) throw new Error(t("当前支持最大 5 MB 的 HAR / 会话文件"));
-      const imported = readSession(await file.text());
-      const count = await invoke<number>('import_flows', { flows: imported });
+      const count = await importSession(file, (done, total) => setFileMessage(`${done} / ${total}`));
       onFlowsChanged(await invoke<Flow[]>('list_flows')); setQuery(''); setFilter('all');
       setFileMessage(t("已导入 {v0} 条记录", { v0: count }));
     } catch (e) { setFileMessage(String(e)); } finally { setFileBusy(false); }
+  }
+  async function databaseAction(command: string) {
+    if (fileBusy) return;
+    setFileBusy(true);
+    try {
+      const result = await invoke<string | number>(command);
+      if (command === 'clear_database') { onFlowsChanged([]); setChecked(new Set()); }
+      setFileMessage(command === 'backup_database' ? `${t("备份已保存：")}${result}` : t("操作完成"));
+    } catch (error) { setFileMessage(String(error)); } finally { setFileBusy(false); }
   }
   const [selected, setSelected] = useState<string | null>(null);
   const menuIds = useRef<string[]>([]);
@@ -148,13 +175,23 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
   const flow = filtered.find(f => f.id === selected);
   return <main className={`capture-workbench ${flow ? 'with-inspector' : ''}`}>
     <div className="capture-filter" aria-label={t("会话管理")}>
+      <button ref={columnButton} aria-expanded={columnsOpen} aria-controls="capture-column-settings" onClick={() => setColumnsOpen(!columnsOpen)}>{t("列设置")}</button>
       <button disabled={!desktop || fileBusy} onClick={() => fileInput.current?.click()}>{t("导入 HAR / 会话")}</button>
       <input ref={fileInput} hidden type="file" accept=".har,.json,application/json" onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void importFile(file); }} />
       <button disabled={!filtered.length} onClick={() => void save(filtered)}>{t("保存当前列表（")}{filtered.length}）</button>
+      <button disabled={fileBusy || !filtered.length} onClick={() => void save(filtered, 'har')}>{t("导出列表 HAR")}</button>
+      <button disabled={fileBusy || !picked.length} onClick={() => void save(picked, 'har')}>{t("导出选中 HAR")}</button>
       <button disabled={!picked.length} onClick={() => void save(picked)}>{t("保存选中（")}{picked.length}）</button>
       <button disabled={!desktop || !picked.length || fileBusy} onClick={() => requestDelete(picked.map(f => f.id))}>{t("删除选中（")}{picked.length}）</button><span>{t("Ctrl+A 全选 · Ctrl / ⌘ 点选 · Shift 连选")}</span>
-      <span role="status">{fileBusy ? t("处理中…") : fileMessage}</span>
+      <button disabled={!desktop || fileBusy} onClick={() => void databaseAction('backup_database')}>{t("备份数据库")}</button>
+      <button disabled={!desktop || fileBusy} onClick={() => void databaseAction('compact_database')}>{t("回收数据库空间")}</button>
+      <button disabled={!desktop || fileBusy} onClick={() => { if (window.confirm(t("清空全部抓包及重放历史？此操作不可撤销，请先备份数据库。"))) void databaseAction('clear_database'); }}>{t("清空全部记录")}</button>
+      <span role="status">{fileBusy ? `${t("处理中…")} ${fileMessage}` : fileMessage}</span>
     </div>
+    {columnsOpen && <div ref={columnPanel} id="capture-column-settings" className="capture-column-settings" role="group" aria-label={t("列设置")}>
+      <div className="column-settings-heading"><strong>{t("显示列")}</strong><button onClick={() => updateColumns(captureColumns.filter(c => c.default).map(c => c.id))}>{t("恢复默认")}</button><button aria-label={t("关闭")} onClick={() => { setColumnsOpen(false); columnButton.current?.focus(); }}><X size={16} /></button></div>
+      <div className="column-settings-options">{captureColumns.map(c => <label key={c.id}><input type="checkbox" checked={columns.includes(c.id)} disabled={columns.length === 1 && columns.includes(c.id)} onChange={e => updateColumns(e.target.checked ? [...columns, c.id] : columns.filter(id => id !== c.id))} />{t(c.label)}</label>)}</div>
+    </div>}
     <div className="capture-filter"><div className="search-box"><Search size={15} /><input aria-label={t("过滤捕获请求")} placeholder={t("过滤 URL、方法、状态码…")} value={query} onChange={e => setQuery(e.target.value)} />{query && <button aria-label={t("清除筛选")} onClick={() => setQuery('')}><X size={13} /></button>}</div>
       { filters.map(([key, label]) => <button key={key} className={`filter ${filter === key ? 'selected' : ''}`} onClick={() => setFilter(key)}>{t(label)}</button>)}<span className="capture-total">{filtered.length} / {captured.length} {t("个请求")}</span>
     </div>
@@ -163,9 +200,11 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault(); e.stopPropagation(); setChecked(new Set(filtered.map(f => f.id)));
       } else if (e.key === 'Delete') { e.preventDefault(); requestDelete(picked.map(f => f.id)); }
-    }}><table className="session-table" aria-label={t("捕获的请求")}><thead><tr><th></th><th aria-sort={idSort === 'asc' ? 'ascending' : 'descending'}><button className="id-sort-button" onClick={toggleIdSort} title={idSort === 'asc' ? t("ID 倒序") : t("ID 正序")}>ID {idSort === 'asc' ? '↑' : '↓'}</button></th><th>{t("图标")}</th><th>{t("方法")}</th><th>URL</th><th>Type</th><th>{t("状态")}</th><th>{t("客户端协议")}</th><th>{t("上游协议")}</th><th>{t("TLS（上游）")}</th><th>{t("时长")}</th><th>{t("大小")}</th></tr></thead><tbody>{start > 0 && <tr aria-hidden="true" className="virtual-spacer"><td colSpan={12} style={{ height: start * rowHeight }} /></tr>}{filtered.slice(start, end).map(f => {
+    }}><table className="session-table" style={{ minWidth: visibleColumns.reduce((sum, c) => sum + (widths[c.id]??c.width), 0) }} aria-label={t("捕获的请求")}><thead onContextMenu={e => { e.preventDefault(); setColumnsOpen(true); }}><tr>{visibleColumns.map(c => <th key={c.id} title={t(c.label)} aria-label={c.id === 'indicator' ? t(c.label) : undefined} style={{ width: widths[c.id]??c.width }} aria-sort={c.id === 'id' ? (idSort === 'asc' ? 'ascending' : 'descending') : undefined}>{c.id === 'id' ? <button className="id-sort-button" onClick={toggleIdSort} title={idSort === 'asc' ? t("ID 倒序") : t("ID 正序")}>ID {idSort === 'asc' ? '↑' : '↓'}</button> : c.id === 'indicator' ? '●' : t(c.label)}<span className="column-resizer" role="separator" tabIndex={0} aria-label={`${t('调整列宽')} ${t(c.label)}`} aria-orientation="vertical" aria-valuemin={32} aria-valuemax={1200} aria-valuenow={widths[c.id]??c.width} onPointerDown={e=>{e.preventDefault();e.stopPropagation();resizeStart.current={id:c.id,x:e.clientX,width:widths[c.id]??c.width};e.currentTarget.setPointerCapture(e.pointerId);}} onPointerMove={e=>{const start=resizeStart.current;if(start?.id===c.id)resizeColumn(c.id,start.width+e.clientX-start.x);}} onPointerUp={()=>{resizeStart.current=null;}} onLostPointerCapture={()=>{resizeStart.current=null;}} onKeyDown={e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();resizeColumn(c.id,(widths[c.id]??c.width)+(e.key==='ArrowRight'?10:-10));}}}/></th>)}</tr></thead><tbody>{start > 0 && <tr aria-hidden="true" className="virtual-spacer"><td colSpan={visibleColumns.length} style={{ height: start * rowHeight }} /></tr>}{filtered.slice(start, end).map(f => {
 
+      let url: URL | undefined; try { url = new URL(f.request.url); } catch { /* Imported URL may be incomplete. */ }
       const contentType = f.response?.headers.find(h => h.name.toLowerCase() === 'content-type')?.value.split(';')[0] ?? '—';
+      const cells: Record<string, React.ReactNode> = {'indicator': <td key="indicator"><span className={f.error ? 'traffic-dot failed' : f.response ? 'traffic-dot complete' : 'traffic-dot pending'} /></td>,'id': <td key="id">{ids.get(f.id)}</td>,'icon': <td key="icon">{contentType.includes('json') ? <Braces size={16} /> : contentType.includes('html') ? <Globe2 size={16} /> : <FileText size={16} />}</td>,'method': <td key="method">{f.request.method}</td>,'url': <td key="url" title={f.request.url}>{f.request.url}</td>,'type': <td key="type" title={f.response?.headers.find(h => h.name.toLowerCase() === "content-type")?.value ?? flowType(f)}>{t(flowType(f))}</td>,'status': <td key="status">{f.error ? 'ERR' : f.response?.status ?? '…'}</td>,'clientProtocol': <td key="clientProtocol" title={t("客户端协议")}>{f.clientProtocol ?? t("未记录")}</td>,'upstreamProtocol': <td key="upstreamProtocol" title={t("上游协议")}>{f.response?.version ?? (f.error ? t("未记录") : t("等待响应"))}</td>,'tls': <td key="tls">{f.response?.tlsVersion ?? (f.request.url.startsWith('https:') ? t("未记录") : '—')}</td>,'duration': <td key="duration">{(f.durationMs / 1000).toFixed(2)}s</td>,'size': <td key="size">{f.response ? `${(bodySize(f.response.bodyBase64) / 1024).toFixed(2)} KB` : '—'}</td>,'host': <td key="host" title={String(url?.hostname ?? '—')}>{url?.hostname ?? '—'}</td>,'path': <td key="path" title={String((url ? url.pathname + url.search : undefined) ?? '—')}>{(url ? url.pathname + url.search : undefined) ?? '—'}</td>,'scheme': <td key="scheme" title={String(url?.protocol.replace(':', '') ?? '—')}>{url?.protocol.replace(':', '') ?? '—'}</td>,'mime': <td key="mime" title={String(contentType ?? '—')}>{contentType ?? '—'}</td>,'started': <td key="started" title={String(new Date(f.startedAt).toLocaleString() ?? '—')}>{new Date(f.startedAt).toLocaleString() ?? '—'}</td>,'requestSize': <td key="requestSize" title={String(`${bodySize(f.request.bodyBase64)} B`)}>{`${bodySize(f.request.bodyBase64)} B`}</td>,'encoding': <td key="encoding" title={String(f.response?.headers.find(h => h.name.toLowerCase() === 'content-encoding')?.value ?? '—')}>{f.response?.headers.find(h => h.name.toLowerCase() === 'content-encoding')?.value ?? '—'}</td>,'cipher': <td key="cipher" title={String(f.response?.upstreamTls?.cipherSuite ?? '—')}>{f.response?.upstreamTls?.cipherSuite ?? '—'}</td>,'error': <td key="error" title={String(f.error ?? '—')}>{f.error ?? '—'}</td>};
       return <tr key={f.id} className={checked.has(f.id) ? 'selected' : ''} aria-selected={checked.has(f.id)} aria-haspopup="menu" tabIndex={0}
         onContextMenu={e => { e.preventDefault(); selectContext(f.id); setMenu({ flow: f, x: e.clientX, y: e.clientY, anchor: e.currentTarget }); }}
         onDoubleClick={() => onReplay(f)} onClick={e => selectRow(f.id, e)} onKeyDown={e => {
@@ -179,9 +218,9 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
             setMenu({ flow: f, x: rect.left + 40, y: rect.bottom, anchor: e.currentTarget });
           } else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectRow(f.id, e, e.key === ' '); }
         }}>
-        <td><span className={f.error ? 'traffic-dot failed' : f.response ? 'traffic-dot complete' : 'traffic-dot pending'} /></td><td>{ids.get(f.id)}</td><td>{contentType.includes('json') ? <Braces size={16} /> : contentType.includes('html') ? <Globe2 size={16} /> : <FileText size={16} />}</td><td>{f.request.method}</td><td title={f.request.url}>{f.request.url}</td><td title={f.response?.headers.find(h => h.name.toLowerCase() === "content-type")?.value ?? flowType(f)}>{t(flowType(f))}</td><td>{f.error ? 'ERR' : f.response?.status ?? '…'}</td><td title={t("客户端协议")}>{f.clientProtocol ?? t("未记录")}</td><td title={t("上游协议")}>{f.response?.version ?? (f.error ? t("未记录") : t("等待响应"))}</td><td>{f.response?.tlsVersion ?? (f.request.url.startsWith('https:') ? t("未记录") : '—')}</td><td>{(f.durationMs / 1000).toFixed(2)}s</td><td>{f.response ? `${(bodySize(f.response.bodyBase64) / 1024).toFixed(2)} KB` : '—'}</td>
+        {visibleColumns.map(c => cells[c.id])}
       </tr>;
-    })}{end < filtered.length && <tr aria-hidden="true" className="virtual-spacer"><td colSpan={12} style={{ height: (filtered.length - end) * rowHeight }} /></tr>}</tbody></table>
+    })}{end < filtered.length && <tr aria-hidden="true" className="virtual-spacer"><td colSpan={visibleColumns.length} style={{ height: (filtered.length - end) * rowHeight }} /></tr>}</tbody></table>
     {!filtered.length && <div className="capture-empty"><div className="capture-empty-symbol"><Radio size={30} strokeWidth={1.3} /></div><h2>{captured.length ? t("没有匹配的请求") : running ? t("正在等待请求") : t("暂无捕获的请求")}</h2><p>{captured.length ? t("调整筛选条件以查看其他请求。") : desktop ? t("启动捕获，将客户端代理设置为 {v0}。", { v0: address }) : t("连接桌面抓包内核后，实际请求会显示在这里。")}</p><small>{captured.length ? t("已捕获的记录仍保留在当前会话中") : t("选中请求查看详情 · 发送到重放后进行编辑")}</small></div>}
     </div>
     {flow && <section className="capture-inspector"><div className="inspector-heading"><span className={`method ${flow.request.method.toLowerCase()}`}>{flow.request.method}</span><code title={flow.request.url}>{flow.request.url}</code>{flow.notes.includes("SSE 接收中") && <button className="text-button" onClick={() => void invoke("cancel_replay", { executionId: flow.id }).catch(e => setFileMessage(String(e)))}>{t("停止 SSE")}</button>}<button className="text-button" onClick={() => onReplay(flow)}><Send size={13} />{t("发送到重放")}</button><div className="layout-direction" aria-label={t("请求响应布局")}>{([['row', t("左右")], ['column', t("上下")]] as const).map(([value, label]) => <button key={value} aria-pressed={direction === value} onClick={() => { setDirection(value); try { localStorage.setItem('http-capture.layout.inspector-direction', value); } catch { /* Optional persistence. */ } }}>{t(label)}</button>)}</div><button className="icon-button" aria-label={t("关闭详情")} onClick={() => setSelected(null)}><X size={15} /></button></div>

@@ -92,6 +92,19 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
         let mut url = validate_url(&format!("https://{target}/"))?;
         ensure!(url.path() == "/" && url.query().is_none(), "Invalid CONNECT authority");
         prevent_loop(&url, address).await?;
+        let bypass:Vec<String>=engine.store.setting("decryption.bypass.v1")?.unwrap_or_default();
+        if !transparent && crate::decryption::matches(&hostname(&url),&bypass) {
+            let route=engine.upstream.snapshot();let mut upstream=crate::upstream::connect(&url,route.as_ref()).await?.stream;
+            stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;stream.flush().await?;
+            let started=std::time::Instant::now();
+            let request=RequestDraft{method:"CONNECT".into(),url:url.to_string(),headers:parse_request(&head)?.2,body_base64:String::new(),upstream_profile_id:None,scripts:Default::default(),pseudo_headers:vec![],engine:"native".into(),tls:Default::default()};
+            let flow=Flow{id:uuid::Uuid::new_v4().to_string(),parent_id:None,started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64,duration_ms:0,source:"capture".into(),request,response:None,error:None,notes:vec!["HTTPS 直通：TLS 未解密，无法查看内部请求/响应。".into()],client_protocol:Some("HTTP/1.1".into()),client_tls:None,raw_request_head_base64:Some(STANDARD.encode(&head)),original_request:None,original_response:None,websocket:None};
+            engine.store.insert(&flow)?;
+            let mut guard=crate::PendingFlow{engine:&engine,flow:Some(flow)};
+            let result=tokio::io::copy_bidirectional(&mut stream,&mut upstream).await;
+            let mut flow=guard.flow.take().unwrap();flow.duration_ms=started.elapsed().as_millis() as u64;
+            match result {Ok((sent,received))=>flow.notes.push(format!("Tunnel bytes: client={sent}, server={received}")),Err(error)=>flow.error=Some(error.to_string())};engine.store.insert(&flow)?;return Ok(());
+        }
         stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
         stream.flush().await?;
         if transparent && stream.fill_buf().await?.first().is_some_and(|b| *b != 22) {

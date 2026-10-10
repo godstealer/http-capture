@@ -23,6 +23,9 @@ type Header struct {
 	Value string `json:"value"`
 }
 type Draft struct {
+	TLS struct {
+		ClientHelloHex *string `json:"clientHelloHex"`
+	} `json:"tls"`
 	Method  string   `json:"method"`
 	URL     string   `json:"url"`
 	Headers []Header `json:"headers"`
@@ -54,11 +57,15 @@ func capabilities() map[string]any {
 		}
 		sort.Sort(sort.Reverse(sort.IntSlice(versions[family])))
 	}
-	return map[string]any{"protocolVersion": 1, "browserVersions": versions}
+	return map[string]any{"customClientHello": true, "protocolVersion": 1, "browserVersions": versions}
 }
 func execute(in Input) (map[string]any, error) {
 	if fingerprint.GetStrict(in.Preset) == nil {
 		return nil, fmt.Errorf("unsupported preset: %s", in.Preset)
+	}
+	customProtocol, customNote, err := applyClientHello(&in)
+	if err != nil {
+		return nil, err
 	}
 	body, err := base64.StdEncoding.DecodeString(in.Request.Body)
 	if err != nil {
@@ -88,7 +95,7 @@ func execute(in Input) (map[string]any, error) {
 	transport := tr.NewTransportWithConfig(in.Preset, proxy, &tr.TransportConfig{TLSOnly: true})
 	defer transport.Close()
 	// Explicit H2 for HTTPS, H1 for plaintext; no QUIC attempts or silent downgrade.
-	transport.SetProtocol(tr.ProtocolHTTP2)
+	transport.SetProtocol(customProtocol)
 	if strings.HasPrefix(in.Request.URL, "http://") {
 		transport.SetProtocol(tr.ProtocolHTTP1)
 	}
@@ -154,6 +161,9 @@ func execute(in Input) (map[string]any, error) {
 		tlsVersion = tlsDetails["version"]
 	}
 	notes := []string{"httpcloak preset: " + in.Preset, "httpcloak ExactHeaders enabled; response headers are parsed fields, not certified wire order"}
+	if customNote != "" {
+		notes = append(notes, customNote)
+	}
 	if decoded {
 		notes = append(notes, "httpcloak decoded response body; Content-Encoding removed and Content-Length updated")
 	}

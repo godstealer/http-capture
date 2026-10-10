@@ -13,6 +13,7 @@ fn entries(value: &str) -> Result<Vec<&str>> {
 }
 pub fn config(profile: &TlsProfile, roots: &rustls::RootCertStore, engine: &str) -> Result<rustls::ClientConfig> {
     ensure!(profile.preset == "native", "This engine requires the native TLS profile");
+    ensure!(profile.client_hello_hex.is_none(), "ClientHello Hex requires the httpcloak engine");
     ensure!(profile.sigalgs_list.is_none() && profile.grease.is_none() && profile.permute_extensions.is_none(), "Signature algorithms, GREASE and extension permutation require a browser TLS engine");
     let mut provider = rustls::crypto::ring::default_provider();
     if let Some(list) = &profile.cipher_list {

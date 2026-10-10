@@ -128,6 +128,7 @@ impl SendEngines {
     pub async fn send(&self, draft: &RequestDraft) -> SendResult { self.send_via(draft, None).await }
     pub async fn send_via(&self, draft: &RequestDraft, proxy: Option<&crate::upstream::UpstreamProxy>) -> SendResult {
         use anyhow::Context;
+        anyhow::ensure!(draft.tls.client_hello_hex.is_none() || draft.engine == "httpcloak", "ClientHello Hex requires the httpcloak engine");
         let (info, engine) = self.entries.get(&draft.engine)
             .with_context(|| format!("Unknown send engine: {}", draft.engine))?;
         let engine = engine.as_ref().with_context(|| format!("{} unavailable: {}", info.id, info.reason.as_deref().unwrap_or("not registered")))?;

@@ -101,7 +101,9 @@ jobs:
           Includes native HTTP/1, HTTP/2, HTTP/3 engines and the httpcloak helper.
           wreq and the optional TUN helper are not included in this package.
           Unsigned preview: no Windows signing or macOS notarization. Installer build success does not replace clean-machine installation and runtime testing.
-          TUN H3 investigation is paused. Automatic in-app updates are not enabled.
+          Active WebSocket message editing/sending, HAR/session tools, request collections and environments are included.
+          Custom ClientHello Hex templates are available through httpcloak (TCP TLS only; ECH/PSK/0-RTT/QUIC imports rejected).
+          H3 stream isolation and timeout handling improved; Windows TUN H3 remains unverified. Automatic in-app updates are not enabled.
           SHA256 checksums accompany each installer.
           EOF
           if gh release view "$tag" --json isDraft --jq '.isDraft' > draft.txt 2>/dev/null; then
