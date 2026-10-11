@@ -18,6 +18,16 @@ fn authorize(headers: &HeaderMap, state: &Service) -> Result<(), ApiError> {
     Ok(())
 }
 fn error(e: impl std::fmt::Display) -> ApiError { (StatusCode::BAD_REQUEST, e.to_string()) }
+async fn system_proxy_status(State(s):State<Shared>,headers:HeaderMap)->Result<Json<capture_core::system_proxy::Status>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.system_proxy.status()))}
+#[derive(Deserialize)]struct SystemProxyInput{enabled:bool}
+async fn set_system_proxy(State(s):State<Shared>,headers:HeaderMap,Json(p):Json<SystemProxyInput>)->Result<Json<()>,ApiError>{
+    authorize(&headers,&s)?;let proxy=s.proxy.lock().await;
+    let address=if p.enabled{Some(proxy.as_ref().ok_or_else(||error("Start capture before enabling system proxy"))?.address)}else{None};
+    let engine=s.engine.clone();tokio::task::spawn_blocking(move||match address{Some(a)=>engine.system_proxy.enable(a),None=>engine.system_proxy.restore()}).await.map_err(error)?.map(Json).map_err(error)
+}
+async fn ca_status(State(s):State<Shared>,headers:HeaderMap)->Result<Json<capture_core::ca_management::Status>,ApiError>{authorize(&headers,&s)?;tokio::task::spawn_blocking(move||capture_core::ca_management::status(&s.engine.ca.cert_path)).await.map_err(error)?.map(Json).map_err(error)}
+#[derive(Deserialize)]struct CaInput{install:bool,sha256:String}
+async fn set_ca_trust(State(s):State<Shared>,headers:HeaderMap,Json(p):Json<CaInput>)->Result<Json<capture_core::ca_management::Status>,ApiError>{authorize(&headers,&s)?;tokio::task::spawn_blocking(move||capture_core::ca_management::change(&s.engine.ca.cert_path,p.install,&p.sha256)).await.map_err(error)?.map(Json).map_err(error)}
 async fn tun_status(State(s):State<Shared>,headers:HeaderMap)->Result<Json<capture_core::tun::TunStatus>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.tun.status().await))}
 #[derive(Deserialize)] struct TunStart {config:capture_core::tun::TunConfig}
 async fn start_tun(State(s):State<Shared>,headers:HeaderMap,Json(input):Json<TunStart>)->Result<Json<()>,ApiError>{authorize(&headers,&s)?;s.engine.tun.start(s.engine.clone(),input.config).await.map(Json).map_err(error)}
@@ -84,7 +94,9 @@ async fn start(State(s): State<Shared>, headers: HeaderMap, Json(input): Json<St
 async fn stop(State(s): State<Shared>, headers: HeaderMap) -> Result<Json<()>, ApiError> {
     authorize(&headers, &s)?;
     let mut running = s.proxy.lock().await;
+    let restored=s.engine.system_proxy.restore().map_err(error);
     if let Some(proxy) = running.take() { proxy.stop().await; }
+    restored?;
     Ok(Json(()))
 }
 #[derive(Deserialize)]
@@ -151,6 +163,7 @@ async fn save_workspace(State(s):State<Shared>,headers:HeaderMap,Json(input):Jso
 async fn main() -> Result<()> {
     let root = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".local/capture".into()));
     let engine = Engine::open(&root)?;
+    if let Err(error)=engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
     let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let address = "127.0.0.1:1421";
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -160,14 +173,20 @@ async fn main() -> Result<()> {
     let state = Arc::new(Service { engine, proxy: Mutex::new(None), token });
     let app = router(state.clone());
     println!("Capture control: http://{address}\nData: {}\nOpen the GUI and click Start capture.", root.display());
-    axum::serve(listener, app).with_graceful_shutdown(async { let _ = tokio::signal::ctrl_c().await; }).await?;
+    let shutdown_state=state.clone();
+    axum::serve(listener, app).with_graceful_shutdown(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        if let Err(error)=shutdown_state.engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
+        if let Some(proxy)=shutdown_state.proxy.lock().await.take(){proxy.stop().await;}
+    }).await?;
+    if let Err(error)=state.engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
     let _ = state.engine.tun.stop().await;
     if let Some(proxy) = state.proxy.lock().await.take() { proxy.stop().await; }
     Ok(())
 }
 
 fn router(state:Shared)->Router {
-    Router::new().route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library)).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
+    Router::new().route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library)).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
         .route("/imports/begin",post(begin_import)).route("/imports/append",post(append_import).layer(axum::extract::DefaultBodyLimit::max(64*1024*1024))).route("/imports/finish",post(finish_import)).route("/tun",get(tun_status)).route("/tun/start",post(start_tun)).route("/tun/stop",post(stop_tun)).route("/network/interfaces",get(network_interfaces)).route("/status", get(status)).route("/flows", get(list)).route("/flows/changes",post(flow_changes)).route("/flows/revision", get(flow_revision)).route("/flows/delete",post(delete_flows)).route("/flows/import",post(import_flows))
         .route("/workspace",get(workspace).post(save_workspace)).route("/start", post(start)).route("/stop", post(stop)).route("/replay", post(replay)).route("/replay/prepare",post(prepare_replay)).route("/replay/cancel",post(cancel_replay))
         .route("/upstream/profiles",get(upstream_profiles).post(save_upstream_profile)).route("/upstream/select",post(select_upstream_profile)).route("/upstream/delete",post(delete_upstream_profile))

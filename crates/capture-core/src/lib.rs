@@ -11,6 +11,8 @@ pub mod tls_details;
 pub mod upstream;
 mod socks_udp;
 pub mod ca;
+pub mod system_proxy;
+pub mod ca_management;
 pub mod http1;
 pub mod model;
 pub mod proxy;
@@ -31,6 +33,7 @@ use std::{path::Path, sync::Arc, time::{Instant, SystemTime, UNIX_EPOCH}};
 use tokio::sync::broadcast;
 
 pub struct Engine {
+    pub system_proxy: system_proxy::SystemProxy,
     pub websocket_clients: websocket_client::Clients,
     pub tun: tun::TunState,
     pub executions: executions::Executions,
@@ -72,7 +75,7 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
+        Ok(Arc::new(Self { system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
             ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
             send_engines, upstream_roots }))
     }

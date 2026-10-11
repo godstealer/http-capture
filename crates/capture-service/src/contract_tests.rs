@@ -39,3 +39,17 @@ async fn authenticated_staging_delta_and_library_contract(){
   task.abort();let _=task.await;
  }).await.expect("API contract stalled");
 }
+
+// Safety contract: malformed/stale requests must not reach OS mutations.
+#[tokio::test]
+async fn system_settings_require_authentication_and_active_listener(){
+ let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();
+ let state=Arc::new(Service{engine,proxy:Mutex::new(None),token:"contract-test".into()});
+ let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+ let task=tokio::spawn(async move{axum::serve(listener,router(state)).await.unwrap()});
+ assert_eq!(call(address,"/system-proxy",json!({"enabled":true}),false).await.0,401);
+ assert_eq!(call(address,"/ca/trust",json!({"install":true,"sha256":"stale"}),false).await.0,401);
+ assert_eq!(call(address,"/system-proxy",json!({"enabled":true}),true).await.0,400);
+ assert_eq!(call(address,"/ca/trust",json!({"install":true,"sha256":"stale"}),true).await.0,400);
+ task.abort();let _=task.await;
+}

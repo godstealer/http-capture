@@ -3,6 +3,7 @@ import { invoke as tauriInvoke, isTauri } from '@tauri-apps/api/core';
 export async function invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return tauriInvoke<T>(command, args);
   const routes: Record<string, [string, string]> = {
+    system_proxy_status:['GET','system-proxy'], set_system_proxy:['POST','system-proxy'], ca_status:['GET','ca/trust'], set_ca_trust:['POST','ca/trust'],
     websocket_connect:['POST','websocket/connect'],websocket_send:['POST','websocket/send'],
     decryption_hosts:['GET','decryption'],save_decryption_hosts:['POST','decryption'],test_upstream:['POST','upstream/test'],
     flow_changes:['POST','flows/changes'],

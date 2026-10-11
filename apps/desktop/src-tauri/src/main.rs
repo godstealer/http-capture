@@ -5,6 +5,20 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 #[tauri::command]
+fn system_proxy_status(state:State<'_,AppState>)->capture_core::system_proxy::Status {state.engine.system_proxy.status()}
+#[tauri::command]
+async fn set_system_proxy(state:State<'_,AppState>,enabled:bool)->Result<(),String>{
+    let proxy=state.proxy.lock().await;
+    let address=if enabled{Some(proxy.as_ref().ok_or("Start capture before enabling system proxy")?.address)}else{None};
+    let engine=state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move||match address{Some(a)=>engine.system_proxy.enable(a),None=>engine.system_proxy.restore()}).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
+}
+#[tauri::command]
+async fn ca_status(state:State<'_,AppState>)->Result<capture_core::ca_management::Status,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||capture_core::ca_management::status(&engine.ca.cert_path)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+#[tauri::command]
+async fn set_ca_trust(state:State<'_,AppState>,install:bool,sha256:String)->Result<capture_core::ca_management::Status,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||capture_core::ca_management::change(&engine.ca.cert_path,install,&sha256)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
+
+#[tauri::command]
 async fn websocket_connect(state:State<'_,AppState>,request:RequestDraft)->Result<String,String>{capture_core::websocket_client::connect(state.engine.clone(),request).map_err(|e|e.to_string())}
 #[tauri::command]
 async fn websocket_send(state:State<'_,AppState>,id:String,opcode:u8,body:String)->Result<(),String>{capture_core::websocket_client::send(&state.engine,&id,opcode,&body).await.map_err(|e|e.to_string())}
@@ -96,7 +110,9 @@ async fn start_proxy(port: u16, host: Option<String>, state: State<'_, AppState>
 #[tauri::command]
 async fn stop_proxy(state: State<'_, AppState>) -> Result<(), String> {
     let mut handle = state.proxy.lock().await;
+    let restored=state.engine.system_proxy.restore().map_err(|e|e.to_string());
     if let Some(proxy) = handle.take() { proxy.stop().await; }
+    restored?;
     Ok(())
 }
 #[tauri::command]
@@ -167,6 +183,7 @@ fn main() {
                 std::env::set_var("HTTP_CAPTURE_HTTPCLOAK", helper);
             }
             let engine = Engine::open(&app.path().app_data_dir()?)?;
+            if let Err(error)=engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
             let mut events = engine.events.subscribe();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -181,11 +198,12 @@ fn main() {
             app.manage(AppState { engine, proxy: Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {
             let state=app.state::<AppState>();
+            if let Err(error)=state.engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
             let _=tauri::async_runtime::block_on(state.engine.tun.stop());
         }});
 }

@@ -11,6 +11,8 @@ import { t, useLanguage } from './i18n';
 import LanguageSelector from './LanguageSelector';
 import TunSettings, { type TunStatus } from './TunSettings';
 import ListenerSettings from './ListenerSettings';
+import SystemSettings from './SystemSettings';
+import SystemProxyToggle from './SystemProxyToggle';
 import { applyRequestResult, RequestRuns } from './requestRuns';
 import ScriptsEditor, { emptyScripts } from './ScriptsEditor';
 import OrderedHeaders from './OrderedHeaders';
@@ -102,6 +104,7 @@ export default function App() {
   const [modal, setModal] = useState<'settings' | 'help' | null>(null);
   const [port, setPort] = useState(8080);
   const [host, setHost] = useState('127.0.0.1');
+  const [useSystemProxy, setUseSystemProxy] = useState(false);
   const listenAddress = status.running && status.address ? status.address : `${host.includes(':') ? '[' + host + ']' : host}:${port}`;
   const wildcard = listenAddress.startsWith('0.0.0.0:') || listenAddress.startsWith('[::]:');
   const clientAddress = wildcard ? t("本机局域网 IP:{v0}", { v0: listenAddress.slice(listenAddress.lastIndexOf(':') + 1) }) : listenAddress;
@@ -167,8 +170,25 @@ export default function App() {
     if (proxyBusy) return;
     if (!connected) { notify(t("抓包服务未连接，请运行 npm run capture。")); return; }
     setProxyBusy(true);
-    try { await invoke(status.running ? 'stop_proxy' : 'start_proxy', { port, host: host.trim() }); setStatus(await invoke<ProxyStatus>('proxy_status')); }
-    catch (e) { notify(String(e)); } finally { setProxyBusy(false); }
+    try {
+      if (status.running) await invoke('stop_proxy');
+      else {
+        if (useSystemProxy) {
+          const system = await invoke<{supported:boolean;pendingRecovery:boolean}>('system_proxy_status');
+          if (!system.supported) throw new Error(t("此平台暂需手动配置系统代理。"));
+          if (system.pendingRecovery) throw new Error(t("请先恢复原代理，再启用自动设置。"));
+        }
+        await invoke('start_proxy', { port, host: host.trim() });
+        if (useSystemProxy) {
+          try { await invoke('set_system_proxy', {enabled:true}); }
+          catch (e) { notify(t("监听已启动，但设置系统代理失败：") + String(e)); }
+        }
+      }
+    } catch (e) { notify(String(e)); }
+    finally {
+      try { setStatus(await invoke<ProxyStatus>('proxy_status')); } catch { /* Polling reports connection failures. */ }
+      setProxyBusy(false);
+    }
   }
   async function sendRequest(id: string, request: RequestDraft, parentId: string | null) {
     const snapshot = clone(request);
@@ -234,6 +254,7 @@ export default function App() {
         <button className="icon-button" title={wildcard ? t("所有网卡监听：客户端请填写本机局域网 IP 和端口") : t("复制代理地址")} disabled={wildcard} onClick={() => void copy(listenAddress)}><Copy size={17} /></button>
         <button className="text-button" onClick={() => setView('interception')}>{t("拦截 ·")}{interception.items.length}{interception.config.request || interception.config.response ? t(" · 已开启") : ''}</button><button className="text-button" title={t("上游代理设置")} onClick={() => setModal('settings')}>{status.upstream?.enabled ? t("上游：{v0}", { v0: status.upstream.profileName ?? status.upstream.url }) : t("上游：直连")}</button><button className="proxy-settings-button" aria-label={t("代理设置")} title={t("修改监听端口、配置上游代理")} onClick={() => setModal('settings')}><Settings2 size={18} /><span>{t("代理设置")}</span></button>
         <button className="text-button" onClick={() => setModal('settings')}>TUN · {tun.running ? t("运行中") : t("未开启")}</button><span className="toolbar-spacer" /><LanguageSelector /><label className="theme-picker">{t("主题")}<select aria-label={t("界面主题")} value={theme} onChange={e => { const value = e.target.value as Theme; setTheme(value); applyTheme(value); }}><option value="light">{t("浅色 · 琥珀")}</option><option value="dark">{t("深色 · 薄荷")}</option></select></label><span className="app-wordmark">HTTP CAPTURE</span>
+        <SystemProxyToggle running={status.running} connected={connected} locked={proxyBusy} preferred={useSystemProxy} onPreference={setUseSystemProxy} onError={notify} />
         <button className="icon-button" title={t("导出 CA 证书")} disabled={!connected} onClick={() => void exportCa()}><ShieldCheck size={21} /></button>
         <button className="icon-button" title={t("使用帮助")} onClick={() => setModal('help')}><CircleHelp size={19} /></button>
       </div><button className="capture-switch" disabled={proxyBusy} onClick={() => void capture()}>{status.running ? <Square size={16} /> : <Play size={16} />}{proxyBusy ? t("处理中…") : status.running ? t("停止") : t("开始捕获")}</button></header>
@@ -281,6 +302,6 @@ export default function App() {
     </div>
     {notice && <div className="toast" role="status"><CircleHelp size={17} /><span>{notice}</span><button onClick={() => setNotice('')} aria-label={t("关闭提示")}><X size={15} /></button></div>}
     {curlText !== null && <div className="modal-backdrop" onKeyDown={e => { if (e.key === 'Escape') setCurlText(null); }}><div className="modal curl-import-modal" role="dialog" aria-modal="true" aria-label={t("导入 cURL")}><button className="modal-close icon-button" aria-label={t("关闭导入")} onClick={() => setCurlText(null)}><X size={19} /></button><h2>{t("导入 cURL")}</h2><p>{t("可从剪贴板导入请求，或粘贴命令。导入后可编辑，点击发送才会发出请求。")}</p><textarea autoFocus aria-label={t("cURL 命令")} placeholder="curl 'https://example.com' -H 'Accept: application/json'" value={curlText} onChange={e => { setCurlText(e.target.value); setCurlError(''); }} />{curlError && <p role="alert">{curlError}</p>}<div className="curl-import-actions"><button className="button" onClick={() => { setCurlText(null); openEditor(); }}>{t("创建空请求")}</button><button className="button primary" disabled={!curlText.trim()} onClick={confirmCurl}>{t("导入请求")}</button></div></div></div>}
-    {modal && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal" role="dialog" aria-modal="true" aria-label={modal === 'settings' ? t("代理设置") : t("使用帮助")} onClick={e => e.stopPropagation()}><button className="modal-close icon-button" aria-label={t("关闭")} onClick={() => setModal(null)}><X size={19} /></button><div className="modal-symbol">{modal === 'settings' ? <Settings2 /> : <Terminal />}</div><h2>{modal === 'settings' ? t("代理设置") : t("开始使用 HTTP Capture")}</h2>{modal === 'settings' ? <><p>{t("停止代理后可以修改监听地址和端口。局域网模式允许其他设备使用此抓包代理。")}</p><LanguageSelector /><ListenerSettings host={host} port={port} running={status.running} onHost={setHost} onPort={setPort} /><DecryptionSettings /><TunSettings status={tun} onUpdate={setTun} /><UpstreamSettings current={status.upstream} connected={connected} onSaved={async () => setStatus(await invoke<ProxyStatus>('proxy_status'))} /><div className="setting-card"><ShieldCheck size={18} /><div><strong>{t("本地 CA 证书")}</strong><p>{status.caPath || t("启动桌面端后生成，每台设备独立保存。")}</p></div></div><button className="button" disabled={!connected} onClick={() => void exportCa()}>{t("导出 CA 证书")}</button><p className="muted">{t("客户端 HTTP 和 HTTPS 代理地址：")}{clientAddress}{t("。HTTPS 解密需要在客户端设备上信任上方 CA。")}{wildcard && t("0.0.0.0 / :: 是监听地址，不要填入客户端代理设置。")}{host !== '127.0.0.1' && t("请在可信局域网使用，并按需允许防火墙入站；当前抓包入口不提供代理认证。")}{t("不会自动修改防火墙、系统代理或证书信任。")}</p></> : <><p>{desktop ? t("启动捕获后，将客户端 HTTP / HTTPS 代理设置为下方地址。") : t("主页面只列出实际捕获的请求。当前预览未连接内核，列表为空。")}</p><div className="command">{clientAddress}</div><ol><li>{t("点击请求，查看请求头和响应。")}</li><li>{t("点击“发送到重放”创建可编辑的请求副本。")}</li><li>{t("在重放页编辑请求头，配置 TLS 并发送。")}</li><li>{t("真实抓包需通过")}<code>npm run desktop</code> {t("启动。")}</li></ol></>}<button className="button primary modal-done" onClick={() => setModal(null)}>{t("完成")}</button></div></div>}
+    {modal && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal" role="dialog" aria-modal="true" aria-label={modal === 'settings' ? t("代理设置") : t("使用帮助")} onClick={e => e.stopPropagation()}><button className="modal-close icon-button" aria-label={t("关闭")} onClick={() => setModal(null)}><X size={19} /></button><div className="modal-symbol">{modal === 'settings' ? <Settings2 /> : <Terminal />}</div><h2>{modal === 'settings' ? t("代理设置") : t("开始使用 HTTP Capture")}</h2>{modal === 'settings' ? <><p>{t("停止代理后可以修改监听地址和端口。局域网模式允许其他设备使用此抓包代理。")}</p><LanguageSelector /><ListenerSettings host={host} port={port} running={status.running} onHost={setHost} onPort={setPort} /><SystemSettings running={status.running} useSystemProxy={useSystemProxy} onUseSystemProxy={setUseSystemProxy} /><DecryptionSettings /><TunSettings status={tun} onUpdate={setTun} /><UpstreamSettings current={status.upstream} connected={connected} onSaved={async () => setStatus(await invoke<ProxyStatus>('proxy_status'))} /><div className="setting-card"><ShieldCheck size={18} /><div><strong>{t("本地 CA 证书")}</strong><p>{status.caPath || t("启动桌面端后生成，每台设备独立保存。")}</p></div></div><button className="button" disabled={!connected} onClick={() => void exportCa()}>{t("导出 CA 证书")}</button><p className="muted">{t("客户端 HTTP 和 HTTPS 代理地址：")}{clientAddress}{t("。HTTPS 解密需要在客户端设备上信任上方 CA。")}{wildcard && t("0.0.0.0 / :: 是监听地址，不要填入客户端代理设置。")}{host !== '127.0.0.1' && t("请在可信局域网使用，并按需允许防火墙入站；当前抓包入口不提供代理认证。")}{t("不会自动修改防火墙、系统代理或证书信任。")}</p></> : <><p>{desktop ? t("启动捕获后，将客户端 HTTP / HTTPS 代理设置为下方地址。") : t("主页面只列出实际捕获的请求。当前预览未连接内核，列表为空。")}</p><div className="command">{clientAddress}</div><ol><li>{t("点击请求，查看请求头和响应。")}</li><li>{t("点击“发送到重放”创建可编辑的请求副本。")}</li><li>{t("在重放页编辑请求头，配置 TLS 并发送。")}</li><li>{t("真实抓包需通过")}<code>npm run desktop</code> {t("启动。")}</li></ol></>}<button className="button primary modal-done" onClick={() => setModal(null)}>{t("完成")}</button></div></div>}
   </div>;
 }

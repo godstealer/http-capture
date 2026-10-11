@@ -64,15 +64,21 @@ impl Store {
         let tx = conn.transaction()?;
         anyhow::ensure!(tx.query_row("SELECT count(*) FROM import_jobs WHERE id=?1", [id], |r| r.get::<_,i64>(0))? == 1, "Import session expired");
         let count = if commit {
-            tx.execute("INSERT INTO flows(id,started_at,data) SELECT json_extract(data,'$.id'),json_extract(data,'$.startedAt'),data FROM import_rows WHERE job=?1 ORDER BY sequence DESC", [id])?
+            let mut stmt=tx.prepare("SELECT data FROM import_rows WHERE job=?1 ORDER BY sequence DESC")?;
+            let mut cursor=stmt.query([id])?;let mut count=0;
+            while let Some(row)=cursor.next()? { let flow:Flow=serde_json::from_str(&row.get::<_,String>(0)?)?;write_flow(&tx,&flow)?;count+=1; }
+            count
         } else { 0 };
         tx.execute("DELETE FROM import_rows WHERE job=?1", [id])?;
         tx.execute("DELETE FROM import_jobs WHERE id=?1", [id])?;
         tx.commit()?; Ok(count)
     }
     pub fn get(&self, id: &str) -> Result<Option<Flow>> {
-        let raw: Option<String> = self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?.query_row("SELECT data FROM flows WHERE id=?1", [id], |r| r.get(0)).optional()?;
-        raw.map(|s| serde_json::from_str(&s).map_err(Into::into)).transpose()
+        let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
+        let tx=conn.transaction()?;
+        let raw:Option<String>=tx.query_row("SELECT data FROM flows WHERE id=?1",[id],|r|r.get(0)).optional()?;
+        let flow=raw.map(|raw|restore_bodies(&tx,&raw)).transpose()?;
+        tx.commit()?;Ok(flow)
     }
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -90,14 +96,15 @@ impl Store {
             CREATE TRIGGER flows_revision_update AFTER UPDATE ON flows BEGIN UPDATE flow_revision SET version=version+1 WHERE id=1; INSERT INTO flow_changes VALUES(new.id,(SELECT version FROM flow_revision WHERE id=1)) ON CONFLICT(id) DO UPDATE SET version=excluded.version; END;
             CREATE TRIGGER flows_revision_delete AFTER DELETE ON flows BEGIN UPDATE flow_revision SET version=version+1 WHERE id=1; INSERT INTO flow_changes VALUES(old.id,(SELECT version FROM flow_revision WHERE id=1)) ON CONFLICT(id) DO UPDATE SET version=excluded.version; END;
             COMMIT;")?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS flow_bodies(flow_id TEXT NOT NULL, slot TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(flow_id,slot));
+          CREATE TRIGGER IF NOT EXISTS flow_bodies_delete AFTER DELETE ON flows BEGIN DELETE FROM flow_bodies WHERE flow_id=old.id; END;")?;
         Ok(Self(Mutex::new(conn), uuid::Uuid::new_v4().to_string()))
     }
     pub fn insert(&self, flow: &Flow) -> Result<()> {
-        self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?
-            .execute("INSERT INTO flows(id, started_at, data) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM deleted_flows WHERE id=?1)
-                ON CONFLICT(id) DO UPDATE SET data=excluded.data", 
-                params![flow.id, flow.started_at, serde_json::to_string(flow)?])?;
-        Ok(())
+        let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
+        let tx=conn.transaction()?;
+        write_flow(&tx,flow)?;
+        tx.commit()?; Ok(())
     }
     pub fn delete_flows(&self, ids: Vec<String>) -> Result<()> {
         anyhow::ensure!(ids.len() <= 10000, "一次最多删除 10000 条记录");
@@ -115,7 +122,7 @@ impl Store {
             flow.request.scripts = Default::default(); flow.request.upstream_profile_id = None;
             if let Some(r) = &mut flow.original_request { r.scripts = Default::default(); r.upstream_profile_id = None; }
             flow.notes.push("从文件导入；不是本机实时捕获。脚本和上游代理关联已清除。".into());
-            tx.execute("INSERT INTO flows(id,started_at,data) VALUES(?1,?2,?3)",params![flow.id,flow.started_at,serde_json::to_string(flow)?])?;
+            write_flow(&tx,flow)?;
         }
         tx.commit()?; Ok(flows.len())
     }
@@ -126,7 +133,7 @@ impl Store {
         let previous=since.and_then(|s|s.strip_prefix(&format!("{}:",self.1))).and_then(|s|s.parse::<i64>().ok()).filter(|n|*n>=0&&*n<=version);
         let reset=previous.is_none();
         let rows={let mut stmt=tx.prepare(if reset {"SELECT rowid,data FROM flows ORDER BY rowid DESC"} else {"SELECT f.rowid,f.data FROM flows f JOIN flow_changes c ON c.id=f.id WHERE c.version>?1 ORDER BY f.rowid DESC"})?;
-            let mut cursor=if reset{stmt.query([])?}else{stmt.query([previous.unwrap()])?};let mut rows=Vec::new();while let Some(row)=cursor.next()?{rows.push(FlowChange{position:row.get(0)?,flow:serde_json::from_str(&row.get::<_,String>(1)?)?});}rows};
+            let mut cursor=if reset{stmt.query([])?}else{stmt.query([previous.unwrap()])?};let mut rows=Vec::new();while let Some(row)=cursor.next()?{rows.push(FlowChange{position:row.get(0)?,flow:restore_bodies(&tx,&row.get::<_,String>(1)?)?});}rows};
         let deleted=if let Some(previous)=previous{let mut stmt=tx.prepare("SELECT c.id FROM flow_changes c LEFT JOIN flows f ON f.id=c.id WHERE c.version>?1 AND f.id IS NULL")?;let rows=stmt.query_map([previous],|r|r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;rows}else{Vec::new()};
         tx.commit()?;Ok(FlowChanges{revision:format!("{}:{version}",self.1),reset,rows,deleted})
     }
@@ -137,11 +144,55 @@ impl Store {
         Ok(format!("{}:{version}", self.1))
     }
     pub fn list(&self) -> Result<Vec<Flow>> {
-        let conn = self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
-        let mut stmt = conn.prepare("SELECT data FROM flows ORDER BY rowid DESC")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+        let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
+        let tx=conn.transaction()?;
+        let flows={let mut stmt=tx.prepare("SELECT data FROM flows ORDER BY rowid DESC")?;
+          let rows=stmt.query_map([],|r|r.get::<_,String>(0))?;
+          rows.map(|r|restore_bodies(&tx,&r?)).collect::<Result<Vec<_>>>()?};
+        tx.commit()?;Ok(flows)
     }
+
+}
+
+// Keep public Flow JSON backwards compatible. Large entity bodies live in the same
+// SQLite transaction/backup as metadata; no external paths or dangling files.
+const BODY_INLINE_LIMIT:usize=64*1024;
+fn body_slots(flow:&mut Flow, mut visit:impl FnMut(&str,&mut String)->Result<()>) -> Result<()> {
+ visit("request",&mut flow.request.body_base64)?;
+ if let Some(v)=&mut flow.response {visit("response",&mut v.body_base64)?;}
+ if let Some(v)=&mut flow.original_request {visit("originalRequest",&mut v.body_base64)?;}
+ if let Some(v)=&mut flow.original_response {visit("originalResponse",&mut v.body_base64)?;}
+ Ok(())
+}
+fn write_flow(conn:&Connection,flow:&Flow)->Result<()> {
+ use base64::{Engine as _,engine::general_purpose::STANDARD};
+ if conn.query_row("SELECT EXISTS(SELECT 1 FROM deleted_flows WHERE id=?1)",[&flow.id],|r|r.get::<_,bool>(0))? {return Ok(());}
+ let mut stored=flow.clone();
+ conn.execute("DELETE FROM flow_bodies WHERE flow_id=?1",[&flow.id])?;
+ body_slots(&mut stored,|slot,body| {
+  if body.len()>BODY_INLINE_LIMIT*4/3 {
+   let bytes=STANDARD.decode(body.as_bytes())?;
+   conn.execute("INSERT INTO flow_bodies(flow_id,slot,body) VALUES(?1,?2,?3)",params![flow.id,slot,bytes])?;
+   // Explicit marker prevents a missing BLOB from looking like an empty body.
+   *body=format!("@body:{slot}");
+  }
+  Ok(())
+ })?;
+ conn.execute("INSERT INTO flows(id,started_at,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET data=excluded.data",params![flow.id,flow.started_at,serde_json::to_string(&stored)?])?;
+ Ok(())
+}
+fn restore_bodies(conn:&Connection,raw:&str)->Result<Flow> {
+ use base64::{Engine as _,engine::general_purpose::STANDARD};
+ let mut flow:Flow=serde_json::from_str(raw)?;let id=flow.id.clone();
+ body_slots(&mut flow,|slot,body| {
+  if body.starts_with("@body:") {
+   anyhow::ensure!(body==&format!("@body:{slot}"),"Invalid stored body reference");
+   let bytes:Vec<u8>=conn.query_row("SELECT body FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,slot],|r|r.get(0))?;
+   *body=STANDARD.encode(bytes);
+  }
+  Ok(())
+ })?;
+ Ok(flow)
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -295,5 +346,41 @@ mod session_tests {
   { let store=Store::open(&path).unwrap(); store.insert(&flow).unwrap(); store.delete_flows(vec![flow.id.clone()]).unwrap(); store.insert(&flow).unwrap(); assert!(store.list().unwrap().is_empty()); assert_eq!(store.import_flows(vec![flow.clone()]).unwrap(),1); }
   { let store=Store::open(&path).unwrap(); let rows=store.list().unwrap(); assert_eq!(rows.len(),1); assert_ne!(rows[0].id,flow.id); assert_eq!(rows[0].request.headers[1].value,"2"); store.insert(&flow).unwrap(); assert_eq!(store.list().unwrap().len(),1); }
   let _=std::fs::remove_file(path);
+ }
+}
+
+#[cfg(test)]
+mod body_storage_tests {
+ use super::*;
+ use base64::{Engine as _,engine::general_purpose::STANDARD};
+ fn sample()->Flow {serde_json::from_value(serde_json::json!({"id":"large","startedAt":1,"durationMs":1,"source":"capture","request":{"method":"POST","url":"https://example.invalid","headers":[],"bodyBase64":STANDARD.encode(vec![7u8;100000])},"response":null,"error":null,"notes":[]})).unwrap()}
+ #[test]
+ fn large_bodies_roundtrip_backup_update_and_delete(){
+  let dir=tempfile::tempdir().unwrap();let path=dir.path().join("sessions.db");let store=Store::open(&path).unwrap();let mut f=sample();store.insert(&f).unwrap();
+  {let c=store.0.lock().unwrap();let data:String=c.query_row("SELECT data FROM flows",[],|r|r.get(0)).unwrap();assert!(data.len()<2000);let bytes:Vec<u8>=c.query_row("SELECT body FROM flow_bodies",[],|r|r.get(0)).unwrap();assert_eq!(bytes.len(),100000);}
+  assert_eq!(store.get(&f.id).unwrap().unwrap().request.body_base64,f.request.body_base64);
+  assert_eq!(store.changes(None).unwrap().rows[0].flow.request.body_base64,f.request.body_base64);
+  let backup=store.backup().unwrap();let copied=Store::open(Path::new(&backup)).unwrap();assert_eq!(copied.list().unwrap()[0].request.body_base64,f.request.body_base64);
+  drop(store);let store=Store::open(&path).unwrap();assert_eq!(store.list().unwrap()[0].request.body_base64,f.request.body_base64);
+  f.request.body_base64=STANDARD.encode(b"small");store.insert(&f).unwrap();assert_eq!(store.get(&f.id).unwrap().unwrap().request.body_base64,f.request.body_base64);
+  assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+  let f=sample();store.insert(&f).unwrap();store.delete_flows(vec![f.id.clone()]).unwrap();store.insert(&f).unwrap();assert!(store.list().unwrap().is_empty());assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+ }
+ #[test]
+ fn original_and_response_bodies_are_independent_and_missing_body_is_an_error(){
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("s.db")).unwrap();let mut f=sample();
+  f.original_request=Some(f.request.clone());
+  f.response=Some(serde_json::from_value(serde_json::json!({"status":200,"version":"HTTP/1.1","headers":[],"bodyBase64":STANDARD.encode(vec![8u8;100000])})).unwrap());
+  f.original_response=f.response.clone();
+  store.insert(&f).unwrap();let restored=store.get(&f.id).unwrap().unwrap();
+  assert_eq!(serde_json::to_value(restored).unwrap(),serde_json::to_value(&f).unwrap());
+  store.0.lock().unwrap().execute("DELETE FROM flow_bodies WHERE slot='response'",[]).unwrap();
+  assert!(store.get(&f.id).is_err());assert!(store.list().is_err());
+ }
+ #[test]
+ fn imports_and_failed_updates_are_atomic(){
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("s.db")).unwrap();let f=sample();store.insert(&f).unwrap();let mut bad=f.clone();bad.request.body_base64="!".repeat(100000);assert!(store.insert(&bad).is_err());assert_eq!(store.get(&f.id).unwrap().unwrap().request.body_base64,f.request.body_base64);
+  let job=store.begin_import().unwrap();store.append_import(&job,0,vec![f.clone()]).unwrap();assert_eq!(store.finish_import(&job,true).unwrap(),1);store.import_flows(vec![f.clone()]).unwrap();assert_eq!(store.list().unwrap().len(),3);for row in store.list().unwrap(){assert_eq!(row.request.body_base64,f.request.body_base64);}
+  store.clear().unwrap();assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),0);
  }
 }
