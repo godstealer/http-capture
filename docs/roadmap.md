@@ -127,7 +127,8 @@
 - [x] Tauri 原生剪贴板已接入并编译通过；浏览器仍使用其剪贴板权限及手动粘贴回退。
 - [ ] 桌面剪贴板实机操作、退出前可靠保存、证书管理体验。
 - [x] Windows 系统代理设置、正常退出恢复、下次启动异常恢复及冲突保护（只读系统验证与模拟恢复测试通过）。
-- [ ] macOS/Linux 自动系统代理管理、崩溃即时恢复及真实系统切换验收。
+- [x] Linux GNOME 系统代理适配、原配置快照及冲突恢复；隔离 D-Bus 集成测试已加入 CI（待运行）。
+- [ ] macOS 自动系统代理管理、非 GNOME Linux 桌面、崩溃即时恢复及真实系统切换验收。
 - [x] Windows 当前用户 CA 安装状态、详情、指纹确认安装/卸载入口。
 - [ ] macOS/Linux 自动 CA 管理及 Windows 实际安装/卸载验收。
 - [x] GitHub Release 工作流和五种产物发布；签名、公证和自动更新另列后续。
@@ -359,3 +360,17 @@ Peet 回显已补验：H3 使用 `https://tls3.peet.ws/api/all`，经 SOCKS5 返
 - Windows CA：当前用户根库状态、详情、明确确认安装/卸载、完整 DER 匹配。
 - 尚待：macOS/Linux 自动系统集成、崩溃即时看护恢复、实际系统写入端到端验收。
 - 入口与边界详见 [系统集成](system-integration.md)。历史清单中的对应未完成项以上述阶段状态为准。
+
+
+### 2026-10-12：Linux GNOME 系统代理
+
+- 复用现有切换入口，增加 GNOME gsettings/dconf 原子写入适配；仅支持桌面会话，无桌面/缺工具时保持不可用。
+- 旧 Windows 快照兼容，写入前再次核对配置，Unix 恢复目录限制为当前用户。
+- 已验证本地单元测试；Linux CI 隔离会话脚本已添加，尚未运行 Ubuntu 桌面或 macOS 实测。
+- macOS/Linux CA 自动管理仍未完成。详见 [系统集成](system-integration.md)。
+
+### 2026-10-12：Linux 普通账户启动兼容
+
+- Linux 桌面入口默认启用 DMABUF 渲染兼容，保留用户显式覆盖。
+- 发布收集阶段增加免 FUSE 的完整 portable.tar.gz，解压运行 AppRun，不要求用户 apt 或配置环境变量。
+- 已做脚本语法与本地编译检查；新包尚未发布，Linux 普通账户实机运行仍待验收。详见 [发布方案](releases.md)。

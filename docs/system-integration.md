@@ -5,8 +5,9 @@
 ## 当前支持范围
 
 Windows：自动接管及恢复当前用户 WinINet 默认连接的 HTTP/HTTPS 代理；读取、安装、卸载当前用户 Root 库中的本机 CA。
-macOS、Linux：显示证书详情，沿用 CA 导出；系统代理及信任安装仍需手动配置。未实现的平台不会显示自动安装可用。
-不修改 WinHTTP、VPN 独立连接、Firefox 独立信任库、其他设备或防火墙。
+Linux GNOME（包括 Ubuntu 默认桌面）：接入 gsettings/dconf 的当前用户 HTTP/HTTPS 代理设置，复用快照和冲突恢复。需要 GNOME 会话、会话 D-Bus、`/usr/bin/gsettings`、`/usr/bin/dconf` 及默认 dconf 后端；缺少依赖或非 GNOME 桌面保持手动模式。
+macOS：系统代理仍需手动配置。macOS/Linux 的 CA 自动信任管理尚未完成，继续使用证书详情与导出入口。
+不修改 WinHTTP、VPN 独立连接、Firefox 独立信任库、其他设备或防火墙。Linux 设置仅作用于遵循 GNOME 代理配置的应用，不修改终端代理环境变量。
 
 ## 系统代理
 
@@ -29,3 +30,15 @@ macOS、Linux：显示证书详情，沿用 CA 导出；系统代理及信任安
 自动测试覆盖原代理/PAC 序列化、进程互斥、模拟崩溃恢复、外部修改冲突、恢复失败/读回不一致、损坏快照及证书指纹变化拒绝。
 Windows 测试仅只读访问实际 WinINet 设置与根证书库；未在开发者真实系统中执行代理切换或信任安装/卸载。
 参考：[WinINet per-connection options](https://learn.microsoft.com/en-us/windows/win32/api/wininet/ns-wininet-internet_per_conn_optiona)。
+
+## Linux GNOME 实现与验收（2026-10-12）
+
+- 通过官方 GNOME schema 读取有效配置，以单次 `dconf load /system/proxy/` changeset 写入；不逐条切换模式、主机和端口，避免中间配置状态。
+- 接管前保存 HTTP/HTTPS 主机端口、模式、PAC、绕过列表、认证开关、共享代理开关及 FTP/SOCKS 主机。抓包期间关闭旧代理认证、共享及 FTP/SOCKS 主机，避免把旧认证或其他协议发给抓包入口。原认证用户名/密码不读取、不落盘、不修改。
+- PAC 地址和绕过列表保留；恢复保存的有效值（原先继承默认值的键会成为同值显式设置）。仅写白名单字段，不重置整个 dconf 树。
+- Linux 快照目录为 `$XDG_STATE_HOME/http-capture/system-proxy`，未设置时为 `$HOME/.local/state/http-capture/system-proxy`，权限 0700。重启后恢复逻辑与 Windows 共用。
+- Windows 上已运行跨平台配置生成、快照兼容、注入拒绝和恢复测试。本机无可用 WSL，**尚未完成 Ubuntu 桌面实测**。
+- 新增 `scripts/test-gnome-proxy.sh`，CI 在独立 D-Bus 会话、临时 XDG 配置及独立 dconf profile 中测试真实写入、模拟崩溃恢复与外部修改冲突。新增 CI 尚未推送/运行，不等同于已通过 Linux 实测。
+- macOS 系统代理与 macOS/Linux CA 管理继续列为待办。
+
+协议依据：[GNOME 代理 schema](https://github.com/GNOME/gsettings-desktop-schemas/blob/master/schemas/org.gnome.system.proxy.gschema.xml.in)、[dconf 工具实现](https://github.com/GNOME/dconf/blob/master/bin/dconf.c)。

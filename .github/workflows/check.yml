@@ -13,8 +13,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config dbus-daemon dconf-cli dconf-service gsettings-desktop-schemas
       - run: cargo test --locked -p capture-core --no-default-features
+      - name: Verify GNOME proxy in an isolated session
+        if: runner.os == 'Linux'
+        run: bash scripts/test-gnome-proxy.sh
       - run: cargo check --locked -p capture-service
       - run: cargo test --locked -p capture-service --bin capture-service
   frontend:

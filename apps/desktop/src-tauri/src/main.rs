@@ -174,6 +174,27 @@ async fn save_request_workspace(workspace:capture_core::store::Workspace,state:S
  let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.save_workspace(workspace)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 fn main() {
+    // Must run before GTK/WebKit initialization and before worker threads exist.
+    #[cfg(target_os = "linux")]
+    {
+        // Reported GBM/DRM buffer allocation failure: ship the compatible renderer
+        // by default. Advanced users can explicitly select the normal path with 0.
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        // Optional desktop event sounds are not required by the application.
+        // Preserve all other modules, particularly accessibility integrations.
+        for key in ["GTK_MODULES", "GTK3_MODULES"] {
+            if let Ok(value) = std::env::var(key) {
+                let modules: Vec<_> = value.split(':').filter(|name| !matches!(*name,
+                    "canberra-gtk-module" | "libcanberra-gtk-module.so")).collect();
+                if modules.len() != value.split(':').count() {
+                    if modules.iter().all(|v|v.is_empty()) { std::env::remove_var(key); }
+                    else { std::env::set_var(key, modules.join(":")); }
+                }
+            }
+        }
+    }
     tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // Resources have different locations in .app, Debian and Windows bundles.

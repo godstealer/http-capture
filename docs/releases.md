@@ -5,7 +5,7 @@
 | 系统 | 架构 | 安装包 |
 | --- | --- | --- |
 | Windows | x64 | NSIS `.exe` |
-| Linux | x64 | Debian `.deb` 和便携 `.AppImage` |
+| Linux | x64 | Debian `.deb`、`.AppImage` 和免 FUSE `portable.tar.gz` |
 | macOS Intel | x64 | `.dmg`，文件名前缀 `macos-x64` |
 | macOS Apple Silicon（M 系列） | arm64 | `.dmg`，文件名前缀 `macos-arm64` |
 
@@ -45,3 +45,19 @@ chmod +x ./linux-x64-*.AppImage
 ```
 
 CI 同时校验两种 Linux 产物存在，并分别计算 SHA256。打包成功仍需目标发行版实机验收。
+
+
+## 普通用户开箱即用方案（2026-10-12）
+
+Linux 的 GBM/DRM 渲染兼容由程序负责，不再要求用户配置环境变量或安装 GTK 提示音模块：
+
+- Linux 入口在 GTK/WebKit 初始化前默认设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`，绕过本次报告的 DMABUF 分配失败路径；Windows/macOS 不受影响。
+- 用户显式设置该变量时保留其选择。兼容模式可能牺牲较快的渲染路径；不关闭 WebKit 沙箱、不修改显卡设备权限、不要求 root。
+- 仅从当前进程继承的 GTK 模块列表中移除可选 canberra 提示音模块，保留其他模块（包括辅助功能）。由系统 GTK 配置另外加载的提示音模块仍可能产生无害警告，不作为安装依赖。
+- Release 同时生成完整 AppDir 的 `portable.tar.gz`，保留共享库、媒体资源、httpcloak 和 AppRun。用户解压并运行 **AppRun** 即可，不经过 AppImage 的 FUSE 挂载。不要单独移动其中的可执行文件。
+- AppImage 继续提供；没有 FUSE 且不能安装软件的用户选择 portable.tar.gz，无需运行解包参数或 apt 命令。
+- 仍要求 Linux x64、Ubuntu 22.04 或兼容的更新 glibc 桌面会话；不声称能在任意 Linux、无图形会话或损坏的显卡驱动环境运行。
+
+验收：CI 应产生 deb、AppImage、portable.tar.gz 及全部校验和；实机用普通账户解压运行 AppRun，检查窗口、编辑器、网络发送和媒体预览。当前代码已加入，**尚未发布包含该修复的新包，也未在用户机器验收**。
+
+依据：[Tauri Linux 图形兼容说明](https://v2.tauri.app/develop/debug/linux-graphics/)。

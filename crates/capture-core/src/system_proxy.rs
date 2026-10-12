@@ -3,7 +3,10 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs::{self, File, OpenOptions}, io::Write, net::SocketAddr, path::PathBuf, sync::Mutex};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Settings { pub flags:u32, pub server:String, pub bypass:String, pub pac:String }
+pub struct Settings { pub flags:u32, pub server:String, pub bypass:String, pub pac:String,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub gnome:Option<std::collections::BTreeMap<String,String>>,
+}
 #[derive(Serialize, Deserialize)]
 struct Journal { version:u32, before:Settings, applied:Settings }
 #[derive(Serialize)]
@@ -23,11 +26,12 @@ impl Default for SystemProxy {
 impl SystemProxy {
     pub fn status(&self)->Status {
         let state=self.state.lock().unwrap();
-        Status { supported:cfg!(windows), active:state.active, pending_recovery:self.directory.join("recovery.json").exists(), message:state.message.clone() }
+        Status { supported:platform::supported(), active:state.active, pending_recovery:self.directory.join("recovery.json").exists(), message:state.message.clone() }
     }
     fn lease(&self,state:&mut State)->Result<()> {
         if state.lease.is_none() {
             fs::create_dir_all(&self.directory)?;
+            #[cfg(unix)] {use std::os::unix::fs::PermissionsExt;fs::set_permissions(&self.directory,fs::Permissions::from_mode(0o700))?;}
             let file=OpenOptions::new().read(true).write(true).create(true).truncate(false).open(self.directory.join("owner.lock"))?;
             file.try_lock().context("Another HTTP Capture process owns system proxy settings")?;
             state.lease=Some(file);
@@ -35,18 +39,18 @@ impl SystemProxy {
         Ok(())
     }
     pub fn enable(&self, mut address:SocketAddr)->Result<()> {
-        ensure!(cfg!(windows),"Automatic system proxy management is currently available on Windows only");
+        ensure!(platform::supported(),"System proxy requires Windows or a GNOME desktop session with gsettings and dconf");
         if address.ip().is_unspecified() { address.set_ip(if address.is_ipv4(){"127.0.0.1".parse()?}else{"::1".parse()?}); }
         ensure!(address.port()!=0,"Proxy listener is not running");
         let mut state=self.state.lock().unwrap(); self.lease(&mut state)?;
         ensure!(!self.directory.join("recovery.json").exists(),"Restore the previous system proxy configuration first");
         let before=platform::read()?;
-        let applied=Settings { flags:3,server:format!("http={address};https={address}"),bypass:"<local>;localhost;127.*;[::1]".into(),pac:String::new() };
+        let applied=platform::target(&before,address)?;
         let journal=Journal{version:1,before,applied};
         // Durable intent is written BEFORE touching OS settings. A partial journal fails closed.
         let mut file=OpenOptions::new().write(true).create_new(true).open(self.directory.join("recovery.json"))?;
         file.write_all(&serde_json::to_vec(&journal)?)?;file.sync_all()?;
-        let result=platform::write(&journal.applied).and_then(|()| {ensure!(platform::read()?==journal.applied,"System proxy read-back differs from requested settings");Ok(())});
+        let result=(|| {ensure!(platform::read()?==journal.before,"System proxy changed during configuration; no settings were written");platform::write(&journal.applied)})().and_then(|()| {ensure!(platform::read()?==journal.applied,"System proxy read-back differs from requested settings");Ok(())});
         state.active=result.is_ok();
         state.message=result.as_ref().err().map(ToString::to_string).unwrap_or_default();
         result
@@ -75,17 +79,24 @@ fn needs_restore(journal:&Journal,current:&Settings)->Result<bool> {
     if current==&journal.applied {return Ok(true);}
     bail!("System proxy was changed by another application. Recovery snapshot retained; current settings were not overwritten.")
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows,target_os="linux")))]
 mod platform {
     use super::*;
+    pub fn supported()->bool{false}
+    pub fn target(_: &Settings,_:SocketAddr)->Result<Settings>{bail!("Unsupported platform")}
     pub fn read()->Result<Settings>{bail!("Automatic system proxy management is not available on this platform")}
     pub fn write(_: &Settings)->Result<()>{bail!("Automatic system proxy management is not available on this platform")}
 }
 #[cfg(windows)]
 #[path="system_proxy_windows.rs"] mod platform;
+#[cfg(target_os="linux")]
+#[path="system_proxy_gnome.rs"] mod platform;
+#[cfg(all(test,not(target_os="linux")))]
+#[allow(dead_code)]
+#[path="system_proxy_gnome.rs"] mod gnome_tests;
 #[cfg(test)] mod tests {
     use super::*;
-    fn sample(flags:u32)->Settings{Settings{flags,server:"old:8080".into(),bypass:"*.internal".into(),pac:"https://local/proxy.pac".into()}}
+    fn sample(flags:u32)->Settings{Settings{flags,server:"old:8080".into(),bypass:"*.internal".into(),pac:"https://local/proxy.pac".into(),gnome:None}}
     #[test] fn recovery_preserves_external_changes_and_pac(){
         let j=Journal{version:1,before:sample(13),applied:sample(3)};
         assert!(needs_restore(&j,&j.applied).unwrap());
