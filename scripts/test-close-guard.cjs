@@ -1,0 +1,17 @@
+const assert=require('node:assert/strict');
+const esbuild=require('esbuild');
+esbuild.buildSync({entryPoints:['apps/frontend/src/closeGuard.ts'],bundle:true,platform:'node',format:'cjs',outfile:'.local/close-guard.cjs'});
+const {createCloseGuard}=require('../.local/close-guard.cjs');
+const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+(async()=>{
+ let dirty=false,saves=0,closed=0;const errors=[],busy=[];let save=deferred();
+ const guard=createCloseGuard({dirty:()=>dirty,flush:()=>{saves++;return save.promise;},destroy:async()=>{closed++;},error:e=>errors.push(e),busy:b=>busy.push(b)});
+ const first=guard.close();assert.equal(first,guard.close());await Promise.resolve();assert.equal(saves,1);assert.equal(closed,0);
+ save.resolve(false);await first;assert.equal(closed,0);assert.deepEqual(errors,['save-failed']);assert.deepEqual(busy,[true,false]);
+ save=deferred();const retry=guard.close();await Promise.resolve();save.resolve(true);await retry;assert.equal(closed,1);
+ dirty=true;await guard.close();assert.equal(saves,2);assert.equal(closed,1);assert.equal(errors.at(-1),'dirty-library');
+ dirty=false;save=deferred();const raced=guard.close();await Promise.resolve();dirty=true;save.resolve(true);await raced;assert.equal(closed,1);assert.equal(errors.at(-1),'dirty-library');
+ dirty=false;save=deferred();const cancelled=guard.close();await Promise.resolve();guard.dispose();save.resolve(true);await cancelled;assert.equal(closed,1);
+ let failure;const broken=createCloseGuard({dirty:()=>false,flush:async()=>{throw new Error('IPC unavailable');},destroy:async()=>assert.fail('must not close'),error:e=>failure=e,busy:()=>{}});await broken.close();assert.match(failure.message,/IPC unavailable/);
+ console.log('Close guard: pending save, duplicate close, save failure, retry, dirty library race, disposal and IPC failure passed.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

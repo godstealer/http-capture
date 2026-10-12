@@ -240,7 +240,6 @@ impl Store {
   }
   for request in &value.requests {anyhow::ensure!(value.collections.iter().any(|c|c.id==request.collection_id),"Collection not found");request.draft.scripts.validate()?;}
   for script in &value.scripts {script.scripts.validate()?;}
-  anyhow::ensure!(serde_json::to_vec(&value)?.len()<=8*1024*1024,"Library exceeds 8 MiB");
   let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
   let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
   let raw:Option<String>=tx.query_row("SELECT value FROM settings WHERE key='library.v1'",[],|r|r.get(0)).optional()?;
@@ -268,7 +267,6 @@ impl Store {
    editor.draft.scripts.validate()?;
   }
   anyhow::ensure!(value.active_editor.is_empty()||ids.contains(&value.active_editor),"当前请求标签不存在");
-  anyhow::ensure!(serde_json::to_vec(&value)?.len()<=8*1024*1024,"请求工作区超过 8 MiB，未保存");
   let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
   let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
   let raw:Option<String>=tx.query_row("SELECT value FROM settings WHERE key='workspace.v1'",[],|r|r.get(0)).optional()?;

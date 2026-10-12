@@ -51,6 +51,17 @@ async fn append_import(state:State<'_,AppState>,id:String,offset:usize,flows:Vec
 #[tauri::command]
 async fn finish_import(state:State<'_,AppState>,id:String,commit:bool)->Result<usize,String>{let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.finish_import(&id,commit)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())}
 #[tauri::command]
+async fn save_response_base64(app:tauri::AppHandle,body:String,original:bool)->Result<String,String>{
+    let directory=app.path().download_dir().map_err(|e|e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move||{
+        let timestamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
+        let kind=if original{"original"}else{"decoded"};
+        let path=directory.join(format!("response-{kind}-{timestamp}.bin"));
+        capture_core::body_export::save_base64(&path,&body).map_err(|e|e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    }).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
 async fn save_response_file(app: tauri::AppHandle, bytes: Vec<u8>, original: bool) -> Result<String,String> {
     if bytes.len() > 8 * 1024 * 1024 { return Err("Response exceeds 8 MiB".into()); }
     let directory = app.path().download_dir().map_err(|e|e.to_string())?;
@@ -219,7 +230,7 @@ fn main() {
             app.manage(AppState { engine, proxy: Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {

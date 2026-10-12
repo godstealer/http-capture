@@ -272,7 +272,8 @@ async fn recv_h2_body_observed(stream: &mut h2::RecvStream, streaming: bool) -> 
     let mut body = Vec::new();
     while let Some(chunk) = stream.data().await {
         let chunk = chunk?;
-        ensure!(body.len() + chunk.len() <= MAX_BODY, "Body exceeds 8 MiB limit");
+        ensure!(!streaming || body.len() + chunk.len() <= MAX_BODY, "SSE body exceeds 8 MiB limit");
+        body.try_reserve(chunk.len()).context("Unable to allocate response body")?;
         stream.flow_control().release_capacity(chunk.len())?;
         body.extend_from_slice(&chunk);
         if streaming { crate::sse::emit(crate::sse::Event::Data(chunk.to_vec())).await?; }
@@ -362,7 +363,7 @@ pub async fn h3_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, pr
     let response = stream.recv_response().await?;
     let mut body = Vec::new();
     while let Some(mut chunk) = stream.recv_data().await? {
-        ensure!(body.len() + chunk.remaining() <= MAX_BODY, "Body exceeds 8 MiB limit");
+        body.try_reserve(chunk.remaining()).context("Unable to allocate response body")?;
         body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()));
     }
     ensure!(stream.recv_trailers().await?.is_none(), "Trailers are not supported yet");

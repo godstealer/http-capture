@@ -97,7 +97,7 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                             }
                                             let mut body = Vec::new();
                                             while let Some(mut chunk) = stream.recv_data().await? {
-                                                ensure!(body.len() + chunk.remaining() <= MAX_BODY, "Body exceeds 8 MiB limit");
+                                                body.try_reserve(chunk.remaining())?;
                                                 body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()));
                                             }
                                             ensure!(stream.recv_trailers().await?.is_none(), "Trailers unsupported");

@@ -17,6 +17,11 @@ fn authorize(headers: &HeaderMap, state: &Service) -> Result<(), ApiError> {
     }
     Ok(())
 }
+// Authenticate before JSON extraction, including routes carrying large bodies.
+async fn authenticated(State(s): State<Shared>, request: axum::extract::Request, next: axum::middleware::Next) -> Result<axum::response::Response, ApiError> {
+    authorize(request.headers(), &s)?;
+    Ok(next.run(request).await)
+}
 fn error(e: impl std::fmt::Display) -> ApiError { (StatusCode::BAD_REQUEST, e.to_string()) }
 async fn system_proxy_status(State(s):State<Shared>,headers:HeaderMap)->Result<Json<capture_core::system_proxy::Status>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.system_proxy.status()))}
 #[derive(Deserialize)]struct SystemProxyInput{enabled:bool}
@@ -186,14 +191,14 @@ async fn main() -> Result<()> {
 }
 
 fn router(state:Shared)->Router {
-    Router::new().route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library)).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
+    Router::new().route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library).layer(axum::extract::DefaultBodyLimit::disable())).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
         .route("/imports/begin",post(begin_import)).route("/imports/append",post(append_import).layer(axum::extract::DefaultBodyLimit::max(64*1024*1024))).route("/imports/finish",post(finish_import)).route("/tun",get(tun_status)).route("/tun/start",post(start_tun)).route("/tun/stop",post(stop_tun)).route("/network/interfaces",get(network_interfaces)).route("/status", get(status)).route("/flows", get(list)).route("/flows/changes",post(flow_changes)).route("/flows/revision", get(flow_revision)).route("/flows/delete",post(delete_flows)).route("/flows/import",post(import_flows))
-        .route("/workspace",get(workspace).post(save_workspace)).route("/start", post(start)).route("/stop", post(stop)).route("/replay", post(replay)).route("/replay/prepare",post(prepare_replay)).route("/replay/cancel",post(cancel_replay))
+        .route("/workspace",get(workspace).post(save_workspace).layer(axum::extract::DefaultBodyLimit::disable())).route("/start", post(start)).route("/stop", post(stop)).route("/replay", post(replay).layer(axum::extract::DefaultBodyLimit::disable())).route("/replay/prepare",post(prepare_replay)).route("/replay/cancel",post(cancel_replay))
         .route("/upstream/profiles",get(upstream_profiles).post(save_upstream_profile)).route("/upstream/select",post(select_upstream_profile)).route("/upstream/delete",post(delete_upstream_profile))
         .route("/scripts", get(capture_scripts).post(set_capture_scripts))
-        .route("/interception", get(interception).post(configure_interception)).route("/interception/resolve", post(resolve_interception))
+        .route("/interception", get(interception).post(configure_interception)).route("/interception/resolve", post(resolve_interception).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/certificate", get(certificate)).route("/upstream", post(set_upstream))
-        .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)).with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)).layer(axum::middleware::from_fn_with_state(state.clone(), authenticated)).with_state(state)
 }
 
 #[cfg(test)] mod contract_tests;

@@ -53,17 +53,6 @@ export default function RequestBodyEditor({
         );
         return;
       }
-      if (
-        parts.reduce(
-          (n, p) =>
-            n +
-            (p.file?.size ?? new TextEncoder().encode(p.value).length) +
-            new TextEncoder().encode(p.name).length,
-          0,
-        ) >
-        8 * 1024 * 1024
-      )
-        throw Error(t("请求正文不能超过 8 MiB"));
       const data = new FormData();
       for (const p of parts) {
         if (p.file) data.append(p.name, p.file, p.file.name);
@@ -73,13 +62,14 @@ export default function RequestBodyEditor({
         method: "POST",
         body: data,
       });
-      const bytes = new Uint8Array(await request.arrayBuffer());
-      if (bytes.length > 8 * 1024 * 1024)
-        throw Error(t("请求正文不能超过 8 MiB"));
-      let binary = "";
-      for (let i = 0; i < bytes.length; i += 32768)
-        binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
-      setBody(btoa(binary), request.headers.get("content-type")!);
+      const blob = await request.blob();
+      const body = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1]);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+      setBody(body, request.headers.get("content-type")!);
     } catch (e) {
       setError(String(e));
     } finally {

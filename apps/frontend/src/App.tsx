@@ -1,3 +1,4 @@
+import { useDesktopClose } from './useDesktopClose';
 import ClientHelloEditor from "./ClientHelloEditor";
 import WebSocketFrames from './WebSocketFrames';
 import DecryptionSettings from './DecryptionSettings';
@@ -56,6 +57,7 @@ export default function App() {
   async function saveLibrary(){if(!libraryReady||libraryBusy)return;setLibraryBusy(true);try{const revision=await invoke<number>('save_request_library',{library});librarySaved.current=JSON.stringify({...library,revision});setLibrary(v=>({...v,revision}));setLibraryMessage(t('已保存'));}catch(e){setLibraryMessage(String(e));}finally{setLibraryBusy(false);}}
   const [flows, setFlows] = useState<Flow[]>([]);
   const { editors, setEditors, activeEditor, setActiveEditor, ready: workspaceReady, message: workspaceMessage, error: workspaceError, retry: saveWorkspace } = useRequestWorkspace();
+  const closing = useDesktopClose(saveWorkspace, () => libraryReady && (libraryBusy || JSON.stringify(library) !== librarySaved.current), message => setNotice(message));
   const editor = editors.find(item => item.id === activeEditor) ?? editors[0];
   const draft = editor?.draft ?? blank;
   const closedEditors=useRef(new Set<string>());
@@ -248,6 +250,7 @@ export default function App() {
   const responseText = flow?.response ? decodeText(flow.response.bodyBase64) : '';
 
   return <div className="app-shell">
+    {closing && <div className="modal-backdrop" style={{zIndex:10000}} role="alertdialog" aria-modal="true" aria-label={t("正在保存并关闭…")}><div className="modal">{t("正在保存并关闭…")}</div></div>}
     <div className="workspace">
       <header className="proxy-toolbar"><div className="proxy-address"><span className={status.running ? 'dot green' : 'dot'} />
         <span>{!connected ? t("内核未连接") : status.running ? 'Proxying on' : t("代理已停止")} {connected && listenAddress}</span>

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -114,5 +115,28 @@ func TestCertificateWithoutDNSNamesUsesEmptyArray(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"dnsNames":[]`) {
 		t.Fatal(string(data))
+	}
+}
+
+func TestLargeBinaryRoundTrip(t *testing.T) {
+	payload := bytes.Repeat([]byte{0, 255, 128, 17}, 4*1024*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil || !bytes.Equal(body, payload) {
+			t.Error("large upload mismatch")
+			w.WriteHeader(400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(body)
+	}))
+	defer server.Close()
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	out, err := execute(Input{Preset: "chrome-152-windows", Request: Draft{Method: "POST", URL: server.URL, Body: encoded}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["response"].(map[string]any)["bodyBase64"] != encoded {
+		t.Fatal("large response mismatch")
 	}
 }

@@ -3,7 +3,6 @@ use transport_api::*;
 use anyhow::{ensure, Result};
 use base64::{Engine,engine::general_purpose::STANDARD};
 use std::time::Duration;
-const MAX_BODY:usize=8*1024*1024;
 fn latin1(bytes:&[u8])->String {bytes.iter().map(|b|char::from(*b)).collect()}
 fn header_bytes(value:&str)->Result<Vec<u8>> {value.chars().map(|c|{ensure!((c as u32)<=255&&c!='\r'&&c!='\n'&&c!='\0',"Invalid header value");Ok(c as u8)}).collect()}
 pub async fn send<S>(draft: &RequestDraft<S>, headers: Vec<Header>, body: Vec<u8>, proxy: Option<&UpstreamProxyConfig>) -> Result<(CapturedResponse, Vec<String>, Vec<Vec<u8>>)> {
@@ -55,7 +54,7 @@ pub async fn send<S>(draft: &RequestDraft<S>, headers: Vec<Header>, body: Vec<u8
     let mut chunks = response.bytes_stream();
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk?;
-        ensure!(body.len() + chunk.len() <= MAX_BODY, "Response exceeds 8 MiB limit");
+        body.try_reserve(chunk.len())?;
         body.extend_from_slice(&chunk);
     }
     notes.push("浏览器预设使用独立连接；响应头来自客户端解析结果，不宣称原始响应字段顺序。HTTP/2 字段名按协议小写。".into());

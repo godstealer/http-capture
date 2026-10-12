@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from './api';
 import type { RequestDraft } from './types';
 
@@ -14,6 +14,7 @@ export function useRequestWorkspace() {
   const [error, setError] = useState(false);
   const persistence = useRef({ revision: 0, latest: empty, saved: empty, running: false, ready: false });
   const alive = useRef(true);
+  const saving = useRef<Promise<boolean> | null>(null);
   useEffect(() => {
     alive.current = true;
     let disposed = false;
@@ -32,9 +33,11 @@ export function useRequestWorkspace() {
     void load();
     return () => { disposed = true; alive.current = false; clearTimeout(timer); };
   }, []);
-  const flush = useCallback(async () => {
+  const flush = useCallback((): Promise<boolean> => {
+    if (saving.current) return saving.current;
+    const operation = (async () => {
     const state = persistence.current;
-    if (!state.ready || state.running) return;
+    if (!state.ready) return true;
     state.running = true;
     try {
       while (state.latest !== state.saved) {
@@ -44,11 +47,17 @@ export function useRequestWorkspace() {
         state.revision = revision; state.saved = json;
       }
       if (alive.current) { setMessage('请求已保存'); setError(false); }
+      return true;
     } catch (e) {
       if (alive.current) { setMessage(`请求未保存：${String(e)}`); setError(true); }
+      return false;
     } finally { state.running = false; }
+    })();
+    saving.current = operation;
+    void operation.finally(() => { saving.current = null; });
+    return operation;
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!ready) return;
     const state = persistence.current;
     state.latest = JSON.stringify({ editors, activeEditor });

@@ -13,12 +13,24 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
   const [downloadMessage, setDownloadMessage] = useState('');
   async function download(original: boolean) {
     try {
-    const blob = original ? new Blob([Uint8Array.from(atob(body), c => c.charCodeAt(0))]) : result?.decodedBlob ?? result?.blob;
-    if (!blob) return;
     if (isTauri()) {
-      const path = await invoke<string>('save_response_file', { bytes: Array.from(new Uint8Array(await blob.arrayBuffer())), original });
+      let encoded=body;
+      if (!original) {
+        const decoded=result?.decodedBlob ?? result?.blob;
+        if (!decoded) return;
+        encoded=await new Promise<string>((resolve,reject)=>{
+          const reader=new FileReader();
+          reader.onerror=()=>reject(reader.error ?? new Error('Unable to read response'));
+          reader.onabort=()=>reject(new Error('Response read cancelled'));
+          reader.onload=()=>resolve(String(reader.result).split(',',2)[1] ?? '');
+          reader.readAsDataURL(decoded);
+        });
+      }
+      const path = await invoke<string>('save_response_base64', { body:encoded, original });
       setDownloadMessage(t('已保存：') + path); return;
     }
+    const blob = original ? new Blob([Uint8Array.from(atob(body), c => c.charCodeAt(0))]) : result?.decodedBlob ?? result?.blob;
+    if (!blob) return;
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a'); link.href = url; link.download = original ? 'response-original.bin' : 'response-decoded.bin'; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 30000);

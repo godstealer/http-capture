@@ -340,3 +340,26 @@ async fn tun_connect_carries_plain_http_and_ordered_headers() {
     assert!(response.starts_with(b"HTTP/1.1 200"));assert!(finish_flow(&engine).await.request.url.starts_with("http://"));
     bridge.stop().await;server.await.unwrap();
 }
+
+#[tokio::test]
+async fn large_binary_upload_download_and_restart_are_complete() {
+ tokio::time::timeout(Duration::from_secs(30),async {
+    let dir=tempfile::tempdir().unwrap();let engine=Engine::open(dir.path()).unwrap();
+    let payload:Vec<u8>=(0..9*1024*1024).map(|n|(n%251)as u8).collect();let expected=payload.clone();
+    let origin=TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=origin.local_addr().unwrap();
+    let server=tokio::spawn(async move{
+        let(stream,_)=origin.accept().await.unwrap();let mut reader=BufReader::new(stream);
+        let head=read_head(&mut reader).await.unwrap();let(_,_,headers)=parse_request(&head).unwrap();
+        let received=read_body(&mut reader,&headers,false).await.unwrap().0;assert_eq!(received,expected);
+        reader.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",received.len()).as_bytes()).await.unwrap();reader.write_all(&received).await.unwrap();
+    });
+    let proxy=proxy::start(engine.clone(),0).await.unwrap();let mut client=TcpStream::connect(proxy.address).await.unwrap();
+    client.write_all(format!("POST http://{addr}/file HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",payload.len()).as_bytes()).await.unwrap();client.write_all(&payload).await.unwrap();
+    let mut client=BufReader::new(client);let head=read_head(&mut client).await.unwrap();assert!(head.starts_with(b"HTTP/1.1 200"));
+    let (_,_,headers)=capture_core::http1::parse_response(&head).unwrap();
+    assert_eq!(read_body(&mut client,&headers,true).await.unwrap().0,payload);
+    server.await.unwrap();let flow=finish_flow(&engine).await;assert!(flow.error.is_none());let id=flow.id.clone();proxy.stop().await;drop(engine);
+    let reopened=Engine::open(dir.path()).unwrap();let saved=reopened.store.get(&id).unwrap().unwrap();
+    assert_eq!(STANDARD.decode(saved.request.body_base64).unwrap(),payload);assert_eq!(STANDARD.decode(saved.response.unwrap().body_base64).unwrap(),payload);
+ }).await.expect("large file transfer timed out");
+}

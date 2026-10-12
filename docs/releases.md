@@ -58,6 +58,16 @@ Linux 的 GBM/DRM 渲染兼容由程序负责，不再要求用户配置环境�
 - AppImage 继续提供；没有 FUSE 且不能安装软件的用户选择 portable.tar.gz，无需运行解包参数或 apt 命令。
 - 仍要求 Linux x64、Ubuntu 22.04 或兼容的更新 glibc 桌面会话；不声称能在任意 Linux、无图形会话或损坏的显卡驱动环境运行。
 
-验收：CI 应产生 deb、AppImage、portable.tar.gz 及全部校验和；实机用普通账户解压运行 AppRun，检查窗口、编辑器、网络发送和媒体预览。当前代码已加入，**尚未发布包含该修复的新包，也未在用户机器验收**。
+验收：CI 应产生 deb、AppImage、portable.tar.gz 及全部校验和；实机用普通账户解压运行 AppRun，检查窗口、编辑器、网络发送和媒体预览。已发布到 **build-c74877404b14**；尚未在用户机器验收。
 
 依据：[Tauri Linux 图形兼容说明](https://v2.tauri.app/develop/debug/linux-graphics/)。
+
+
+### c748774 产物验证记录
+
+- Check 三平台及前端全部通过，GNOME 隔离 D-Bus 写入/恢复/冲突集成测试通过。
+- Linux 构建成功，已下载本次 CI 产物核对 deb、AppImage、portable.tar.gz 的 SHA256，全部匹配。
+- portable.tar.gz 含 542 个条目，AppRun 权限 0755，包含 WebKitGTK 与 httpcloak 辅助程序。
+- 尚未在用户 Ubuntu 图形桌面执行 AppRun；产物完整性与桌面兼容性分别验收。
+
+- 四个平台构建和 publish 全部成功，新预发布版已公开：[build-c74877404b14](https://github.com/godstealer/http-capture/releases/tag/build-c74877404b14)，包含 6 个安装/便携包及 4 份平台校验文件。

@@ -676,5 +676,8 @@
   "系统代理已开启，点击恢复原代理": "System proxy enabled; click to restore the original proxy",
   "仅监听，点击开启系统代理": "Listening only; click to enable system proxy",
   "下次启动将设置系统代理，点击取消": "System proxy will be enabled on next start; click to cancel",
-  "仅监听，点击设为下次启动时开启系统代理": "Listen only; click to enable system proxy on next start"
+  "仅监听，点击设为下次启动时开启系统代理": "Listen only; click to enable system proxy on next start",
+  "正在保存并关闭…": "Saving before closing…",
+  "集合或环境有未保存的修改，请保存后再关闭。": "Collections or environments have unsaved changes. Save them before closing.",
+  "请求保存失败，窗口保持打开，请重试保存后再关闭。": "Requests could not be saved. The window remains open; retry saving before closing."
 }

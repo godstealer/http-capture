@@ -71,9 +71,6 @@ func execute(in Input) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > 8*1024*1024 {
-		return nil, fmt.Errorf("body exceeds 8 MiB")
-	}
 	pairs := make([]fingerprint.HeaderPair, 0, len(in.Request.Headers))
 	for _, h := range in.Request.Headers {
 		value := []byte{}
@@ -116,12 +113,9 @@ func execute(in Input) (map[string]any, error) {
 		return nil, err
 	}
 	defer response.Close()
-	data, err := io.ReadAll(io.LimitReader(response, 8*1024*1024+1))
+	data, err := io.ReadAll(response)
 	if err != nil {
 		return nil, err
-	}
-	if len(data) > 8*1024*1024 {
-		return nil, fmt.Errorf("response exceeds 8 MiB")
 	}
 	headers := []Header{}
 	keys := make([]string, 0, len(response.Headers))
@@ -176,7 +170,7 @@ func main() {
 		return
 	}
 	var input Input
-	err := json.NewDecoder(io.LimitReader(os.Stdin, 16*1024*1024)).Decode(&input)
+	err := json.NewDecoder(os.Stdin).Decode(&input)
 	var result map[string]any
 	if err == nil {
 		result, err = execute(input)

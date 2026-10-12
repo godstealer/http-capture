@@ -2,7 +2,7 @@
 use crate::model::{Header, RequestDraft};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use url::Url;
 
 pub const MAX_HEAD: usize = 64 * 1024;
@@ -89,20 +89,29 @@ pub async fn read_body<R: AsyncBufRead + Unpin>(reader: &mut R, headers: &[Heade
     read_body_observed(reader, headers, eof_body, false).await
 }
 pub async fn read_body_observed<R: AsyncBufRead + Unpin>(reader: &mut R, headers: &[Header], eof_body: bool, streaming: bool) -> Result<(Vec<u8>, bool)> {
+    let mut body=Vec::new();
+    let (_,trailers)=copy_body(reader,&mut body,headers,eof_body,if streaming { MAX_BODY as u64 } else { u64::MAX },streaming).await?;
+    Ok((body,trailers))
+}
+
+/// Stream decoded entity bytes into a caller-owned destination with bounded memory.
+/// Leaves the next message unread. On error the destination may contain a prefix;
+/// callers must discard it or explicitly mark it incomplete. Does not flush/close it.
+pub async fn copy_body<R: AsyncBufRead + Unpin,W: AsyncWrite + Unpin>(reader:&mut R,writer:&mut W,headers:&[Header],eof_body:bool,limit:u64,streaming:bool)->Result<(u64,bool)> {
     let lengths: Vec<_> = values(headers, "content-length").collect();
     let transfers: Vec<_> = values(headers, "transfer-encoding").collect();
     ensure!(lengths.len() <= 1, "Duplicate Content-Length is not accepted");
     ensure!(lengths.is_empty() || transfers.is_empty(), "Ambiguous Transfer-Encoding + Content-Length");
     if !transfers.is_empty() {
         ensure!(transfers.len() == 1 && transfers[0].eq_ignore_ascii_case("chunked"), "Unsupported transfer coding");
-        let mut body = Vec::new();
+        let mut written = 0u64;
         loop {
             let chunk = line(reader, 4096).await?;
             let chunk = std::str::from_utf8(&chunk)?.trim_end_matches("\r\n");
             let size_text = chunk.split(';').next().unwrap_or("");
             ensure!(!size_text.is_empty() && size_text.bytes().all(|b| b.is_ascii_hexdigit()), "Invalid chunk size");
-            let size = usize::from_str_radix(size_text, 16)?;
-            ensure!(size <= MAX_BODY - body.len(), "Body exceeds 8 MiB limit");
+            let size = u64::from_str_radix(size_text, 16)?;
+            ensure!(size <= limit - written, "Body exceeds configured limit ({limit} bytes)");
             if size == 0 {
                 let mut total = 0;
                 let mut trailers = false;
@@ -110,45 +119,45 @@ pub async fn read_body_observed<R: AsyncBufRead + Unpin>(reader: &mut R, headers
                     let trailer = line(reader, MAX_HEAD - total).await?;
                     ensure!(!trailer.is_empty(), "Unexpected EOF in chunk trailers");
                     total += trailer.len();
-                    if trailer == b"\r\n" { return Ok((body, trailers)); }
+                    if trailer == b"\r\n" { return Ok((written, trailers)); }
                     trailers = true;
                 }
             }
-            read_piece(reader, &mut body, size, streaming).await?;
+            read_piece(reader, writer, size, streaming).await?;
+            written += size;
             let mut crlf = [0; 2]; reader.read_exact(&mut crlf).await?;
             ensure!(crlf == *b"\r\n", "Invalid chunk terminator");
         }
     }
     if let Some(length) = lengths.first() {
         ensure!(!length.is_empty() && length.bytes().all(|b| b.is_ascii_digit()), "Invalid Content-Length");
-        let length: usize = length.parse()?;
-        ensure!(length <= MAX_BODY, "Body exceeds 8 MiB limit");
-        let mut body = Vec::new(); read_piece(reader, &mut body, length, streaming).await?;
-        return Ok((body, false));
+        let length: u64 = length.parse()?;
+        ensure!(length <= limit, "Body exceeds configured limit ({limit} bytes)");
+        read_piece(reader, writer, length, streaming).await?;
+        return Ok((length, false));
     }
     if eof_body {
-        let mut body = Vec::new();
+        let mut written = 0u64;
         let mut buf = [0; 16384];
         loop {
             let count = reader.read(&mut buf).await?;
             if count == 0 { break; }
-            ensure!(body.len() + count <= MAX_BODY, "Body exceeds 8 MiB limit");
-            body.extend_from_slice(&buf[..count]);
+            ensure!(count as u64 <= limit - written, "Body exceeds configured limit ({limit} bytes)");
+            writer.write_all(&buf[..count]).await?; written += count as u64;
             if streaming { crate::sse::emit(crate::sse::Event::Data(buf[..count].to_vec())).await?; }
         }
-        ensure!(body.len() <= MAX_BODY, "Body exceeds 8 MiB limit");
-        return Ok((body, false));
+        return Ok((written, false));
     }
-    Ok((Vec::new(), false))
+    Ok((0, false))
 }
 
-async fn read_piece<R: AsyncBufRead + Unpin>(reader: &mut R, body: &mut Vec<u8>, mut remaining: usize, streaming: bool) -> Result<()> {
+async fn read_piece<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(reader: &mut R, writer: &mut W, mut remaining: u64, streaming: bool) -> Result<()> {
     let mut buf = [0; 16384];
     while remaining > 0 {
-        let len = remaining.min(buf.len());
+        let len = remaining.min(buf.len() as u64) as usize;
         let count = reader.read(&mut buf[..len]).await?;
         ensure!(count > 0, "Unexpected EOF in response body");
-        body.extend_from_slice(&buf[..count]); remaining -= count;
+        writer.write_all(&buf[..count]).await?; remaining -= count as u64;
         if streaming { crate::sse::emit(crate::sse::Event::Data(buf[..count].to_vec())).await?; }
     }
     Ok(())
@@ -175,7 +184,6 @@ pub fn prepare(draft: &RequestDraft) -> Result<(Url, Vec<Header>, Vec<u8>, Vec<S
     ensure!(values(&draft.headers, "content-length").count() <= 1, "Multiple Content-Length fields are ambiguous");
     ensure!(values(&draft.headers, "expect").all(|v| v.eq_ignore_ascii_case("100-continue")), "Unsupported Expect header");
     let body = STANDARD.decode(&draft.body_base64).context("Invalid body base64")?;
-    ensure!(body.len() <= MAX_BODY, "Body exceeds 8 MiB limit");
     let mut headers = end_to_end(&draft.headers);
     let mut notes = Vec::new();
     if values(&headers, "expect").next().is_some() {
@@ -248,4 +256,26 @@ mod tests {
     fn prevents_crlf_injection() { assert!(header_bytes("a\r\nInjected: true").is_err()); }
     #[test]
     fn binary_header_values_round_trip() { assert_eq!(header_bytes(&latin1(&[0x80, 0xff])).unwrap(), [0x80, 0xff]); }
+    #[tokio::test]
+    async fn streams_large_entity_to_disk_without_consuming_next_message(){
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("body.bin");
+        let size=9*1024*1024;
+        let bytes=vec![0x81;size];let mut wire=bytes.clone();wire.extend_from_slice(b"NEXT");
+        let mut input=wire.as_slice();let mut file=tokio::fs::File::create(&path).await.unwrap();
+        let headers=vec![Header{name:"Content-Length".into(),value:size.to_string()}];
+        assert_eq!(copy_body(&mut input,&mut file,&headers,false,size as u64,false).await.unwrap(),(size as u64,false));
+        file.flush().await.unwrap();assert_eq!(input,b"NEXT");assert_eq!(tokio::fs::read(&path).await.unwrap(),bytes);
+    }
+    #[tokio::test]
+    async fn streaming_boundaries_limits_and_sink_failure(){
+        let headers=vec![Header{name:"Transfer-Encoding".into(),value:"chunked".into()}];
+        let mut input=&b"3\r\nabc\r\n0\r\nX-T: yes\r\n\r\nNEXT"[..];let mut output=Vec::new();
+        assert_eq!(copy_body(&mut input,&mut output,&headers,false,3,false).await.unwrap(),(3,true));assert_eq!(input,b"NEXT");assert_eq!(output,b"abc");
+        let mut input=&b"4\r\nabcd\r\n0\r\n\r\n"[..];let mut output=Vec::new();assert!(copy_body(&mut input,&mut output,&headers,false,3,false).await.is_err());assert!(output.is_empty());
+        let mut input=&b"abc"[..];let mut output=Vec::new();assert_eq!(copy_body(&mut input,&mut output,&[],true,3,false).await.unwrap(),(3,false));assert_eq!(output,b"abc");
+        let mut input=&b"abcd"[..];assert!(copy_body(&mut input,&mut tokio::io::sink(),&[],true,3,false).await.is_err());
+        let fixed=vec![Header{name:"Content-Length".into(),value:"4".into()}];let mut input=&b"abc"[..];assert!(copy_body(&mut input,&mut tokio::io::sink(),&fixed,false,4,false).await.is_err());
+        let (mut sink,peer)=tokio::io::duplex(1);drop(peer);let mut input=&b"abcd"[..];assert!(copy_body(&mut input,&mut sink,&fixed,false,4,false).await.is_err());
+    }
+
 }

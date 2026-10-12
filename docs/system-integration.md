@@ -38,7 +38,7 @@ Windows 测试仅只读访问实际 WinINet 设置与根证书库；未在开发
 - PAC 地址和绕过列表保留；恢复保存的有效值（原先继承默认值的键会成为同值显式设置）。仅写白名单字段，不重置整个 dconf 树。
 - Linux 快照目录为 `$XDG_STATE_HOME/http-capture/system-proxy`，未设置时为 `$HOME/.local/state/http-capture/system-proxy`，权限 0700。重启后恢复逻辑与 Windows 共用。
 - Windows 上已运行跨平台配置生成、快照兼容、注入拒绝和恢复测试。本机无可用 WSL，**尚未完成 Ubuntu 桌面实测**。
-- 新增 `scripts/test-gnome-proxy.sh`，CI 在独立 D-Bus 会话、临时 XDG 配置及独立 dconf profile 中测试真实写入、模拟崩溃恢复与外部修改冲突。新增 CI 尚未推送/运行，不等同于已通过 Linux 实测。
+- 新增 `scripts/test-gnome-proxy.sh`，CI 在独立 D-Bus 会话、临时 XDG 配置及独立 dconf profile 中测试真实写入、模拟崩溃恢复与外部修改冲突。提交 c748774 的 Linux CI 已通过，包括隔离会话真实写入与恢复；这不等同于用户 Ubuntu 桌面实测。
 - macOS 系统代理与 macOS/Linux CA 管理继续列为待办。
 
 协议依据：[GNOME 代理 schema](https://github.com/GNOME/gsettings-desktop-schemas/blob/master/schemas/org.gnome.system.proxy.gschema.xml.in)、[dconf 工具实现](https://github.com/GNOME/dconf/blob/master/bin/dconf.c)。
