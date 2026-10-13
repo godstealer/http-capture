@@ -1,0 +1,10 @@
+global.File=class File extends require('node:buffer').Blob {};
+const {buildSync}=require('esbuild');const assert=require('node:assert/strict');
+const messages=[];let handler;
+global.self={postMessage(message){messages.push(message);if(message.batch)setImmediate(()=>handler({data:{ack:true}}));}};
+const code=buildSync({entryPoints:['apps/frontend/src/session-import.worker.ts'],bundle:true,platform:'node',format:'cjs',write:false,logLevel:'silent'}).outputFiles[0].text;
+new Function(code)();handler=self.onmessage;
+const flow={id:'',request:{},notes:[]};
+(async()=>{await handler({data:new File([JSON.stringify({format:'http-capture-session',version:1,flows:Array.from({length:751},()=>flow)})])});
+assert.equal(messages[0].total,751);assert.deepEqual(messages.filter(m=>m.batch).map(m=>m.batch.length),[250,250,250,1]);assert.equal(messages.at(-1).complete,true);
+console.log('Import worker: 751 records delivered in acknowledged batches, completion after final acknowledgement.');})().catch(e=>{console.error(e);process.exitCode=1});

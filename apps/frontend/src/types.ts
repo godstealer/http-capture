@@ -16,6 +16,7 @@ export interface RequestDraft { upstreamProfileId?:string|null; scripts?: Script
 export interface CertificateDetails { subject: string; issuer: string; serial: string; notBefore: string; notAfter: string; sha256: string; dnsNames: string[]; derBase64: string; parseError?: string | null }
 export interface TlsDetailsData { version?: string | null; cipherSuite?: string | null; alpn?: string | null; serverName?: string | null; handshakeKind?: string | null; offeredCipherSuites: string[]; offeredAlpn: string[]; signatureSchemes: string[]; supportedGroups: string[]; certificates: CertificateDetails[] }
 export interface Flow {
+  state?: string;
   websocket?: { messages?: {direction:string;atMs:number;opcode:number;payloadBase64:string;frameCount:number;error?:string|null}[]; state: string; frames: { direction: string; atMs: number; opcode: number; fin: boolean; compressed: boolean; payloadBase64: string }[] } | null;
   originalRequest?: RequestDraft | null;
   originalResponse?: Flow['response'];
@@ -23,7 +24,7 @@ export interface Flow {
   clientProtocol?: string | null;
   id: string; parentId: string | null; startedAt: number; durationMs: number; source: string;
   request: RequestDraft;
-  response: { status: number; version: string; tlsVersion?: string | null; upstreamTls?: TlsDetailsData | null; sentRequestHeaders?: Header[] | null; headers: Header[]; bodyBase64: string; rawHeadBase64?: string | null } | null;
+  response: { trailers?: Header[]; status: number; version: string; tlsVersion?: string | null; upstreamTls?: TlsDetailsData | null; sentRequestHeaders?: Header[] | null; headers: Header[]; bodyBase64: string; rawHeadBase64?: string | null } | null;
   error: string | null; rawRequestHeadBase64?: string | null; notes: string[];
 }
 export interface EngineInfo { browserVersions?: Record<string, number[]>; id: string; available: boolean; profiles: string[]; reason: string | null }

@@ -60,6 +60,8 @@ impl Default for TlsProfile {
 #[serde(rename_all = "camelCase")]
 pub struct CapturedResponse {
     #[serde(default)]
+    pub trailers: Vec<Header>,
+    #[serde(default)]
     pub upstream_tls: Option<TlsDetails>,
     /// Actual upstream TLS version; absent for plaintext and older records.
     #[serde(default)]

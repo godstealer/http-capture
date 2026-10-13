@@ -1,0 +1,11 @@
+const {buildSync}=require('esbuild');const assert=require('node:assert/strict');
+const m={exports:{}};new Function('module','exports','require',buildSync({entryPoints:['apps/frontend/src/grpc.ts'],bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text)(m,m.exports,require);
+const g=m.exports;const {methods}=g.schema(['syntax="proto3"; package test; message Msg {string text=1; int64 id=2; bytes blob=3;} service Echo {rpc Call(Msg) returns(Msg);}']);
+(async()=>{const method=methods[0];assert.equal(g.methodPath(method),'/test.Echo/Call');const data=g.encodeMessage(method,JSON.stringify({text:'你好',id:'9223372036854775807',blob:'/wA='}));
+const messages=await g.decodeMessages(g.base64(data),method,[]);assert.equal(messages[0].text,'你好');assert.equal(messages[0].id,'9223372036854775807');assert.equal(messages[0].blob,'/wA=');
+assert.throws(()=>g.frames(data.subarray(0,4)),/Incomplete/);assert.throws(()=>g.frames(data.subarray(0,data.length-1)),/Incomplete/);
+assert.equal((await g.decodeMessages(g.base64(data),undefined,[]))[0][0].field,1);
+assert.equal(g.grpcStatus([],[{name:'grpc-status',value:'7'},{name:'grpc-message',value:'no%20permission'}]).name,'PERMISSION_DENIED');assert.equal(g.grpcStatus([]).code,undefined);
+const gzip=require('node:zlib').gzipSync(data.subarray(5));const compressed=g.frame(gzip);compressed[0]=1;
+assert.equal((await g.decodeMessages(g.base64(compressed),method,[{name:'grpc-encoding',value:'gzip'}]))[0].text,'你好');
+console.log('gRPC: proto services, framing, JSON/int64/bytes, gzip, schema-free fields, malformed framing and status passed.');})().catch(e=>{console.error(e);process.exitCode=1});

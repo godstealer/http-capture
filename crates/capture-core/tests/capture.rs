@@ -30,6 +30,7 @@ async fn http_proxy_preserves_order_duplicates_binary_body_and_persists() {
         assert!(!headers.iter().any(|h| h.name.eq_ignore_ascii_case("proxy-authorization")));
         assert_eq!(read_body(&mut reader, &headers, false).await.unwrap().0, [0, 255, 128, 42]);
         reader.write_all(b"HTTP/1.1 200 OK\r\nX-Origin: first\r\nX-Origin: second\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\x00\xff\x80\x2a").await.unwrap();
+        headers
     });
     let handle = proxy::start(engine.clone(), 0).await.unwrap();
     let mut client = TcpStream::connect(handle.address).await.unwrap();
@@ -37,8 +38,9 @@ async fn http_proxy_preserves_order_duplicates_binary_body_and_persists() {
     client.write_all(request.as_bytes()).await.unwrap(); client.write_all(&[0, 255, 128, 42]).await.unwrap();
     let mut response = Vec::new(); client.read_to_end(&mut response).await.unwrap();
     assert!(response.starts_with(b"HTTP/1.1 200")); assert!(response.ends_with(&[0, 255, 128, 42]));
-    server.await.unwrap();
+    let origin_headers=server.await.unwrap();
     let flow = finish_flow(&engine).await;
+    assert_eq!(flow.response.as_ref().unwrap().sent_request_headers.as_ref().unwrap(), &origin_headers);
     assert_eq!(flow.source, "capture");
     assert_eq!(STANDARD.decode(flow.raw_request_head_base64.as_ref().unwrap()).unwrap(), request.as_bytes());
     assert_eq!(flow.request.headers[1].name, "X-A");

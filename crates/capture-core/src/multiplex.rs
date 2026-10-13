@@ -61,9 +61,11 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
                                 return Ok(());
                             }
                             let response = response_for_flow(flow)?;
-                            let (parts, body) = response.into_parts();
-                            let mut send = respond.send_response(http::Response::from_parts(parts, ()), body.is_empty())?;
-                            if !body.is_empty() { send_h2_body(&mut send, Bytes::from(body)).await?; }
+                            let (mut parts, body) = response.into_parts();
+                            let trailers=parts.extensions.remove::<http::HeaderMap>();
+                            let mut send = respond.send_response(http::Response::from_parts(parts, ()), body.is_empty() && trailers.is_none())?;
+                            if !body.is_empty() { send_h2_chunk(&mut send, Bytes::from(body), trailers.is_none()).await?; }
+                            if let Some(trailers)=trailers {send.send_trailers(trailers)?;}
                             Ok(())
                         }.await;
                         if let Err(error) = result { tracing::warn!(%error, "h2 stream failed"); respond.send_reset(h2::Reason::INTERNAL_ERROR); }
@@ -84,6 +86,11 @@ pub fn response_for_flow(flow: Flow) -> Result<http::Response<Vec<u8>>> {
     let mut output = http::Response::builder().status(response.status).body(STANDARD.decode(response.body_base64)?)?;
     for field in end_to_end(&response.headers) {
         output.headers_mut().append(http::header::HeaderName::from_bytes(field.name.as_bytes())?, http::HeaderValue::from_bytes(&header_bytes(&field.value)?)?);
+    }
+    if !response.trailers.is_empty() {
+        let mut trailers=http::HeaderMap::new();
+        for field in &response.trailers { trailers.append(http::header::HeaderName::from_bytes(field.name.as_bytes())?,http::HeaderValue::from_bytes(&header_bytes(&field.value)?)?); }
+        output.extensions_mut().insert(trailers);
     }
     Ok(output)
 }
@@ -116,11 +123,12 @@ fn ordered_headers(map: &http::HeaderMap, extensions: &http::Extensions, uri: Op
     Ok(fields)
 }
 
-fn request_h2(draft: &RequestDraft) -> Result<(http::Request<()>, Vec<u8>, Vec<String>, Vec<Header>)> {
+pub(crate) async fn request_h2(draft: &RequestDraft) -> Result<(http::Request<()>, crate::body_spool::BodySpool, Vec<String>, Vec<Header>)> {
 
     // Reuse framing/URL validation, but do not inject H1-only Host/length fields.
-    let (url, _, body, _) = prepare(draft)?;
-    ensure!(url.scheme() == "https", "h2 requires HTTPS");
+    let body=crate::body_spool::BodySpool::decode(&draft.body_base64).await?;
+    let (url, _, _) = prepare_fields(draft,body.len)?;
+    ensure!(matches!(url.scheme(), "https" | "http"), "h2 requires HTTP or HTTPS");
     let mut request = http::Request::builder().method(draft.method.as_str()).uri(url.as_str()).body(())?;
     let pseudo_names: Vec<&str> = if draft.pseudo_headers.is_empty() { vec![":method", ":scheme", ":authority", ":path"] }
         else { draft.pseudo_headers.iter().map(|h| h.name.as_str()).collect() };
@@ -144,7 +152,7 @@ fn request_h2(draft: &RequestDraft) -> Result<(http::Request<()>, Vec<u8>, Vec<S
         if name == "expect" || (!retained.contains(original) && !(name == "te" && original.value == "trailers")) {
             notes.push(format!("移除字段 {}。", original.name)); continue;
         }
-        let value = if name == "host" { authority(&url) } else if name == "content-length" { body.len().to_string() } else { original.value.clone() };
+        let value = if name == "host" { authority(&url) } else if name == "content-length" { body.len.to_string() } else { original.value.clone() };
         if value != original.value { notes.push(format!("{} 按目标/正文修正，位置不变。", original.name)); }
         request.headers_mut().append(http::header::HeaderName::from_bytes(name.as_bytes())?, http::HeaderValue::from_bytes(&header_bytes(&value)?)?);
         fields.push(Header { name, value });
@@ -152,9 +160,10 @@ fn request_h2(draft: &RequestDraft) -> Result<(http::Request<()>, Vec<u8>, Vec<S
     request.extensions_mut().insert(h2::ext::HeaderOrder(fields.iter().map(|h| h.name.clone()).collect()));
     Ok((request, body, notes, fields))
 }
-fn request(draft: &RequestDraft) -> Result<(http::Request<()>, Vec<u8>, Vec<String>)> {
+async fn request(draft: &RequestDraft) -> Result<(http::Request<()>, crate::body_spool::BodySpool, Vec<String>)> {
 
-    let (url, fields, body, mut notes) = prepare(draft)?;
+    let body=crate::body_spool::BodySpool::decode(&draft.body_base64).await?;
+    let (url, fields, mut notes) = prepare_fields(draft,body.len)?;
     ensure!(url.scheme() == "https", "h2/h3 require HTTPS");
     let mut request = http::Request::builder().method(draft.method.as_str()).uri(url.as_str()).body(())?;
     for field in fields {
@@ -232,8 +241,13 @@ pub async fn h2_send(draft: &RequestDraft, roots: &rustls::RootCertStore) -> Res
     h2_send_via(draft, roots, None).await
 }
 pub async fn h2_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, proxy: Option<&crate::upstream::UpstreamProxy>) -> Result<(CapturedResponse, Vec<String>)> {
-    request_h2(draft)?;
+    request_h2(draft).await?;
     let url = validate_url(&draft.url)?;
+    if url.scheme() == "http" {
+        let tcp = crate::upstream::connect(&url, proxy).await?;
+        ensure!(!tcp.absolute_form, "h2c requires a direct connection or SOCKS5 tunnel");
+        return h2_exchange(draft, tcp.stream).await;
+    }
     let config = crate::tls_config::config(&draft.tls, roots, "h2")?;
     let tcp = crate::upstream::connect(&url, proxy).await?.stream;
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(rustls::pki_types::ServerName::try_from(hostname(&url))?, tcp).await?;
@@ -250,23 +264,31 @@ pub async fn h2_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, pr
 }
 pub async fn h2_exchange<T>(draft: &RequestDraft, tls: T) -> Result<(CapturedResponse, Vec<String>)>
 where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
-    let (request, body, notes, sent_fields) = request_h2(draft)?;
+    let (request, mut body, notes, sent_fields) = request_h2(draft).await?;
     let (sender, connection) = h2::client::Builder::new().max_header_list_size(MAX_HEAD as u32).enable_push(false).handshake::<_, Bytes>(tls).await?;
     let _driver = Abort(tokio::spawn(async move { let _ = connection.await; }));
     let mut sender = sender.ready().await?;
-    let (response, mut stream) = sender.send_request(request, body.is_empty())?;
-    if !body.is_empty() { send_h2_body(&mut stream, Bytes::from(body)).await?; }
+    let (response, mut stream) = sender.send_request(request, body.len==0)?;
+    let mut remaining=body.len;
+    while remaining>0 {
+        let chunk=body.next_chunk().await?;ensure!(!chunk.is_empty(),"Incomplete temporary body");remaining-=chunk.len() as u64;
+        send_h2_chunk(&mut stream,Bytes::from(chunk),remaining==0).await?;
+    }
+    drop(body);
     let response = response.await?;
     let status = response.status().as_u16();
     let fields: Vec<Header> = ordered_headers(response.headers(), response.extensions(), None, None)?.into_iter().filter(|h| !h.name.starts_with(':')).collect();
-    let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: String::new(), raw_head_base64: None }).await?;
+    let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: String::new(), raw_head_base64: None }).await?;
     let mut recv = response.into_body();
     let body = recv_h2_body_observed(&mut recv, streaming).await?;
-    Ok((CapturedResponse { upstream_tls: None, sent_request_headers: Some(sent_fields), tls_version: None, status, version: "HTTP/2".into(), headers: fields, body_base64: STANDARD.encode(body), raw_head_base64: None }, notes))
+    let trailers = recv.trailers().await?.map(|map| headers(&map)).unwrap_or_default();
+    Ok((CapturedResponse { trailers, upstream_tls: None, sent_request_headers: Some(sent_fields), tls_version: None, status, version: "HTTP/2".into(), headers: fields, body_base64: STANDARD.encode(body), raw_head_base64: None }, notes))
 }
 
 pub async fn recv_h2_body(stream: &mut h2::RecvStream) -> Result<Vec<u8>> {
-    recv_h2_body_observed(stream, false).await
+    let body=recv_h2_body_observed(stream, false).await?;
+    ensure!(stream.trailers().await?.is_none(), "Request trailers are not supported yet");
+    Ok(body)
 }
 async fn recv_h2_body_observed(stream: &mut h2::RecvStream, streaming: bool) -> Result<Vec<u8>> {
     let mut body = Vec::new();
@@ -278,13 +300,13 @@ async fn recv_h2_body_observed(stream: &mut h2::RecvStream, streaming: bool) -> 
         body.extend_from_slice(&chunk);
         if streaming { crate::sse::emit(crate::sse::Event::Data(chunk.to_vec())).await?; }
     }
-    ensure!(stream.trailers().await?.is_none(), "Trailers are not supported yet");
     Ok(body)
 }
 pub async fn send_h2_body(stream: &mut h2::SendStream<Bytes>, body: Bytes) -> Result<()> {
     send_h2_chunk(stream, body, true).await
 }
-async fn send_h2_chunk(stream: &mut h2::SendStream<Bytes>, mut body: Bytes, end: bool) -> Result<()> {
+pub(crate) async fn send_h2_chunk(stream: &mut h2::SendStream<Bytes>, mut body: Bytes, end: bool) -> Result<()> {
+    if body.is_empty() { if end { stream.send_data(Bytes::new(), true)?; } return Ok(()); }
     while !body.is_empty() {
         stream.reserve_capacity(body.len().min(16384));
         let capacity = std::future::poll_fn(|cx| stream.poll_capacity(cx)).await.transpose()?.ok_or_else(|| anyhow::anyhow!("Stream closed"))?;
@@ -328,7 +350,7 @@ pub async fn h3_send(draft: &RequestDraft, roots: &rustls::RootCertStore) -> Res
     h3_send_via(draft, roots, None).await
 }
 pub async fn h3_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, proxy: Option<&crate::upstream::UpstreamProxy>) -> Result<(CapturedResponse, Vec<String>)> {
-    let (request, body, notes) = request(draft)?;
+    let (request, mut body, notes) = request(draft).await?;
     let url = validate_url(&draft.url)?;
     let host = hostname(&url);
     let mut tls = crate::tls_config::config(&draft.tls, roots, "h3")?;
@@ -358,7 +380,8 @@ pub async fn h3_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, pr
     let (mut driver, mut sender) = h3::client::builder().max_field_section_size(MAX_HEAD as u64).build(h3_quinn::Connection::new(connection.clone())).await?;
     let _driver = Abort(tokio::spawn(async move { let _ = driver.wait_idle().await; }));
     let mut stream = sender.send_request(request).await?;
-    if !body.is_empty() { stream.send_data(Bytes::from(body)).await?; }
+    loop {let chunk=body.next_chunk().await?;if chunk.is_empty(){break;}stream.send_data(Bytes::from(chunk)).await?;}
+    drop(body);
     stream.finish().await?;
     let response = stream.recv_response().await?;
     let mut body = Vec::new();
@@ -367,7 +390,7 @@ pub async fn h3_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, pr
         body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()));
     }
     ensure!(stream.recv_trailers().await?.is_none(), "Trailers are not supported yet");
-    let result = CapturedResponse { upstream_tls: Some(upstream_tls), sent_request_headers: None, tls_version: Some("TLS 1.3".into()), status: response.status().as_u16(), version: "HTTP/3".into(), headers: headers(response.headers()), body_base64: STANDARD.encode(body), raw_head_base64: None };
+    let result = CapturedResponse { trailers: vec![],  upstream_tls: Some(upstream_tls), sent_request_headers: None, tls_version: Some("TLS 1.3".into()), status: response.status().as_u16(), version: "HTTP/3".into(), headers: headers(response.headers()), body_base64: STANDARD.encode(body), raw_head_base64: None };
     connection.close(0u32.into(), b"complete");
     Ok((result, notes))
     };

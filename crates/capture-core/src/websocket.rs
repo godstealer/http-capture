@@ -37,6 +37,7 @@ struct Guard<'a> { engine: &'a Engine, flow: Flow, done: bool }
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
         if !self.done {
+            self.flow.state = "cancelled".into();
             self.flow.error = Some("WebSocket stopped: proxy shutdown or connection timeout".into());
             if let Some(ws) = &mut self.flow.websocket { ws.state = "stopped".into(); }
             let _ = self.engine.store.insert(&self.flow); let _ = self.engine.events.send(self.flow.clone());
@@ -51,7 +52,7 @@ pub async fn capture<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S
 pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S>, request: RequestDraft, raw_head: &[u8], engine: &Engine, client_tls: Option<TlsDetails>, source:&str, execution_id:Option<String>) -> Result<()> {
     let mut execution = engine.executions.begin(match execution_id {Some(id)=>id,None=>engine.executions.prepare()?})?;
     let started = Instant::now();
-    let mut guard = Guard { engine, done: false, flow: Flow {
+    let mut guard = Guard { engine, done: false, flow: Flow { state: "sending".into(),
         websocket: Some(Session { state: "connecting".into(), frames: vec![], messages:vec![] }), id: execution.id.clone(),
         started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64, duration_ms: 0, parent_id: None,
         source: source.into(), request, response: None, error: None, client_protocol: Some("HTTP/1.1".into()), client_tls,
@@ -96,7 +97,7 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
         out.extend_from_slice(b"\r\n"); server.write_all(&out).await?; server.flush().await?;
         let head = read_head(&mut server).await?;
         let (status, version, fields) = parse_response(&head)?;
-        guard.flow.response = Some(CapturedResponse { status, version, tls_version: tls_details.as_ref().and_then(|d|d.version.clone()), upstream_tls: tls_details, headers: fields.clone(), body_base64: String::new(), raw_head_base64: Some(STANDARD.encode(&head)), sent_request_headers: Some(headers) });
+        guard.flow.response = Some(CapturedResponse { trailers: vec![],  status, version, tls_version: tls_details.as_ref().and_then(|d|d.version.clone()), upstream_tls: tls_details, headers: fields.clone(), body_base64: String::new(), raw_head_base64: Some(STANDARD.encode(&head)), sent_request_headers: Some(headers) });
         check_handshake_rules(&guard.flow, &config, &script, true)?;
         ensure!(status == 101, "WebSocket upgrade rejected by server: HTTP {status}");
         ensure!(token_header(&fields, "connection", "upgrade") && requested(&fields) && single(&fields, "sec-websocket-accept")? == accept(&key), "Invalid WebSocket upgrade response");
@@ -109,6 +110,7 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
             ensure!(extension.split(';').next().unwrap_or("").trim() == "permessage-deflate" && values(&request.headers, "sec-websocket-extensions").flat_map(|v|v.split(',')).any(|v|v.split(';').next().unwrap_or("").trim() == "permessage-deflate"), "Unsupported WebSocket extension"); compressed = true;
         }
         client.write_all(&head).await?; client.flush().await?; upgraded = true;
+        guard.flow.state = "receiving".into();
         guard.flow.websocket.as_mut().unwrap().state = "open".into(); engine.store.insert(&guard.flow)?; let _ = engine.events.send(guard.flow.clone());
         let (client_read, server_write) = tokio::io::split(client);
         let (server_read, client_write) = tokio::io::split(server);
@@ -140,6 +142,7 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
         result = tokio::time::timeout(Duration::from_secs(300), operation) => result.unwrap_or_else(|_|Err(anyhow::anyhow!("WebSocket session reached 300 second limit"))),
     };
     guard.flow.websocket.as_mut().unwrap().state = if result.is_ok() { "closed" } else { "stopped" }.into();
+    guard.flow.state = if result.is_ok() {"completed"} else {"failed"}.into();
     guard.flow.error = result.as_ref().err().map(|e|format!("{e:#}")); guard.flow.duration_ms = started.elapsed().as_millis() as u64;
     engine.store.insert(&guard.flow)?; let _ = engine.events.send(guard.flow.clone()); guard.done = true;
     // Never inject an HTTP error response into an upgraded WebSocket connection.

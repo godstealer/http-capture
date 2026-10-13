@@ -1,0 +1,11 @@
+{
+  "id": "demo-header",
+  "name": "Demo headers",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "enabled": false,
+  "scope": "all",
+  "urlPattern": "^https?://127\\.0\\.0\\.1[:/]",
+  "before": "request.headers.push({name:'X-Plugin-Demo',value:'hello'}); console.log('request hook');",
+  "after": "response.headers.push({name:'X-Plugin-Response',value:'hello'}); console.log('response hook');"
+}

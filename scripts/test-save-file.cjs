@@ -1,0 +1,20 @@
+const {buildSync}=require('esbuild');
+const assert=require('node:assert/strict');
+const m={exports:{}};
+new Function('module','exports',buildSync({entryPoints:['apps/frontend/src/saveFile.ts'],bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text)(m,m.exports);
+global.window={};
+(async()=>{
+ const {chooseSave,saveText}=m.exports;
+ assert.equal(await chooseSave('test.har'),undefined);
+ window.showSaveFilePicker=async()=>{throw new DOMException('Cancelled','AbortError')};
+ assert.equal(await chooseSave('test.har'),null);
+ let data,closed=false,aborted=false;
+ const handle={name:'test.har',createWritable:async()=>({write:async blob=>{data=await blob.text()},close:async()=>{closed=true},abort:async()=>{aborted=true}})};
+ window.showSaveFilePicker=async options=>{assert.equal(options.suggestedName,'test.har');return handle};
+ assert.equal(await chooseSave('test.har'),handle);
+ assert.match(await saveText('{"ok":true}','test.har','har',handle),/test.har/);
+ assert.equal(data,'{"ok":true}');assert.equal(closed,true);assert.equal(aborted,false);
+ handle.createWritable=async()=>({write:async()=>{throw Error('disk full')},close:async()=>assert.fail('must not close failed write'),abort:async()=>{aborted=true}});
+ await assert.rejects(saveText('data','test.har','har',handle),/disk full/);assert.equal(aborted,true);
+ console.log('Save picker: supported/unsupported, cancellation, selected name, exact content, completion and write failure passed.');
+})().catch(e=>{console.error(e);process.exitCode=1});

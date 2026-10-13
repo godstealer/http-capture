@@ -22,7 +22,8 @@ pub(crate) async fn native(draft: &RequestDraft, roots: &rustls::RootCertStore) 
 }
 pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertStore, proxy: Option<&crate::upstream::UpstreamProxy>) -> Result<(CapturedResponse, Vec<String>)> {
     let config = crate::tls_config::config(&draft.tls, roots, &draft.engine)?;
-    let (url, headers, body, mut notes) = prepare(draft)?;
+    let mut body=crate::body_spool::BodySpool::decode(&draft.body_base64).await?;
+    let (url, headers, mut notes) = prepare_fields(draft,body.len)?;
     let connection = crate::upstream::connect(&url, proxy).await?;
     let tcp = connection.stream;
     let mut tls_version = None;
@@ -35,6 +36,7 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
         upstream_tls = Some(details);
         tls_version = tls.get_ref().1.protocol_version().map(|v| format!("{v:?}").replace("TLSv", "TLS ").replace('_', "."));
         if tls.get_ref().1.alpn_protocol() == Some(b"h2") {
+            drop(body);
             let (mut response, notes) = crate::multiplex::h2_exchange(draft, tls).await?;
             response.tls_version = tls_version;
             response.upstream_tls = upstream_tls;
@@ -43,7 +45,7 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
         Box::new(tls)
     } else { tcp };
     let proxy_authenticated = connection.absolute_form && connection.authorization.is_some();
-    let mut wire = encode_request(&draft.method, &url, &headers, &body)?;
+    let mut wire = encode_request_head(&draft.method, &url, &headers)?;
     if connection.absolute_form {
         let end = wire.windows(2).position(|b| b == b"\r\n").unwrap();
         let mut absolute = format!("{} {} HTTP/1.1\r\n", draft.method, url.as_str()).into_bytes();
@@ -52,6 +54,9 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
         notes.push("HTTP 请求使用 absolute-form 发送给上游代理；代理认证仅发送到上游，不保存在请求记录中。".into());
     }
     stream.write_all(&wire).await?;
+    body.send(&mut stream).await?;
+    drop(body);
+    drop(wire);
     stream.flush().await?;
     let mut sent_request_headers = headers.clone();
     if proxy_authenticated { sent_request_headers.insert(0, Header { name: "Proxy-Authorization".into(), value: "[redacted]".into() }); }
@@ -64,10 +69,10 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
         ensure!(status != 101, "WebSocket / protocol upgrade is not supported yet");
         if status < 200 { continue; }
         let no_body = draft.method == "HEAD" || status == 204 || status == 304;
-        let streaming = !no_body && crate::sse::head(&CapturedResponse { upstream_tls: upstream_tls.clone(), sent_request_headers: Some(sent_request_headers.clone()), tls_version: tls_version.clone(), status, version: version.clone(), headers: headers.clone(), body_base64: String::new(), raw_head_base64: Some(STANDARD.encode(&raw)) }).await?;
-        let (body, trailers) = if no_body { (Vec::new(), false) } else { read_body_observed(&mut reader, &headers, true, streaming).await? };
+        let streaming = !no_body && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: upstream_tls.clone(), sent_request_headers: Some(sent_request_headers.clone()), tls_version: tls_version.clone(), status, version: version.clone(), headers: headers.clone(), body_base64: String::new(), raw_head_base64: Some(STANDARD.encode(&raw)) }).await?;
+        let (body, trailers) = if no_body { (String::new(), false) } else { read_body_base64(&mut reader, &headers, true, streaming).await? };
         ensure!(!trailers, "Response trailers are not supported yet; refusing to silently discard them");
-        return Ok((CapturedResponse { upstream_tls, sent_request_headers: Some(sent_request_headers), tls_version, status, version, headers, body_base64: STANDARD.encode(body), raw_head_base64: Some(STANDARD.encode(raw)) }, notes));
+        return Ok((CapturedResponse { trailers: vec![],  upstream_tls, sent_request_headers: Some(sent_request_headers), tls_version, status, version, headers, body_base64: body, raw_head_base64: Some(STANDARD.encode(raw)) }, notes));
     }
     anyhow::bail!("Too many interim responses")
 }

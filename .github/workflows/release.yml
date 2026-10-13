@@ -105,6 +105,9 @@ jobs:
           Custom ClientHello Hex templates are available through httpcloak (TCP TLS only; ECH/PSK/0-RTT/QUIC imports rejected).
           H3 stream isolation and timeout handling improved; Windows TUN H3 remains unverified. Automatic in-app updates are not enabled.
           Linux graphics compatibility is enabled by default. For systems without FUSE, extract the portable tar.gz and run AppRun; no apt or manual environment setup needed.
+          This preview adds native HTTP/2 gRPC debugging, local JavaScript HTTP plugins, HAR progress/save dialogs, code editors and header-order verification.
+          gRPC streaming capture, plugin UI/stream hooks and full low-memory large-body processing remain incomplete.
+          Detailed completed/remaining scope: https://github.com/${GH_REPO}/blob/${SOURCE_SHA}/docs/release-2026-10-14.md
           SHA256 checksums accompany each installer.
           EOF
           if gh release view "$tag" --json isDraft --jq '.isDraft' > draft.txt 2>/dev/null; then

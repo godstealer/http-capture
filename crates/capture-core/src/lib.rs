@@ -1,4 +1,6 @@
+pub mod grpc_client;
 pub mod body_export;
+mod body_spool;
 pub mod browser_profiles;
 pub mod tls_config;
 pub mod tun;
@@ -7,6 +9,7 @@ pub mod decryption;
 pub mod executions;
 pub mod script_tools;
 pub mod scripts;
+pub mod plugins;
 pub mod intercept;
 pub mod tls_details;
 pub mod upstream;
@@ -34,11 +37,13 @@ use std::{path::Path, sync::Arc, time::{Instant, SystemTime, UNIX_EPOCH}};
 use tokio::sync::broadcast;
 
 pub struct Engine {
+    pub grpc_clients: grpc_client::Sessions,
     pub system_proxy: system_proxy::SystemProxy,
     pub websocket_clients: websocket_client::Clients,
     pub tun: tun::TunState,
     pub executions: executions::Executions,
     pub scripts: scripts::ScriptState,
+    pub plugins: plugins::Plugins,
     pub intercept: intercept::Interceptor,
     pub upstream: upstream::UpstreamState,
     pub store: Arc<store::Store>,
@@ -48,13 +53,18 @@ pub struct Engine {
     pub send_engines: transport::SendEngines,
 }
 
-struct PendingFlow<'a> { engine: &'a Engine, flow: Option<Flow> }
+struct PendingFlow<'a> { engine: &'a Engine, id: Option<String> }
 impl Drop for PendingFlow<'_> {
     fn drop(&mut self) {
-        if let Some(mut flow) = self.flow.take() {
-            if let Ok(Some(saved)) = self.engine.store.get(&flow.id) { flow = saved; }
+        if let Some(id) = self.id.take() {
+            let mut flow=match self.engine.store.get(&id) {
+                Ok(Some(flow))=>flow,
+                Ok(None)=>return, // Deleted captures must not be resurrected.
+                Err(error)=>{tracing::error!(%id,%error,"Unable to finish cancelled capture");return;}
+            };
             flow.notes.retain(|n| n != "SSE 接收中");
             flow.error = Some("请求已取消：代理停止或连接超时".into());
+            flow.state = "cancelled".into();
             if self.engine.store.insert(&flow).is_ok() { let _ = self.engine.events.send(flow); }
         }
     }
@@ -76,7 +86,7 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
+        Ok(Arc::new(Self { plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
             ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
             send_engines, upstream_roots }))
     }
@@ -103,17 +113,19 @@ impl Engine {
         mut execution: Option<executions::Execution<'_>>) -> Result<Flow> {
         let started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
         let start = Instant::now();
-        let mut flow = Flow { websocket: None, original_request: None, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
+        let mut flow = Flow { state: "sending".into(), websocket: None, original_request: None, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
             source: source.into(), request, response: None, error: None, raw_request_head_base64, notes: vec![], client_protocol };
         self.store.insert(&flow)?;
-        let _ = self.events.send(flow.clone());
-        let mut pending = PendingFlow { engine: self, flow: Some(flow.clone()) };
+        if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }
+        let mut pending = PendingFlow { engine: self, id: Some(flow.id.clone()) };
         let upstream = if source == "capture" { Ok(self.upstream.snapshot()) } else { flow.request.upstream_profile_id.as_deref().map(|id|self.upstream.profile_snapshot(id)).transpose() };
         let (mut script, revision) = if source == "capture" { self.scripts.snapshot() } else { (flow.request.scripts.clone(),0) };
         let rules = self.intercept.snapshot().config.rules;
+        let plugins=plugins::matching(&self.plugins.list(),&flow);
         let operation = async {
             let route=upstream.as_ref().map_err(|e|anyhow::anyhow!("{e:#}"))?.as_ref();
             script.validate()?;
+            plugins::run(self,&plugins,&mut flow,false).await;
             if script.enabled && !script.before.trim().is_empty() && (source != "capture" || crate::intercept::matches_rules(&rules,&flow)) {
                 self.apply_script(&mut flow, &mut script, revision, false).await?;
             }
@@ -121,8 +133,9 @@ impl Engine {
                 if d.action == "modify" { flow.original_request.get_or_insert_with(||flow.request.clone()); flow.request = d.request.unwrap(); flow.notes.push("请求已通过拦截编辑；原始请求另行保留。".into()); }
                 if d.action == "replace" { flow.response = d.response; flow.notes.push("请求未发往上游，已返回自定义响应。".into()); return Ok(()); }
             }
-            let (response, notes) = self.send_observed(&mut flow, route, script.enabled && !script.after.trim().is_empty()).await?;
+            let (response, notes) = self.send_observed(&mut flow, route, (script.enabled && !script.after.trim().is_empty())||plugins.iter().any(|p|!p.after.trim().is_empty())).await?;
             flow.response = Some(response); flow.notes.extend(notes);
+            plugins::run(self,&plugins,&mut flow,true).await;
             if script.enabled && !script.after.trim().is_empty() && (source != "capture" || crate::intercept::matches_rules(&rules,&flow)) {
                 self.apply_script(&mut flow, &mut script, revision, true).await?;
             }
@@ -131,9 +144,10 @@ impl Engine {
             }
             Ok(())
         };
+        let mut cancelled = false;
         let outcome: Result<()> = tokio::select! {
             biased;
-            _ = async { match execution.as_mut() { Some(e) => e.cancelled().await, None => std::future::pending::<()>().await } } => Err(anyhow::anyhow!("请求已取消：用户取消发送")),
+            _ = async { match execution.as_mut() { Some(e) => e.cancelled().await, None => std::future::pending::<()>().await } } => { cancelled=true; Err(anyhow::anyhow!("请求已取消：用户取消发送")) },
             result = operation => result,
         };
         if let Err(err) = outcome { flow.error = Some(format!("{err:#}")); if !flow.response.as_ref().is_some_and(|r|sse::is_sse(&r.headers)) { flow.response = None; } }
@@ -141,16 +155,16 @@ impl Engine {
         if matches!(flow.client_protocol.as_deref(), Some("HTTP/3")) { flow.notes.push(crate::multiplex::HEADER_NOTE.into()); }
         flow.notes.retain(|n| n != "SSE 接收中");
         flow.duration_ms = start.elapsed().as_millis() as u64;
+        flow.state = if cancelled { "cancelled" } else if flow.error.is_some() { "failed" } else { "completed" }.into();
         self.store.insert(&flow)?;
-        pending.flow = None;
-        let _ = self.events.send(flow.clone());
+        pending.id = None;
+        if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }
         Ok(flow)
     }
     async fn send_observed(&self, flow: &mut Flow, route: Option<&upstream::UpstreamProxy>, after_script: bool) -> transport::SendResult {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         let context = sse::Context { tx, started: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
-        let request = flow.request.clone();
-        let send = sse::UPDATES.scope(context, self.send_engines.send_via(&request, route));
+        let send = sse::UPDATES.scope(context, self.send_engines.send_via(&flow.request, route));
         tokio::pin!(send);
         let mut body = Vec::new();
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
@@ -167,6 +181,7 @@ impl Engine {
                             let config = self.intercept.snapshot().config;
                             anyhow::ensure!(!after_script && !(config.response && (config.scope == "all" || config.scope == flow.source) && crate::intercept::matches_rules(&config.rules,&check)), "SSE streaming cannot use response scripts or response interception; disable the matching response rule/script and retry");
                             flow.response = Some(response.clone());
+                            flow.state = "receiving".into();
                             flow.notes.push("SSE 接收中".into());
                             flow.notes.push("SSE 实时流：最多 300 秒 / 8 MiB；停止或超限保留已接收正文。".into());
                         }
@@ -178,7 +193,7 @@ impl Engine {
                     sse::downstream(event).await?;
                 }
                 result = &mut send, if completed.is_none() => completed = Some(result),
-                _ = tick.tick(), if dirty => { self.store.insert(flow)?; let _ = self.events.send(flow.clone()); dirty = false; }
+                _ = tick.tick(), if dirty => { self.store.insert(flow)?; if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); } dirty = false; }
             }
         }
     }
@@ -195,7 +210,7 @@ impl Engine {
         flow.notes.push(format!("{stage}脚本执行完成")); Ok(())
     }
     pub fn record_failure(&self, request: RequestDraft, raw_head: String, error: String) -> Result<()> {
-        let flow = Flow { websocket: None, original_request: None, original_response: None, client_tls: None, id: uuid::Uuid::new_v4().to_string(), parent_id: None,
+        let flow = Flow { state: "failed".into(), websocket: None, original_request: None, original_response: None, client_tls: None, id: uuid::Uuid::new_v4().to_string(), parent_id: None,
             started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
             duration_ms: 0, source: "capture".into(), request, response: None, error: Some(error),
             raw_request_head_base64: Some(raw_head), notes: vec!["请求未转发；正文可能未完整接收。".into()], client_protocol: None };

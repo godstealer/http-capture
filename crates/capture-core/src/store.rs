@@ -50,6 +50,7 @@ impl Store {
         let count: usize = tx.query_row("SELECT count(*) FROM import_rows WHERE job=?1", [id], |r| r.get(0))?;
         anyhow::ensure!(count == offset, "Import offset mismatch; abort and retry");
         for (index, mut flow) in flows.into_iter().enumerate() {
+            flow.state = "imported".into();
             flow.id = uuid::Uuid::new_v4().to_string(); flow.parent_id = None; flow.source = "capture".into();
             flow.request.scripts = Default::default(); flow.request.upstream_profile_id = None;
             if let Some(r) = &mut flow.original_request { r.scripts = Default::default(); r.upstream_profile_id = None; }
@@ -98,6 +99,7 @@ impl Store {
             COMMIT;")?;
         conn.execute_batch("CREATE TABLE IF NOT EXISTS flow_bodies(flow_id TEXT NOT NULL, slot TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(flow_id,slot));
           CREATE TRIGGER IF NOT EXISTS flow_bodies_delete AFTER DELETE ON flows BEGIN DELETE FROM flow_bodies WHERE flow_id=old.id; END;")?;
+        conn.execute("UPDATE flows SET data=json_set(data,'$.state','interrupted') WHERE json_extract(data,'$.state') IN ('sending','receiving')", [])?;
         Ok(Self(Mutex::new(conn), uuid::Uuid::new_v4().to_string()))
     }
     pub fn insert(&self, flow: &Flow) -> Result<()> {
@@ -118,6 +120,7 @@ impl Store {
         let mut conn = self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
         let tx = conn.transaction()?;
         for flow in &mut flows {
+            flow.state = "imported".into();
             flow.id = uuid::Uuid::new_v4().to_string(); flow.parent_id = None; flow.source = "capture".into();
             flow.request.scripts = Default::default(); flow.request.upstream_profile_id = None;
             if let Some(r) = &mut flow.original_request { r.scripts = Default::default(); r.upstream_profile_id = None; }
@@ -165,14 +168,25 @@ fn body_slots(flow:&mut Flow, mut visit:impl FnMut(&str,&mut String)->Result<()>
  Ok(())
 }
 fn write_flow(conn:&Connection,flow:&Flow)->Result<()> {
- use base64::{Engine as _,engine::general_purpose::STANDARD};
+ use base64::engine::general_purpose::STANDARD;
  if conn.query_row("SELECT EXISTS(SELECT 1 FROM deleted_flows WHERE id=?1)",[&flow.id],|r|r.get::<_,bool>(0))? {return Ok(());}
  let mut stored=flow.clone();
  conn.execute("DELETE FROM flow_bodies WHERE flow_id=?1",[&flow.id])?;
  body_slots(&mut stored,|slot,body| {
   if body.len()>BODY_INLINE_LIMIT*4/3 {
-   let bytes=STANDARD.decode(body.as_bytes())?;
-   conn.execute("INSERT INTO flow_bodies(flow_id,slot,body) VALUES(?1,?2,?3)",params![flow.id,slot,bytes])?;
+   // Allocate inside SQLite, then decode directly into the incremental BLOB.
+   // The enclosing transaction rolls back metadata and partial writes on errors.
+   anyhow::ensure!(body.len()%4==0,"Invalid Base64 body length");
+   let padding=body.as_bytes().iter().rev().take_while(|&&b|b==b'=').count();
+   anyhow::ensure!(padding<=2,"Invalid Base64 padding");
+   let size=i32::try_from(body.len()/4*3-padding)?;
+   conn.execute("INSERT INTO flow_bodies(flow_id,slot,body) VALUES(?1,?2,?3)",params![flow.id,slot,rusqlite::blob::ZeroBlob(size)])?;
+   let rowid=conn.last_insert_rowid();
+   let mut blob=conn.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,false)?;
+   let mut decoder=base64::read::DecoderReader::new(body.as_bytes(),&STANDARD);
+   let written=std::io::copy(&mut decoder,&mut blob)?;
+   anyhow::ensure!(written==size as u64,"Decoded body size mismatch");
+   blob.close()?;
    // Explicit marker prevents a missing BLOB from looking like an empty body.
    *body=format!("@body:{slot}");
   }
@@ -182,13 +196,16 @@ fn write_flow(conn:&Connection,flow:&Flow)->Result<()> {
  Ok(())
 }
 fn restore_bodies(conn:&Connection,raw:&str)->Result<Flow> {
- use base64::{Engine as _,engine::general_purpose::STANDARD};
+ use base64::engine::general_purpose::STANDARD;
  let mut flow:Flow=serde_json::from_str(raw)?;let id=flow.id.clone();
  body_slots(&mut flow,|slot,body| {
   if body.starts_with("@body:") {
    anyhow::ensure!(body==&format!("@body:{slot}"),"Invalid stored body reference");
-   let bytes:Vec<u8>=conn.query_row("SELECT body FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,slot],|r|r.get(0))?;
-   *body=STANDARD.encode(bytes);
+   let rowid:i64=conn.query_row("SELECT rowid FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,slot],|r|r.get(0))?;
+   let mut blob=conn.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,true)?;
+   let mut encoder=base64::write::EncoderWriter::new(Vec::new(),&STANDARD);
+   std::io::copy(&mut blob,&mut encoder)?;
+   *body=String::from_utf8(encoder.finish()?)?;
   }
   Ok(())
  })?;
@@ -374,6 +391,23 @@ mod body_storage_tests {
   assert_eq!(serde_json::to_value(restored).unwrap(),serde_json::to_value(&f).unwrap());
   store.0.lock().unwrap().execute("DELETE FROM flow_bodies WHERE slot='response'",[]).unwrap();
   assert!(store.get(&f.id).is_err());assert!(store.list().is_err());
+ }
+ #[test]
+ fn incremental_blob_padding_and_late_failure_rollback(){
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("large.db")).unwrap();
+  let mut flow=sample();
+  for extra in 0..3 {
+   let bytes:Vec<u8>=(0..(9*1024*1024+extra)).map(|i|(i%251) as u8).collect();
+   flow.request.body_base64=STANDARD.encode(&bytes);
+   store.insert(&flow).unwrap();
+   assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,flow.request.body_base64);
+  }
+  // Fail after several megabytes have already reached SQLite, not at the prefix.
+  let mut invalid=flow.clone();let len=invalid.request.body_base64.len();
+  invalid.request.body_base64.replace_range(len-8..len-7,"!");
+  assert!(store.insert(&invalid).is_err());
+  assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,flow.request.body_base64);
+  assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),1);
  }
  #[test]
  fn imports_and_failed_updates_are_atomic(){

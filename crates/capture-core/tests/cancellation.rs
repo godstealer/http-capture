@@ -16,7 +16,7 @@ async fn cancel_before_start_records_same_id_without_sending() {
     let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
     let id=e.executions.prepare().unwrap(); assert!(e.executions.cancel(&id));
     let f=e.replay(draft(format!("http://{}/",listener.local_addr().unwrap())),None,Some(id.clone())).await.unwrap();
-    assert_eq!(f.id,id); assert!(f.error.unwrap().contains("用户取消")); assert!(f.response.is_none());
+    assert_eq!(f.state,"cancelled"); assert_eq!(f.id,id); assert!(f.error.unwrap().contains("用户取消")); assert!(f.response.is_none());
     assert!(!e.executions.cancel(&id));
     assert!(e.replay(draft("http://localhost/".into()),None,Some(id.clone())).await.is_err());
     assert_eq!(e.store.list().unwrap()[0].id,id);
@@ -31,6 +31,7 @@ async fn cancelling_network_closes_socket_without_affecting_other_request() {
     let a=tokio::spawn(async move {other.replay(draft(aurl),None,Some(aid)).await.unwrap()});
     let (mut socket,_)=bounded(listener.accept()).await.unwrap(); let mut buf=[0;4096];
     assert!(bounded(socket.read(&mut buf)).await.unwrap()>0);
+    assert_eq!(e.store.get(&id).unwrap().unwrap().state,"sending");
     assert!(e.replay(draft(url.clone()),None,Some(id.clone())).await.is_err());
     let other=e.clone(); let b=tokio::spawn(async move {other.replay(draft(url),None,None).await.unwrap()});
     let (mut second,_)=bounded(listener.accept()).await.unwrap();
@@ -39,7 +40,7 @@ async fn cancelling_network_closes_socket_without_affecting_other_request() {
     let f=bounded(a).await.unwrap(); assert!(f.error.unwrap().contains("用户取消"));
     assert_eq!(bounded(socket.read(&mut buf)).await.unwrap(),0);
     second.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap(); drop(second);
-    let f=bounded(b).await.unwrap(); assert!(f.error.is_none()); assert_eq!(f.response.unwrap().status,200);
+    let f=bounded(b).await.unwrap(); assert_eq!(f.state,"completed"); assert!(f.error.is_none()); assert_eq!(f.response.unwrap().status,200);
 }
 #[tokio::test]
 async fn cancellation_cleans_request_and_response_breakpoints() {

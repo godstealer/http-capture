@@ -47,7 +47,8 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
   const contentType = headers.find(h => h.name.toLowerCase() === 'content-type')?.value ?? '';
   const encoding = headers.find(h => h.name.toLowerCase() === 'content-encoding')?.value ?? '';
   const isSse = contentType.split(';')[0].trim().toLowerCase() === 'text/event-stream';
-  const canPreview = result?.language === 'html' && !result.binary;
+  const isSvg = contentType.split(';')[0].trim().toLowerCase() === 'image/svg+xml';
+  const canPreview = !!result && (result.language === 'html' || isSvg) && !result.binary;
   // Empty sandbox blocks scripts, forms, popups and access to the app origin.
   // Place CSP before untrusted markup so resources cannot phone home.
   const preview = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"><meta charset="utf-8">${result?.raw ?? ''}`;
@@ -86,7 +87,7 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
   return <div className="formatted-response">
     <div className="format-toolbar"><div>{[['pretty', t("格式化")], ['raw', t("原文")], ['base64', 'Base64']].map(([key, label]) =>
       <button key={key} aria-pressed={mode === key} onClick={() => setMode(key)}>{t(label)}</button>)}</div>
-      <button disabled={!canPreview} title={t("HTML 静态预览")} aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>{t("预览")}</button>
+      <button disabled={!canPreview} title={t("HTML / SVG 静态预览")} aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>{t("预览")}</button>
       <select aria-label={t("响应格式")} value={parser} onChange={e => setParser(e.target.value)}>
         <option value="auto">{t("自动识别")}</option><option value="json">JSON</option><option value="html">HTML</option>
         <option value="babel">JavaScript</option><option value="css">CSS</option><option value="text">{t("纯文本")}</option>
@@ -94,7 +95,7 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
       {downloads}<button disabled={!result && mode !== 'base64'} onClick={() => onCopy(text)}>{t("复制当前内容")}</button>
     </div>
     {result?.error && <div className="format-note" role="status">{t(result.error)}{result.binary ? t("（当前显示 Base64）") : ''}</div>}
-    {isSse && mode === 'pretty' && result && !result.binary ? <div className="formatted-scroll"><div className="format-note">{t('SSE 事件 · 收到空行后显示完整事件；原文包含心跳和未完成事件。')}</div>{parseSse(result.raw).map((event, i) => <details key={i} open><summary>#{i + 1} · {event.event}{event.id ? ` · ID: ${event.id}` : ''}{event.retry ? ` · retry: ${event.retry} ms` : ''}</summary><pre>{event.data}</pre></details>)}</div> : mode === 'preview' && canPreview ? <div className="response-preview"><div className="format-note">{t("静态 HTML 预览 · 脚本与外部资源已禁用")}</div><iframe title={t("响应 HTML 预览")} sandbox="" referrerPolicy="no-referrer" srcDoc={preview} /></div> : <div className="formatted-scroll">{!result && mode !== 'base64' ? <p>{t("正在处理正文…")}</p> : text
+    {isSse && mode === 'pretty' && result && !result.binary ? <div className="formatted-scroll"><div className="format-note">{t('SSE 事件 · 收到空行后显示完整事件；原文包含心跳和未完成事件。')}</div>{parseSse(result.raw).map((event, i) => <details key={i} open><summary>#{i + 1} · {event.event}{event.id ? ` · ID: ${event.id}` : ''}{event.retry ? ` · retry: ${event.retry} ms` : ''}</summary><pre>{event.data}</pre></details>)}</div> : mode === 'preview' && canPreview ? <div className="response-preview"><div className="format-note">{t("静态 HTML / SVG 预览 · 脚本与外部资源已禁用")}</div><iframe title={t("响应 HTML 预览")} sandbox="" referrerPolicy="no-referrer" srcDoc={preview} /></div> : <div className="formatted-scroll">{!result && mode !== 'base64' ? <p>{t("正在处理正文…")}</p> : text
       ? <Suspense fallback={<pre>{text}</pre>}><CodeView text={text} language={mode === 'base64' || result?.binary ? 'text' : result?.language ?? 'text'} /></Suspense> : <p>{t("（空正文）")}</p>}</div>
     }
   </div>;

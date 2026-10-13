@@ -8,7 +8,7 @@ impl EngineContract<RequestDraft,capture_core::upstream::UpstreamProxy> for Prob
     fn send<'a>(&'a self, _: &'a RequestDraft) -> SendFuture<'a> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok((CapturedResponse { upstream_tls: None, sent_request_headers: None, tls_version: None, status: 204, version: "HTTP/1.1".into(), headers: vec![],
+            Ok((CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: None, tls_version: None, status: 204, version: "HTTP/1.1".into(), headers: vec![],
                 body_base64: String::new(), raw_head_base64: None }, vec![self.id.into()]))
         })
     }

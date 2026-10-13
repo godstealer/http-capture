@@ -94,6 +94,24 @@ pub async fn read_body_observed<R: AsyncBufRead + Unpin>(reader: &mut R, headers
     Ok((body,trailers))
 }
 
+/// Encode as bytes arrive; retain the public Base64 representation without a
+/// second full-sized decoded body. EncoderWriter preserves partial triplets.
+pub async fn read_body_base64<R: AsyncBufRead + Unpin>(reader:&mut R,headers:&[Header],eof_body:bool,streaming:bool)->Result<(String,bool)> {
+    struct Sink(base64::write::EncoderWriter<'static,base64::engine::GeneralPurpose,Vec<u8>>);
+    impl AsyncWrite for Sink {
+        fn poll_write(mut self:std::pin::Pin<&mut Self>,_:&mut std::task::Context<'_>,bytes:&[u8])->std::task::Poll<std::io::Result<usize>> {
+            std::task::Poll::Ready(std::io::Write::write(&mut self.0,bytes))
+        }
+        fn poll_flush(mut self:std::pin::Pin<&mut Self>,_:&mut std::task::Context<'_>)->std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(std::io::Write::flush(&mut self.0))
+        }
+        fn poll_shutdown(self:std::pin::Pin<&mut Self>,_:&mut std::task::Context<'_>)->std::task::Poll<std::io::Result<()>> {std::task::Poll::Ready(Ok(()))}
+    }
+    let mut sink=Sink(base64::write::EncoderWriter::new(Vec::new(),&STANDARD));
+    let (_,trailers)=copy_body(reader,&mut sink,headers,eof_body,if streaming {MAX_BODY as u64}else{u64::MAX},streaming).await?;
+    Ok((String::from_utf8(sink.0.finish()?)?,trailers))
+}
+
 /// Stream decoded entity bytes into a caller-owned destination with bounded memory.
 /// Leaves the next message unread. On error the destination may contain a prefix;
 /// callers must discard it or explicitly mark it incomplete. Does not flush/close it.
@@ -175,6 +193,11 @@ pub fn end_to_end(headers: &[Header]) -> Vec<Header> {
 }
 
 pub fn prepare(draft: &RequestDraft) -> Result<(Url, Vec<Header>, Vec<u8>, Vec<String>)> {
+    let body = STANDARD.decode(&draft.body_base64).context("Invalid body base64")?;
+    let (url,headers,notes)=prepare_fields(draft,body.len() as u64)?;
+    Ok((url,headers,body,notes))
+}
+pub(crate) fn prepare_fields(draft:&RequestDraft,body_len:u64)->Result<(Url,Vec<Header>,Vec<String>)> {
     ensure!(token(&draft.method), "Invalid method");
     ensure!(!["CONNECT", "TRACE"].contains(&draft.method.as_str()), "CONNECT and TRACE are not supported by the editor");
     let url = validate_url(&draft.url)?;
@@ -183,7 +206,6 @@ pub fn prepare(draft: &RequestDraft) -> Result<(Url, Vec<Header>, Vec<u8>, Vec<S
     ensure!(values(&draft.headers, "host").count() <= 1, "Multiple Host fields are ambiguous");
     ensure!(values(&draft.headers, "content-length").count() <= 1, "Multiple Content-Length fields are ambiguous");
     ensure!(values(&draft.headers, "expect").all(|v| v.eq_ignore_ascii_case("100-continue")), "Unsupported Expect header");
-    let body = STANDARD.decode(&draft.body_base64).context("Invalid body base64")?;
     let mut headers = end_to_end(&draft.headers);
     let mut notes = Vec::new();
     if values(&headers, "expect").next().is_some() {
@@ -196,16 +218,21 @@ pub fn prepare(draft: &RequestDraft) -> Result<(Url, Vec<Header>, Vec<u8>, Vec<S
         if h.value != host { h.value = host; notes.push("Host 已按目标 URL 更新，位置保持不变。".into()); }
     } else { headers.insert(0, Header { name: "Host".into(), value: host }); notes.push("自动补充 Host。".into()); }
     if let Some(h) = headers.iter_mut().find(|h| h.name.eq_ignore_ascii_case("content-length")) {
-        if h.value != body.len().to_string() { notes.push("Content-Length 已按正文字节数更新。".into()); }
-        h.value = body.len().to_string();
-    } else if !body.is_empty() || matches!(draft.method.as_str(), "POST" | "PUT" | "PATCH") {
-        headers.push(Header { name: "Content-Length".into(), value: body.len().to_string() });
+        if h.value != body_len.to_string() { notes.push("Content-Length 已按正文字节数更新。".into()); }
+        h.value = body_len.to_string();
+    } else if body_len != 0 || matches!(draft.method.as_str(), "POST" | "PUT" | "PATCH") {
+        headers.push(Header { name: "Content-Length".into(), value: body_len.to_string() });
         notes.push("自动补充 Content-Length。".into());
     }
-    Ok((url, headers, body, notes))
+    Ok((url, headers, notes))
 }
 
 pub fn encode_request(method: &str, url: &Url, headers: &[Header], body: &[u8]) -> Result<Vec<u8>> {
+    let mut out=encode_request_head(method,url,headers)?;
+    out.extend_from_slice(body);Ok(out)
+}
+
+pub fn encode_request_head(method:&str,url:&Url,headers:&[Header])->Result<Vec<u8>> {
     let target = &url[url::Position::BeforePath..url::Position::AfterQuery];
     let mut out = format!("{method} {target} HTTP/1.1\r\n").into_bytes();
     for h in headers {
@@ -214,7 +241,7 @@ pub fn encode_request(method: &str, url: &Url, headers: &[Header], body: &[u8]) 
     }
     out.extend_from_slice(b"Connection: close\r\n\r\n");
     ensure!(out.len() <= MAX_HEAD, "Encoded headers exceed limit");
-    out.extend_from_slice(body); Ok(out)
+    Ok(out)
 }
 
 pub fn ensure_browser_header_order(headers: &[Header]) -> Result<()> {
@@ -234,6 +261,23 @@ pub fn ensure_browser_header_order(headers: &[Header]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn base64_stream_preserves_triplets_and_message_boundaries() {
+        for size in [0,1,2,3,16383,16384,16385,100001] {
+            let bytes:Vec<u8>=(0..size).map(|n|(n%251) as u8).collect();
+            let mut wire=bytes.clone();wire.extend_from_slice(b"NEXT");
+            let mut reader=tokio::io::BufReader::with_capacity(7,wire.as_slice());
+            let headers=vec![Header{name:"Content-Length".into(),value:size.to_string()}];
+            let (encoded,trailers)=read_body_base64(&mut reader,&headers,false,false).await.unwrap();
+            assert_eq!(encoded,STANDARD.encode(bytes));assert!(!trailers);
+            let mut next=Vec::new();reader.read_to_end(&mut next).await.unwrap();assert_eq!(next,b"NEXT");
+        }
+        let headers=vec![Header{name:"Transfer-Encoding".into(),value:"chunked".into()}];
+        let mut reader=&b"1\r\na\r\n2\r\nbc\r\n1\r\nd\r\n0\r\n\r\n"[..];
+        assert_eq!(read_body_base64(&mut reader,&headers,false,false).await.unwrap().0,"YWJjZA==");
+        let mut short=&b"abc"[..];let headers=vec![Header{name:"Content-Length".into(),value:"4".into()}];
+        assert!(read_body_base64(&mut short,&headers,false,false).await.is_err());
+    }
     #[test]
     fn capture_keeps_interleaving_and_casing() {
         let (_, _, headers) = parse_request(b"GET / HTTP/1.1\r\nX-A: 1\r\nX-B: 2\r\nx-a: 3\r\n\r\n").unwrap();

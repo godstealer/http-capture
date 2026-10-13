@@ -1,3 +1,6 @@
+import GrpcPanel from './GrpcPanel';
+import { headerOrderSource } from './headerOrderSource';
+import { FileProgress } from './FileProgress';
 import { t } from './i18n';
 import { invoke } from './api';
 import { importSession } from './importSession';
@@ -71,28 +74,34 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
   const anchor = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [fileBusy, setFileBusy] = useState(false);
+  const [rawHar, setRawHar] = useState(true);
   const [fileMessage, setFileMessage] = useState('');
   async function save(items: Flow[], format: 'json' | 'har' = 'json') {
     if (fileBusy) return;
+    setFileMessage(t("处理中…"));
     setFileBusy(true);
-    try { setFileMessage(await saveSession(items, format)); } catch (e) { setFileMessage(String(e)); } finally { setFileBusy(false); }
+    try { setFileMessage(await saveSession(items, format, message=>setFileMessage(t(message)), rawHar)); } catch (e) { setFileMessage(String(e)); } finally { setFileBusy(false); }
   }
   async function remove(ids: string[]) {
     if (fileBusy || !ids.length) return;
+    setFileMessage(t("处理中…"));
     setFileBusy(true);
     try { for (let i = 0; i < ids.length; i += 10000) await invoke('delete_flows', { ids: ids.slice(i, i + 10000) }); const removed = new Set(ids); onFlowsChanged(flows.filter(f => !removed.has(f.id))); setSelected(previous => previous && ids.includes(previous) ? null : previous); setChecked(previous => new Set([...previous].filter(id => !ids.includes(id)))); setFileMessage(t("已删除 {v0} 条记录", { v0: ids.length })); }
     catch (e) { setFileMessage(String(e)); } finally { setFileBusy(false); }
   }
   async function importFile(file: File) {
+    setFileMessage(t("正在解析文件…"));
     setFileBusy(true);
     try {
-      const count = await importSession(file, (done, total) => setFileMessage(`${done} / ${total}`));
+      const count = await importSession(file, (done, total) => setFileMessage(done === total ? t("正在提交导入记录…") : t("正在导入 {v0} / {v1} 条记录", {v0:done,v1:total})));
+      setFileMessage(t('正在刷新记录…'));
       onFlowsChanged(await invoke<Flow[]>('list_flows')); setQuery(''); setFilter('all');
       setFileMessage(t("已导入 {v0} 条记录", { v0: count }));
     } catch (e) { setFileMessage(String(e)); } finally { setFileBusy(false); }
   }
   async function databaseAction(command: string) {
     if (fileBusy) return;
+    setFileMessage(t("处理中…"));
     setFileBusy(true);
     try {
       const result = await invoke<string | number>(command);
@@ -174,11 +183,13 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
   function requestDelete(ids: string[]) { if (desktop && !fileBusy && ids.length) void remove(ids); }
   const flow = filtered.find(f => f.id === selected);
   return <main className={`capture-workbench ${flow ? 'with-inspector' : ''}`}>
+    {fileBusy && <FileProgress message={fileMessage} />}
     <div className="capture-filter" aria-label={t("会话管理")}>
       <button ref={columnButton} aria-expanded={columnsOpen} aria-controls="capture-column-settings" onClick={() => setColumnsOpen(!columnsOpen)}>{t("列设置")}</button>
       <button disabled={!desktop || fileBusy} onClick={() => fileInput.current?.click()}>{t("导入 HAR / 会话")}</button>
-      <input ref={fileInput} hidden type="file" accept=".har,.json,application/json" onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void importFile(file); }} />
+      <input ref={fileInput} hidden type="file"  onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void importFile(file); }} />
       <button disabled={!filtered.length} onClick={() => void save(filtered)}>{t("保存当前列表（")}{filtered.length}）</button>
+      <select aria-label={t("HAR 正文模式")} value={rawHar ? 'raw' : 'decoded'} onChange={e=>setRawHar(e.target.value==='raw')} disabled={fileBusy}><option value="raw">{t("原始正文（快速）")}</option><option value="decoded">{t("解压正文（兼容）")}</option></select>
       <button disabled={fileBusy || !filtered.length} onClick={() => void save(filtered, 'har')}>{t("导出列表 HAR")}</button>
       <button disabled={fileBusy || !picked.length} onClick={() => void save(picked, 'har')}>{t("导出选中 HAR")}</button>
       <button disabled={!picked.length} onClick={() => void save(picked)}>{t("保存选中（")}{picked.length}）</button>
@@ -224,8 +235,8 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
     {!filtered.length && <div className="capture-empty"><div className="capture-empty-symbol"><Radio size={30} strokeWidth={1.3} /></div><h2>{captured.length ? t("没有匹配的请求") : running ? t("正在等待请求") : t("暂无捕获的请求")}</h2><p>{captured.length ? t("调整筛选条件以查看其他请求。") : desktop ? t("启动捕获，将客户端代理设置为 {v0}。", { v0: address }) : t("连接桌面抓包内核后，实际请求会显示在这里。")}</p><small>{captured.length ? t("已捕获的记录仍保留在当前会话中") : t("选中请求查看详情 · 发送到重放后进行编辑")}</small></div>}
     </div>
     {flow && <section className="capture-inspector"><div className="inspector-heading"><span className={`method ${flow.request.method.toLowerCase()}`}>{flow.request.method}</span><code title={flow.request.url}>{flow.request.url}</code>{flow.notes.includes("SSE 接收中") && <button className="text-button" onClick={() => void invoke("cancel_replay", { executionId: flow.id }).catch(e => setFileMessage(String(e)))}>{t("停止 SSE")}</button>}<button className="text-button" onClick={() => onReplay(flow)}><Send size={13} />{t("发送到重放")}</button><div className="layout-direction" aria-label={t("请求响应布局")}>{([['row', t("左右")], ['column', t("上下")]] as const).map(([value, label]) => <button key={value} aria-pressed={direction === value} onClick={() => { setDirection(value); try { localStorage.setItem('http-capture.layout.inspector-direction', value); } catch { /* Optional persistence. */ } }}>{t(label)}</button>)}</div><button className="icon-button" aria-label={t("关闭详情")} onClick={() => setSelected(null)}><X size={15} /></button></div>
-      <details className="capture-notes"><summary>{t("转发说明 ·")}{flow.notes.length} {t("项调整与限制")}</summary><p>{t("原始头部显示接收到的 HTTP/1 报文字节（按单字节字符映射展示）；正文已移除传输分块边界，保留内容编码。原始请求头不代表代理实际发出的头部。")}</p>{flow.notes.map((note, index) => <p key={index}>{note}</p>)}</details><SplitPane key={direction} storageKey={`capture-messages-${direction}`} label={t("调整请求与响应大小")} direction={direction} className="inspector-split" min={20} max={80}><section><div className="inspector-tabs"><strong><ArrowUp size={13} />{t("请求")}</strong>{[['overview', t("总览")], ...messageTabs, ['tls', 'TLS'], ['order', 'Header Order']].map(([key, label]) => <button key={key} className={`tab ${requestTab === key ? 'active' : ''}`} onClick={() => setRequestTab(key)}>{t(label)}</button>)}<button className="icon-button" title={t("复制请求 URL")} onClick={() => onCopy(flow.request.url)}><Copy size={13} /></button></div><div className="inspector-scroll">{requestTab === 'overview' ? <RequestOverview request={flow.request} flow={flow} /> : requestTab === 'tls' ? <TlsDetails flow={flow} /> : requestTab === 'order' ? <HeaderOrder onCopy={onCopy} captured original={!!flow.rawRequestHeadBase64 || !!flow.request.pseudoHeaders?.length} headers={[...((flow.originalRequest ?? flow.request).pseudoHeaders ?? []), ...(flow.originalRequest ?? flow.request).headers]} sent={flow.response?.sentRequestHeaders} /> : <MessageView tab={requestTab} headers={[...((flow.originalRequest ?? flow.request).pseudoHeaders ?? []), ...(flow.originalRequest ?? flow.request).headers]} body={(flow.originalRequest ?? flow.request).bodyBase64} raw={flow.rawRequestHeadBase64} />}</div></section>
-      <section><div className="inspector-tabs"><strong><ArrowDown size={13} />{t("响应")}</strong>{messageTabs.map(([key, label]) => <button key={key} className={`tab ${responseTab === key ? 'active' : ''}`} onClick={() => setResponseTab(key)}>{t(label)}</button>)}<span className="inspector-status">{flow.response?.status} · {flow.durationMs} ms</span></div><div className={responseTab === 'body' ? 'inspector-body' : 'inspector-scroll'}>{flow.error && <div className="error-box">{flow.error}</div>}{flow.websocket && responseTab === 'body' ? <WebSocketFrames flow={flow} onCopy={onCopy} /> : flow.response ? responseTab === 'body' ? <ResponseBody key={flow.id} body={flow.response.bodyBase64} headers={flow.response.headers} onCopy={onCopy} /> : <MessageView tab={responseTab} headers={flow.response.headers} body={flow.response.bodyBase64} raw={flow.response.rawHeadBase64} /> : <p>{t("尚无响应")}</p>}</div></section></SplitPane>
+      <details className="capture-notes"><summary>{t("转发说明 ·")}{flow.notes.length} {t("项调整与限制")}</summary><p>{t("原始头部显示接收到的 HTTP/1 报文字节（按单字节字符映射展示）；正文已移除传输分块边界，保留内容编码。原始请求头不代表代理实际发出的头部。")}</p>{flow.notes.map((note, index) => <p key={index}>{note}</p>)}</details><SplitPane key={direction} storageKey={`capture-messages-${direction}`} label={t("调整请求与响应大小")} direction={direction} className="inspector-split" min={20} max={80}><section><div className="inspector-tabs"><strong><ArrowUp size={13} />{t("请求")}</strong>{[['overview', t("总览")], ...messageTabs, ['tls', 'TLS'], ['grpc', 'gRPC'], ['order', 'Header Order']].map(([key, label]) => <button key={key} className={`tab ${requestTab === key ? 'active' : ''}`} onClick={() => setRequestTab(key)}>{t(label)}</button>)}<button className="icon-button" title={t("复制请求 URL")} onClick={() => onCopy(flow.request.url)}><Copy size={13} /></button></div><div className="inspector-scroll">{requestTab === 'grpc' ? <GrpcPanel draft={flow.originalRequest??flow.request} flow={flow}/> : requestTab === 'overview' ? <RequestOverview request={flow.request} flow={flow} /> : requestTab === 'tls' ? <TlsDetails flow={flow} /> : requestTab === 'order' ? <HeaderOrder onCopy={onCopy} captured original={headerOrderSource(flow).original} headers={headerOrderSource(flow).headers} sent={flow.response?.sentRequestHeaders} /> : <MessageView tab={requestTab} headers={[...((flow.originalRequest ?? flow.request).pseudoHeaders ?? []), ...(flow.originalRequest ?? flow.request).headers]} body={(flow.originalRequest ?? flow.request).bodyBase64} raw={flow.rawRequestHeadBase64} />}</div></section>
+      <section><div className="inspector-tabs"><strong><ArrowDown size={13} />{t("响应")}</strong>{messageTabs.map(([key, label]) => <button key={key} className={`tab ${responseTab === key ? 'active' : ''}`} onClick={() => setResponseTab(key)}>{t(label)}</button>)}<span className="inspector-status">{flow.response?.status} · {flow.durationMs} ms</span></div><div className={responseTab === 'body' ? 'inspector-body' : 'inspector-scroll'}>{flow.error && <div className="error-box">{flow.error}</div>}{flow.websocket && responseTab === 'body' ? <WebSocketFrames flow={flow} onCopy={onCopy} /> : flow.response ? responseTab === 'body' ? <ResponseBody key={flow.id} body={flow.response.bodyBase64} headers={flow.response.headers} onCopy={onCopy} /> : <MessageView tab={responseTab} headers={flow.response.headers} body={flow.response.bodyBase64} raw={flow.response.rawHeadBase64} /> : <p role="status">{flow.error ? t("请求失败，未收到响应") : ["sending", "receiving"].includes(flow.state ?? "") ? t("请求中，等待响应…") : flow.state === "interrupted" ? t("请求已中断") : t("尚无响应")}</p>}</div></section></SplitPane>
     </section>}
     </SplitPane>
     {menu && active && <RequestMenu selectionCount={menuIds.current.length} onSave={() => void save(flows.filter(f => menuIds.current.includes(f.id)))} onDelete={desktop && !fileBusy ? () => requestDelete(menuIds.current) : undefined} target={menu} onClose={() => setMenu(null)} onEdit={onReplay} onReplay={onReplayNow} onCopy={onCopy} replayDisabled={!desktop || busy} />}

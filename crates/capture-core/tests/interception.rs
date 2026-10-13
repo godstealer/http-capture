@@ -3,7 +3,7 @@ use std::sync::{Arc,Mutex};
 struct Probe(Arc<Mutex<Vec<RequestDraft>>>);
 impl EngineContract<RequestDraft,capture_core::upstream::UpstreamProxy> for Probe {
  fn id(&self)-> &'static str {"probe"} fn profiles(&self)->Vec<String>{vec!["native".into()]}
- fn send<'a>(&'a self,r:&'a RequestDraft)->SendFuture<'a>{Box::pin(async move {self.0.lock().unwrap().push(r.clone());Ok((CapturedResponse{status:200,version:"HTTP/1.1".into(),headers:vec![],body_base64:"b2s=".into(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:None},vec![]))})}
+ fn send<'a>(&'a self,r:&'a RequestDraft)->SendFuture<'a>{Box::pin(async move {self.0.lock().unwrap().push(r.clone());Ok((CapturedResponse { trailers: vec![], status:200,version:"HTTP/1.1".into(),headers:vec![],body_base64:"b2s=".into(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:None},vec![]))})}
 }
 fn draft()->RequestDraft {serde_json::from_str(r#"{"engine":"probe","method":"GET","url":"http://example.test/","headers":[],"bodyBase64":""}"#).unwrap()}
 async fn waiting(e:&Engine)->Item {tokio::time::timeout(std::time::Duration::from_secs(3),async {loop {if let Some(i)=e.intercept.snapshot().items.first(){return i.clone();} tokio::task::yield_now().await;}}).await.unwrap()}
@@ -23,7 +23,7 @@ async fn shared_pipeline_edits_both_stages_and_retains_originals(){
 async fn replacement_abort_disable_and_cancel_cleanup(){
  let temp=tempfile::tempdir().unwrap();let e=Engine::open(temp.path()).unwrap();
  e.intercept.configure(Config{request:true,response:false,scope:"all".into(),rules:vec![Rule{url_contains:"example.test".into(),..Default::default()}]}).unwrap();
- let other=e.clone();let task=tokio::spawn(async move{other.execute(draft(),None,"capture",None).await.unwrap()});let i=waiting(&e).await;let mut d=decision(&i,"replace");d.response=Some(CapturedResponse{status:202,version:"fake".into(),headers:vec![],body_base64:"".into(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:None});e.intercept.resolve(d).unwrap();assert_eq!(task.await.unwrap().response.unwrap().status,202);
+ let other=e.clone();let task=tokio::spawn(async move{other.execute(draft(),None,"capture",None).await.unwrap()});let i=waiting(&e).await;let mut d=decision(&i,"replace");d.response=Some(CapturedResponse { trailers: vec![], status:202,version:"fake".into(),headers:vec![],body_base64:"".into(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:None});e.intercept.resolve(d).unwrap();assert_eq!(task.await.unwrap().response.unwrap().status,202);
  let other=e.clone();let task=tokio::spawn(async move{other.execute(draft(),None,"replay",None).await.unwrap()});let i=waiting(&e).await;e.intercept.resolve(decision(&i,"abort")).unwrap();assert!(task.await.unwrap().error.unwrap().contains("终止"));
  let other=e.clone();let task=tokio::spawn(async move{other.execute(draft(),None,"replay",None).await.unwrap()});waiting(&e).await;task.abort();let _=task.await;assert!(e.intercept.snapshot().items.is_empty());
  let other=e.clone();let task=tokio::spawn(async move{other.execute(draft(),None,"replay",None).await.unwrap()});waiting(&e).await;e.intercept.configure(Config{request:false,response:false,scope:"all".into(),rules:vec![Rule{url_contains:"example.test".into(),..Default::default()}]}).unwrap();assert!(task.await.unwrap().error.is_some());assert!(e.intercept.snapshot().items.is_empty());

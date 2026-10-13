@@ -1,3 +1,4 @@
+import BodyCodeEditor from './BodyCodeEditor';
 import { useState } from "react";
 import { decodeText, encodeText, type RequestDraft } from "./types";
 import { t } from "./i18n";
@@ -9,6 +10,7 @@ export default function RequestBodyEditor({
   draft: RequestDraft;
   onChange: (draft: RequestDraft) => void;
 }) {
+  const [parser, setParser] = useState("json");
   const [mode, setMode] = useState("text");
   const [parts, setParts] = useState<Part[]>([]);
   const [error, setError] = useState("");
@@ -84,6 +86,7 @@ export default function RequestBodyEditor({
     >
       <div className="editor-toolbar">
         <span>{t("请求正文")}</span>
+        {mode === 'text' && <><select aria-label={t("请求正文格式")} value={parser} onChange={e=>setParser(e.target.value)}><option value="text">Text</option><option value="json">JSON</option><option value="html">HTML</option><option value="babel">JavaScript</option><option value="css">CSS</option></select><button type="button" disabled={parser === "text"} onClick={async()=>{setBusy(true);setError('');try{const {formatResponse}=await import('./formatResponse');setBody(encodeText(await formatResponse(decodeText(draft.bodyBase64),parser)));}catch(e){setError(String(e));}finally{setBusy(false);}}}>{t("格式化")}</button></>}
         <select
           aria-label={t("正文编码")}
           value={mode}
@@ -96,18 +99,9 @@ export default function RequestBodyEditor({
         </select>
       </div>
       {mode === "text" || mode === "base64" ? (
-        <textarea
-          aria-label={t("请求正文")}
-          spellCheck={false}
-          value={
-            mode === "base64" ? draft.bodyBase64 : decodeText(draft.bodyBase64)
-          }
-          onChange={(e) =>
-            setBody(
-              mode === "base64" ? e.target.value : encodeText(e.target.value),
-            )
-          }
-        />
+        <BodyCodeEditor disabled={busy} parser={mode === 'base64' ? 'text' : parser}
+          value={mode === 'base64' ? draft.bodyBase64 : decodeText(draft.bodyBase64)}
+          onChange={value => setBody(mode === 'base64' ? value : encodeText(value))} />
       ) : (
         <div className="request-form">
           <p>

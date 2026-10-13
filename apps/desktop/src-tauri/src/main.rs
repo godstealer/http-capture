@@ -5,6 +5,12 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 #[tauri::command]
+fn grpc_poll(state:State<'_,AppState>,id:String)->Result<Option<Flow>,String>{state.engine.store.get(&id).map_err(|e|e.to_string())}
+#[tauri::command]
+fn grpc_start(state:State<'_,AppState>,request:RequestDraft,half_close:bool)->Result<String,String>{capture_core::grpc_client::start(state.engine.clone(),request,half_close).map_err(|e|e.to_string())}
+#[tauri::command]
+async fn grpc_send(state:State<'_,AppState>,id:String,body:String,end:bool)->Result<(),String>{capture_core::grpc_client::send(&state.engine,&id,&body,end).await.map_err(|e|e.to_string())}
+#[tauri::command]
 fn system_proxy_status(state:State<'_,AppState>)->capture_core::system_proxy::Status {state.engine.system_proxy.status()}
 #[tauri::command]
 async fn set_system_proxy(state:State<'_,AppState>,enabled:bool)->Result<(),String>{
@@ -76,18 +82,15 @@ async fn save_response_file(app: tauri::AppHandle, bytes: Vec<u8>, original: boo
     }).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
-async fn save_session_file(app: tauri::AppHandle, content: String, format: Option<String>) -> Result<String,String> {
-    let extension = match format.as_deref().unwrap_or("json") { "json" => "json", "har" => "har", _ => return Err("Unsupported export format".into()) };
-    let directory = app.path().download_dir().map_err(|e|e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        use std::io::Write;
-        let timestamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
-        let path=directory.join(format!("capture-{timestamp}.{extension}"));
-        let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e|e.to_string())?;
-        file.write_all(content.as_bytes()).map_err(|e|e.to_string())?;
-        Ok(path.to_string_lossy().into_owned())
-    }).await.map_err(|e|e.to_string())?
+async fn save_session_file(content: String, format: Option<String>) -> Result<Option<String>,String> {
+    let extension = match format.as_deref().unwrap_or("json") { "json" => "json", "har" => "har", "pem" => "pem", _ => return Err("Unsupported export format".into()) };
+    let name=if extension=="pem" {"http-capture-ca.pem".to_string()} else {format!("capture.{extension}")};
+    let Some(file)=rfd::AsyncFileDialog::new().set_file_name(&name).add_filter(extension,&[extension]).save_file().await else {return Ok(None)};
+    let path=file.path().to_path_buf();
+    tokio::fs::write(&path,content.as_bytes()).await.map_err(|e|e.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
+
 #[tauri::command]
 async fn delete_flows(state: State<'_, AppState>, ids: Vec<String>) -> Result<(),String> { state.engine.store.delete_flows(ids).map_err(|e|e.to_string()) }
 #[tauri::command]
@@ -230,7 +233,7 @@ fn main() {
             app.manage(AppState { engine, proxy: Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {
@@ -239,3 +242,10 @@ fn main() {
             let _=tauri::async_runtime::block_on(state.engine.tun.stop());
         }});
 }
+
+#[tauri::command]
+fn plugins_list(state:State<'_,AppState>)->Vec<capture_core::plugins::Plugin>{state.engine.plugins.list()}
+#[tauri::command]
+fn plugins_save(plugins:Vec<capture_core::plugins::Plugin>,state:State<'_,AppState>)->Result<(),String>{state.engine.plugins.save(plugins).map_err(|e|e.to_string())}
+#[tauri::command]
+fn plugin_logs(state:State<'_,AppState>)->Vec<String>{state.engine.plugins.logs()}

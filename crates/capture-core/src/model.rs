@@ -6,6 +6,9 @@ pub type RequestDraft = transport_api::RequestDraft<crate::scripts::Scripts>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Flow {
+    /// Explicit lifecycle; old files deserialize to unknown rather than appearing pending.
+    #[serde(default = "unknown_flow_state")]
+    pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub websocket: Option<crate::websocket::Session>,
     #[serde(default)]
@@ -39,3 +42,5 @@ pub struct ProxyStatus {
     pub ca_path: String,
     pub browser_replay: bool,
 }
+
+fn unknown_flow_state() -> String { "unknown".into() }

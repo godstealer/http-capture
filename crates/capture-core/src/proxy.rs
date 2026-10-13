@@ -98,12 +98,12 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
             stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;stream.flush().await?;
             let started=std::time::Instant::now();
             let request=RequestDraft{method:"CONNECT".into(),url:url.to_string(),headers:parse_request(&head)?.2,body_base64:String::new(),upstream_profile_id:None,scripts:Default::default(),pseudo_headers:vec![],engine:"native".into(),tls:Default::default()};
-            let flow=Flow{id:uuid::Uuid::new_v4().to_string(),parent_id:None,started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64,duration_ms:0,source:"capture".into(),request,response:None,error:None,notes:vec!["HTTPS 直通：TLS 未解密，无法查看内部请求/响应。".into()],client_protocol:Some("HTTP/1.1".into()),client_tls:None,raw_request_head_base64:Some(STANDARD.encode(&head)),original_request:None,original_response:None,websocket:None};
+            let flow=Flow{state:"receiving".into(),id:uuid::Uuid::new_v4().to_string(),parent_id:None,started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64,duration_ms:0,source:"capture".into(),request,response:None,error:None,notes:vec!["HTTPS 直通：TLS 未解密，无法查看内部请求/响应。".into()],client_protocol:Some("HTTP/1.1".into()),client_tls:None,raw_request_head_base64:Some(STANDARD.encode(&head)),original_request:None,original_response:None,websocket:None};
             engine.store.insert(&flow)?;
-            let mut guard=crate::PendingFlow{engine:&engine,flow:Some(flow)};
+            let mut guard=crate::PendingFlow{engine:&engine,id:Some(flow.id.clone())};
             let result=tokio::io::copy_bidirectional(&mut stream,&mut upstream).await;
-            let mut flow=guard.flow.take().unwrap();flow.duration_ms=started.elapsed().as_millis() as u64;
-            match result {Ok((sent,received))=>flow.notes.push(format!("Tunnel bytes: client={sent}, server={received}")),Err(error)=>flow.error=Some(error.to_string())};engine.store.insert(&flow)?;return Ok(());
+            guard.id=None;let mut flow=flow;flow.duration_ms=started.elapsed().as_millis() as u64;
+            match result {Ok((sent,received))=>flow.notes.push(format!("Tunnel bytes: client={sent}, server={received}")),Err(error)=>flow.error=Some(error.to_string())};flow.state=if flow.error.is_some(){"failed"}else{"completed"}.into();engine.store.insert(&flow)?;return Ok(());
         }
         stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
         stream.flush().await?;
@@ -182,7 +182,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
     let mut request = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "native".into(), method: method.clone(), url: url.to_string(), headers, body_base64: String::new(),
         tls: TlsProfile { preset: "native".into(), ..Default::default() } };
     if crate::websocket::requested(&request.headers) { return crate::websocket::capture(stream, request, head, engine, client_tls).await; }
-    let body_result: Result<Vec<u8>> = async {
+    let body_result: Result<String> = async {
         ensure!(values(&request.headers, "upgrade").next().is_none(), "WebSocket/Upgrade is not supported yet");
         let expectations: Vec<_> = values(&request.headers, "expect").collect();
         if !expectations.is_empty() {
@@ -190,12 +190,12 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
             stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
             stream.flush().await?;
         }
-        let (body, trailers) = read_body(stream, &request.headers, false).await?;
+        let (body, trailers) = read_body_base64(stream, &request.headers, false, false).await?;
         ensure!(!trailers, "Request trailers are not supported yet");
         Ok(body)
     }.await;
     match body_result {
-        Ok(body) => request.body_base64 = STANDARD.encode(body),
+        Ok(body) => request.body_base64 = body,
         Err(error) => {
             engine.record_failure(request, STANDARD.encode(head), format!("{error:#}"))?;
             error_response(stream, 400, &format!("{error:#}")).await?;
@@ -232,13 +232,13 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
     if streamed { return Ok(()); }
     if let Some(error) = flow.error { error_response(stream, 502, &error).await?; return Ok(()); }
     let response = flow.response.context("No response")?;
-    let body = STANDARD.decode(&response.body_base64)?;
+    let mut body = crate::body_spool::BodySpool::decode(&response.body_base64).await?;
     let mut headers = end_to_end(&response.headers);
     // Transfer coding is decoded. HEAD and 304 retain their representation length.
     if method != "HEAD" && response.status != 304 {
         headers.retain(|h| !h.name.eq_ignore_ascii_case("content-length"));
         if response.status != 204 {
-            headers.push(Header { name: "Content-Length".into(), value: body.len().to_string() });
+            headers.push(Header { name: "Content-Length".into(), value: body.len.to_string() });
         }
     }
     let mut out = format!("HTTP/1.1 {} \r\n", response.status).into_bytes();
@@ -247,8 +247,8 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
         out.extend(header_bytes(&h.value)?); out.extend_from_slice(b"\r\n");
     }
     out.extend_from_slice(b"Connection: close\r\n\r\n");
-    out.extend(body);
     stream.write_all(&out).await?;
+    body.send(stream).await?;
     stream.flush().await?;
     Ok(())
 }

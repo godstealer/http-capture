@@ -10,7 +10,7 @@ impl EngineContract<RequestDraft,capture_core::upstream::UpstreamProxy> for Loca
     fn id(&self)-> &'static str {"h3"}
     fn profiles(&self)->Vec<String>{vec!["native".into()]}
     fn send<'a>(&'a self,r:&'a RequestDraft)->SendFuture<'a>{Box::pin(async move {
-        Ok((CapturedResponse{status:200,version:"HTTP/3".into(),headers:vec![],body_base64:r.body_base64.clone(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:None},vec![]))
+        Ok((CapturedResponse { trailers: vec![], status:200,version:"HTTP/3".into(),headers:vec![],body_base64:r.body_base64.clone(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:None},vec![]))
     })}
 }
 

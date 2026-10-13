@@ -60,6 +60,12 @@ async fn list(State(s): State<Shared>, headers: HeaderMap) -> Result<Json<Vec<Fl
     let flows = tokio::task::spawn_blocking(move || engine.store.list()).await.map_err(error)?.map_err(error)?;
     Ok(Json(flows))
 }
+#[derive(Deserialize)] #[serde(rename_all="camelCase")] struct GrpcStart {request:RequestDraft,half_close:bool}
+#[derive(Deserialize)] struct GrpcPoll {id:String}
+async fn grpc_poll(State(s):State<Shared>,Json(p):Json<GrpcPoll>)->Result<Json<Option<Flow>>,ApiError>{s.engine.store.get(&p.id).map(Json).map_err(error)}
+#[derive(Deserialize)] struct GrpcSend {id:String,body:String,end:bool}
+async fn grpc_start(State(s):State<Shared>,Json(p):Json<GrpcStart>)->Result<Json<String>,ApiError>{capture_core::grpc_client::start(s.engine.clone(),p.request,p.half_close).map(Json).map_err(error)}
+async fn grpc_send(State(s):State<Shared>,Json(p):Json<GrpcSend>)->Result<Json<()>,ApiError>{capture_core::grpc_client::send(&s.engine,&p.id,&p.body,p.end).await.map(Json).map_err(error)}
 #[derive(Deserialize)] struct WsConnect{request:RequestDraft}
 #[derive(Deserialize)] struct WsSend{id:String,opcode:u8,body:String}
 async fn websocket_connect(State(s):State<Shared>,headers:HeaderMap,Json(p):Json<WsConnect>)->Result<Json<String>,ApiError>{authorize(&headers,&s)?;capture_core::websocket_client::connect(s.engine.clone(),p.request).map(Json).map_err(error)}
@@ -191,10 +197,12 @@ async fn main() -> Result<()> {
 }
 
 fn router(state:Shared)->Router {
-    Router::new().route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library).layer(axum::extract::DefaultBodyLimit::disable())).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
+    Router::new().route("/grpc/poll",post(grpc_poll)).route("/grpc/start",post(grpc_start).layer(axum::extract::DefaultBodyLimit::disable())).route("/grpc/send",post(grpc_send).layer(axum::extract::DefaultBodyLimit::disable())).route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library).layer(axum::extract::DefaultBodyLimit::disable())).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
         .route("/imports/begin",post(begin_import)).route("/imports/append",post(append_import).layer(axum::extract::DefaultBodyLimit::max(64*1024*1024))).route("/imports/finish",post(finish_import)).route("/tun",get(tun_status)).route("/tun/start",post(start_tun)).route("/tun/stop",post(stop_tun)).route("/network/interfaces",get(network_interfaces)).route("/status", get(status)).route("/flows", get(list)).route("/flows/changes",post(flow_changes)).route("/flows/revision", get(flow_revision)).route("/flows/delete",post(delete_flows)).route("/flows/import",post(import_flows))
         .route("/workspace",get(workspace).post(save_workspace).layer(axum::extract::DefaultBodyLimit::disable())).route("/start", post(start)).route("/stop", post(stop)).route("/replay", post(replay).layer(axum::extract::DefaultBodyLimit::disable())).route("/replay/prepare",post(prepare_replay)).route("/replay/cancel",post(cancel_replay))
         .route("/upstream/profiles",get(upstream_profiles).post(save_upstream_profile)).route("/upstream/select",post(select_upstream_profile)).route("/upstream/delete",post(delete_upstream_profile))
+        .route("/plugins",get(plugins_list).post(plugins_save))
+        .route("/plugins/logs",get(plugin_logs))
         .route("/scripts", get(capture_scripts).post(set_capture_scripts))
         .route("/interception", get(interception).post(configure_interception)).route("/interception/resolve", post(resolve_interception).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/certificate", get(certificate)).route("/upstream", post(set_upstream))
@@ -202,3 +210,8 @@ fn router(state:Shared)->Router {
 }
 
 #[cfg(test)] mod contract_tests;
+
+#[derive(Deserialize)] struct PluginConfig {plugins:Vec<capture_core::plugins::Plugin>}
+async fn plugins_list(State(s):State<Shared>,headers:HeaderMap)->Result<Json<Vec<capture_core::plugins::Plugin>>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.plugins.list()))}
+async fn plugins_save(State(s):State<Shared>,headers:HeaderMap,Json(input):Json<PluginConfig>)->Result<Json<()>,ApiError>{authorize(&headers,&s)?;s.engine.plugins.save(input.plugins).map_err(error)?;Ok(Json(()))}
+async fn plugin_logs(State(s):State<Shared>,headers:HeaderMap)->Result<Json<Vec<String>>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.plugins.logs()))}

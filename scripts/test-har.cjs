@@ -8,5 +8,8 @@ const har=await createHar([flow],async()=>Uint8Array.from([0,255,12]));const ent
 const failed=await createHar([flow],async()=>{throw Error('broken compression')});assert.equal(failed.log.entries[0].response.content.text,undefined);assert.equal(readSession(JSON.stringify(failed))[0].response.bodyBase64,'eA==');assert.equal(readSession(JSON.stringify(failed))[0].response.headers[0].value,'gzip');
 const empty=await createHar([{...flow,response:null,error:'failed'}],async()=>{throw Error('unexpected')});assert.equal(empty.log.entries[0].response.status,0);assert.equal(empty.log.entries[0]._error,'failed');
 const text=await createHar([{...flow,request:{...flow.request,bodyBase64:Buffer.from('\ufeff中文').toString('base64')},response:null}],async()=>new Uint8Array());assert.equal(readSession(JSON.stringify(text))[0].request.bodyBase64,Buffer.from('\ufeff中文').toString('base64'));
+const raw=await createHar([flow],async()=>{throw new Error('raw export must never decode')},true);
+assert.equal(raw.log.entries[0].response.content._rawBodyBase64,flow.response.bodyBase64);
+const restored=readSession(JSON.stringify(raw))[0];assert.equal(restored.response.bodyBase64,flow.response.bodyBase64);
 console.log('HAR export: duplicate headers/query, binary and BOM request round-trip, decoded response, decode failure recovery and missing response passed');
 })().catch(e=>{console.error(e);process.exitCode=1});

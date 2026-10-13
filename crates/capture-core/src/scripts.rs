@@ -87,7 +87,7 @@ fn run(code:String,request:RequestDraft,response:Option<CapturedResponse>,variab
    try {{ const result=(function(){{ 'use strict';
 {code}
    }}).call(undefined); if(result && typeof result.then==='function')throw new Error('仅支持同步脚本，不支持 Promise / async');
-   }} catch(e) {{error=String(e.stack||e).slice(0,8192);}}
+   }} catch(e) {{error=(String(e)+'\n'+String(e.stack||'')).slice(0,8192);}}
    return JSON.stringify({{request,response,variables,logs,error}});
   }})()"#);
   ctx.eval::<String,_>(source).catch(&ctx).map_err(|e|anyhow::anyhow!("脚本执行失败（限时 2 秒、内存 64 MiB）：{e}"))
