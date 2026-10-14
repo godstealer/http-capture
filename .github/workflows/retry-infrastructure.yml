@@ -1,0 +1,32 @@
+name: Retry infrastructure failures
+on:
+  workflow_run:
+    workflows: [Check, Release]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+  actions: write
+  checks: read
+concurrency:
+  group: infrastructure-retry-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+jobs:
+  retry:
+    if: >-
+      contains(fromJSON('["failure","cancelled"]'), github.event.workflow_run.conclusion) &&
+      github.event.workflow_run.run_attempt < 3 &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Read policy from trusted default-branch code, never from the failed run.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { retry } = require('./scripts/ci-retry.cjs');
+            await retry({github, context, core});
