@@ -186,9 +186,11 @@ async fn main() -> Result<()> {
     println!("Capture control: http://{address}\nData: {}\nOpen the GUI and click Start capture.", root.display());
     let shutdown_state=state.clone();
     axum::serve(listener, app).with_graceful_shutdown(async move {
-        let _ = tokio::signal::ctrl_c().await;
+        shutdown_signal().await;
+        shutdown_state.engine.executions.cancel_all();
         if let Err(error)=shutdown_state.engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
         if let Some(proxy)=shutdown_state.proxy.lock().await.take(){proxy.stop().await;}
+        if let Err(error)=shutdown_state.engine.tun.stop().await{eprintln!("TUN shutdown: {error}");}
     }).await?;
     if let Err(error)=state.engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
     let _ = state.engine.tun.stop().await;
@@ -215,3 +217,15 @@ fn router(state:Shared)->Router {
 async fn plugins_list(State(s):State<Shared>,headers:HeaderMap)->Result<Json<Vec<capture_core::plugins::Plugin>>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.plugins.list()))}
 async fn plugins_save(State(s):State<Shared>,headers:HeaderMap,Json(input):Json<PluginConfig>)->Result<Json<()>,ApiError>{authorize(&headers,&s)?;s.engine.plugins.save(input.plugins).map_err(error)?;Ok(Json(()))}
 async fn plugin_logs(State(s):State<Shared>,headers:HeaderMap)->Result<Json<Vec<String>>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.plugins.logs()))}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut term) => { tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} } }
+            Err(error) => { eprintln!("SIGTERM handler: {error}"); let _=tokio::signal::ctrl_c().await; }
+        }
+    }
+    #[cfg(not(unix))]
+    { let _=tokio::signal::ctrl_c().await; }
+}

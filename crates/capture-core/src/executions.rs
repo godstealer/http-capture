@@ -15,6 +15,9 @@ impl Executions {
         entries.insert(id.clone(), Entry { created: Instant::now(), started: false, cancel: watch::channel(false).0 });
         Ok(id)
     }
+    pub fn cancel_all(&self) {
+        for entry in self.0.lock().unwrap().values() { entry.cancel.send_replace(true); }
+    }
     pub fn cancel(&self, id: &str) -> bool {
         let entries = self.0.lock().unwrap();
         if let Some(entry) = entries.get(id) { entry.cancel.send_replace(true); true } else { false }

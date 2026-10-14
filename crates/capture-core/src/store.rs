@@ -226,7 +226,11 @@ pub struct RequestEditor {
  pub draft:RequestDraft,
  pub selected:Option<String>,
  pub parent_id:Option<String>,
+ #[serde(default, skip_serializing_if="Option::is_none")] pub grpc_draft:Option<GrpcDraft>,
 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+pub struct GrpcDraft { pub method:String, pub json:String }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub struct Library {

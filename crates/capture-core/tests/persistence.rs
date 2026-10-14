@@ -12,12 +12,13 @@ fn restart_restores_drafts_rules_scripts_and_committed_variables() {
  let revision=engine.scripts.snapshot().1;
  engine.scripts.commit_variables(revision,&scripts.variables,&BTreeMap::from([("counter".into(),"2".into())])).unwrap();
  let request=serde_json::from_str(r#"{"method":"POST","url":"","engine":"h2","headers":[{"name":"X-A","value":"1"},{"name":"X-B","value":"2"},{"name":"X-A","value":"3"}],"bodyBase64":"AAEC/w=="}"#).unwrap();
- engine.store.save_workspace(Workspace{editors:vec![RequestEditor{id:"draft-1".into(),draft:request,selected:None,parent_id:None}],active_editor:"draft-1".into(),revision:0}).unwrap();
+ engine.store.save_workspace(Workspace{editors:vec![RequestEditor{id:"draft-1".into(),draft:request,selected:None,parent_id:None,grpc_draft:Some(capture_core::store::GrpcDraft{method:"/demo.Echo/Bidi".into(),json:r#"{"text":"{{message}}""#.into()})}],active_editor:"draft-1".into(),revision:0}).unwrap();
  drop(engine);
  let engine=Engine::open(dir.path()).unwrap();
  let config=engine.intercept.snapshot();assert!(config.config.request);assert!(config.items.is_empty());assert!(config.config.rules[0].compiled_url.as_ref().unwrap().is_match("https://example.test/path"));
  let scripts=engine.scripts.snapshot().0;assert!(scripts.enabled);assert_eq!(scripts.variables.get("counter").unwrap(),"2");assert!(!scripts.variables.contains_key("removed"));
  let work=engine.store.workspace().unwrap();assert_eq!(work.active_editor,"draft-1");assert_eq!(work.editors[0].draft.headers[2].name,"X-A");assert_eq!(work.editors[0].draft.body_base64,"AAEC/w==");assert!(work.editors[0].draft.url.is_empty());
+ let grpc=work.editors[0].grpc_draft.as_ref().unwrap();assert_eq!(grpc.method,"/demo.Echo/Bidi");assert_eq!(grpc.json,r#"{"text":"{{message}}""#);
  engine.store.save_workspace(Workspace{revision:work.revision,..Default::default()}).unwrap();drop(engine);
  assert!(Engine::open(dir.path()).unwrap().store.workspace().unwrap().editors.is_empty());
 }
@@ -34,4 +35,10 @@ fn stale_windows_and_invalid_settings_cannot_overwrite_saved_data() {
  engine.scripts.commit_variables(before,&BTreeMap::new(),&BTreeMap::from([("version".into(),"old".into())])).unwrap();
  assert!(engine.scripts.configure(Scripts{before:"x".repeat(65537),..Default::default()}).is_err());
  drop(engine);let restored=Engine::open(dir.path()).unwrap();assert!(restored.intercept.snapshot().config.rules.is_empty());assert_eq!(restored.scripts.snapshot().0.variables["version"],"new");
+}
+
+#[test]
+fn legacy_workspace_without_grpc_draft_loads() {
+ let value:RequestEditor=serde_json::from_value(serde_json::json!({"id":"old","draft":{"method":"GET","url":"","headers":[],"bodyBase64":""},"selected":null,"parentId":null})).unwrap();
+ assert!(value.grpc_draft.is_none());
 }

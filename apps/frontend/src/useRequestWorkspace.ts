@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { invoke } from './api';
 import type { RequestDraft } from './types';
 
-export interface RequestEditor { id: string; draft: RequestDraft; selected: string | null; parentId: string | null }
+export interface GrpcDraft { method: string; json: string }
+export interface RequestEditor { grpcDraft?: GrpcDraft; id: string; draft: RequestDraft; selected: string | null; parentId: string | null }
 interface Workspace { editors: RequestEditor[]; activeEditor: string; revision: number }
 const empty = JSON.stringify({ editors: [], activeEditor: '' });
 

@@ -239,7 +239,11 @@ fn main() {
         .run(|app,event| { if let tauri::RunEvent::Exit = event {
             let state=app.state::<AppState>();
             if let Err(error)=state.engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
-            let _=tauri::async_runtime::block_on(state.engine.tun.stop());
+            tauri::async_runtime::block_on(async {
+                state.engine.executions.cancel_all();
+                if let Some(proxy)=state.proxy.lock().await.take(){proxy.stop().await;}
+                if let Err(error)=state.engine.tun.stop().await{eprintln!("TUN shutdown: {error}");}
+            });
         }});
 }
 
