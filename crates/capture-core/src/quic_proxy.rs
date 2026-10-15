@@ -1,6 +1,5 @@
 //! Explicit loopback QUIC reverse proxy.
 use anyhow::{ensure, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::{Buf, Bytes};
 use crate::{http1::*, model::*, multiplex, Engine};
 use std::{sync::Arc, time::Duration};
@@ -84,8 +83,13 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                     let Some(resolver) = next? else { break };
                                     let engine = engine.clone(); let target = target.clone(); let client_tls = client_tls.clone();
                                     streams.spawn(async move {
-                                        let result = tokio::time::timeout(Duration::from_secs(300), async {
-                                            let (request, mut stream) = resolver.resolve_request().await?;
+                                        let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+                                        let (request, mut stream) = match tokio::time::timeout_at(deadline, resolver.resolve_request()).await {
+                                            Ok(Ok(value)) => value,
+                                            Ok(Err(error)) => { eprintln!("h3 request: {error:#}"); return; }
+                                            Err(_) => { eprintln!("h3 request timed out after 300 seconds"); return; }
+                                        };
+                                        let result = tokio::time::timeout_at(deadline, async {
                                             let valid=request.method()!=http::Method::CONNECT
                                                 && request.uri().host()==Some(hostname(&target).as_str())
                                                 && request.uri().scheme_str()==Some("https")
@@ -95,25 +99,47 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                                 stream.stop_stream(h3::error::Code::H3_REQUEST_REJECTED);
                                                 anyhow::bail!("H3 request origin or method is unsupported");
                                             }
-                                            let mut body = Vec::new();
+                                            let expected = multiplex::declared_body_length(request.headers())?;
+                                            let mut body = crate::body_spool::BodySpool::empty();
                                             while let Some(mut chunk) = stream.recv_data().await? {
-                                                body.try_reserve(chunk.remaining())?;
-                                                body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()));
+                                                while chunk.has_remaining() {
+                                                    let count = chunk.chunk().len();
+                                                    ensure!(count > 0, "Empty HTTP/3 receive buffer");
+                                                    let next_len = body.len.checked_add(count as u64)
+                                                        .ok_or_else(|| anyhow::anyhow!("HTTP/3 body length overflow"))?;
+                                                    multiplex::check_body_length(expected, next_len, false)?;
+                                                    body.append(chunk.chunk()).await?;
+                                                    chunk.advance(count);
+                                                }
                                             }
+                                            multiplex::check_body_length(expected, body.len, true)?;
                                             ensure!(stream.recv_trailers().await?.is_none(), "Trailers unsupported");
                                             let path = request.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
                                             let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "h3".into(), method: request.method().to_string(),
                                                 url: format!("https://{}{path}", authority(&target)), headers: multiplex::headers(request.headers()),
-                                                body_base64: STANDARD.encode(body), tls: TlsProfile::default() };
+                                                body_base64: body.into_base64().await?, tls: TlsProfile::default() };
                                             let flow = engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/3".into()), Some(client_tls)).await?;
-                                            let response = multiplex::response_for_flow(flow)?;
-                                            let (parts, body) = response.into_parts();
+                                            let (response, mut body) = multiplex::response_head_for_flow(flow).await?;
+                                            let (parts, ()) = response.into_parts();
                                             stream.send_response(http::Response::from_parts(parts, ())).await?;
-                                            if !body.is_empty() { stream.send_data(Bytes::from(body)).await?; }
+                                            let mut remaining = body.len;
+                                            while remaining > 0 {
+                                                let chunk = body.next_chunk().await?;
+                                                ensure!(!chunk.is_empty() && chunk.len() as u64 <= remaining, "Incomplete temporary response body");
+                                                remaining -= chunk.len() as u64;
+                                                stream.send_data(Bytes::from(chunk)).await?;
+                                            }
                                             stream.finish().await?;
                                             Ok::<(), anyhow::Error>(())
                                         }).await.unwrap_or_else(|_| Err(anyhow::anyhow!("H3 stream timed out after 300 seconds")));
-                                        if let Err(error) = result { eprintln!("h3 stream: {error:#}"); }
+                                        if let Err(error) = result {
+                                            // A dropped Quinn send stream may finish normally. Explicitly
+                                            // reset it so a failed disk read/timeout cannot make a response
+                                            // prefix look like a successfully completed body.
+                                            stream.stop_sending(h3::error::Code::H3_INTERNAL_ERROR);
+                                            stream.stop_stream(h3::error::Code::H3_INTERNAL_ERROR);
+                                            eprintln!("h3 stream: {error:#}");
+                                        }
                                     });
                                 }
                             }

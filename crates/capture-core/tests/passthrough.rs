@@ -11,13 +11,23 @@ async fn connect_passthrough_preserves_buffered_bytes_and_records_only_tunnel() 
         let address = origin.local_addr().unwrap();
         // Opaque TLS-shaped bytes: MITM parsing would reject this fixture.
         let payload = b"\x16\x03\x03\x00\x05hello";
+        let (release_origin, keep_origin) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let (mut socket, _) = origin.accept().await.unwrap();
             let mut received = vec![0; payload.len()];
             socket.read_exact(&mut received).await.unwrap();
             assert_eq!(received, payload);
+            // Confirm the proxy propagated the client's write-half close.
+            let mut trailing = Vec::new();
+            socket.read_to_end(&mut trailing).await.unwrap();
+            assert!(trailing.is_empty());
             socket.write_all(b"opaque reply").await.unwrap();
             socket.shutdown().await.unwrap();
+            // Keep this socket alive until the client has observed the reply
+            // and the forwarded FIN. Dropping it immediately races the relay
+            // on Windows and may reset the connection before the reply arrives.
+            keep_origin.await.unwrap();
+            drop(socket);
         });
         let handle = proxy::start(engine.clone(), 0).await.unwrap();
         let mut client = BufReader::new(TcpStream::connect(handle.address).await.unwrap());
@@ -28,6 +38,7 @@ async fn connect_passthrough_preserves_buffered_bytes_and_records_only_tunnel() 
         client.shutdown().await.unwrap();
         let mut response = Vec::new();
         client.read_to_end(&mut response).await.unwrap();
+        release_origin.send(()).unwrap();
         assert_eq!(response, b"opaque reply");
         server.await.unwrap();
         loop {
