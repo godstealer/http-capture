@@ -10,6 +10,23 @@ The CONNECT proxy first negotiates upstream TLS using the client's supported HTT
 currently have a 360-second lifetime. Ordinary HTTP bodies no longer have the old fixed 8 MiB rejection, but still have memory and timeout limits; this is not an end-to-end low-memory guarantee. Trailers,
 extended CONNECT and server push are not supported. WebSocket uses HTTP/1 Upgrade as described below.
 
+## Body buffering after 0.1.16 (not yet released)
+
+Ordinary native H2 capture uploads and responses, H3 upstream responses, and
+QUIC capture uploads receive data into a handle-owned body spool. Up to 64 KiB
+of binary data stays in memory; larger bodies spill to an anonymous temporary
+file. H2 receive capacity is released only after a successful append. Capture
+responses are read back in bounded chunks and respect protocol flow control.
+Failed/incomplete writes cannot be reused, and cancellation drops the private
+temporary-file handle. H3 validates Content-Length and resets failed or timed-out
+streams explicitly so a partial response cannot end with a successful FIN.
+
+This removes whole binary Vec buffers in these network paths. Public JSON,
+Flow, database reads and the frontend still use complete Base64 strings; a
+completed receive therefore generates that string once at the DTO boundary.
+This is not end-to-end constant-memory processing. Existing SSE limits and
+public compatibility helpers that explicitly return Vec remain unchanged.
+
 ## Request blocking
 
 The Block requests page stores a master switch, scope (capture only by default,

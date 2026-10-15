@@ -1,5 +1,5 @@
 //! HTTP/2 records decoded HPACK field order using the vendored h2 extension.
-use crate::{http1::*, model::*};
+use crate::{body_spool::BodySpool, http1::*, model::*};
 use anyhow::{ensure, Result, Context};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::{Buf, Bytes};
@@ -33,10 +33,11 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
                             let target = format!("https://{}{path}", crate::http1::authority(&origin));
                             let ordered = ordered_headers(&parts.headers, &parts.extensions, Some(&parts.uri), Some(&parts.method))?;
                             let (pseudo_headers, fields): (Vec<_>, Vec<_>) = ordered.into_iter().partition(|h| h.name.starts_with(':'));
-                            let body = recv_h2_body(&mut recv).await?;
+                            let body = recv_h2_body_spooled(&mut recv).await?;
+                            ensure!(recv.trailers().await?.is_none(), "Request trailers are not supported yet");
                             // Downstream h2 does not imply upstream h2 support. Negotiate each leg independently.
                             let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers, engine: "auto".into(), method: parts.method.to_string(), url: target,
-                                headers: fields, body_base64: STANDARD.encode(body), tls: TlsProfile::default() };
+                                headers: fields, body_base64: body.into_base64().await?, tls: TlsProfile::default() };
                             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
                             let work = crate::sse::DOWNSTREAM.scope(tx, crate::capture_tls::scope(upstream_tls, engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/2".into()), client_tls)));
                             tokio::pin!(work);
@@ -64,11 +65,17 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
                                 else { send.send_data(Bytes::new(), true)?; }
                                 return Ok(());
                             }
-                            let response = response_for_flow(flow)?;
-                            let (mut parts, body) = response.into_parts();
+                            let (response, mut body) = response_head_for_flow(flow).await?;
+                            let (mut parts, ()) = response.into_parts();
                             let trailers=parts.extensions.remove::<http::HeaderMap>();
-                            let mut send = respond.send_response(http::Response::from_parts(parts, ()), body.is_empty() && trailers.is_none())?;
-                            if !body.is_empty() { send_h2_chunk(&mut send, Bytes::from(body), trailers.is_none()).await?; }
+                            let mut send = respond.send_response(http::Response::from_parts(parts, ()), body.len == 0 && trailers.is_none())?;
+                            let mut remaining = body.len;
+                            while remaining > 0 {
+                                let chunk = body.next_chunk().await?;
+                                ensure!(!chunk.is_empty() && chunk.len() as u64 <= remaining, "Incomplete temporary response body");
+                                remaining -= chunk.len() as u64;
+                                send_h2_chunk(&mut send, Bytes::from(chunk), remaining == 0 && trailers.is_none()).await?;
+                            }
                             if let Some(trailers)=trailers {send.send_trailers(trailers)?;}
                             Ok(())
                         }.await;
@@ -85,9 +92,168 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
 }
 
 pub fn response_for_flow(flow: Flow) -> Result<http::Response<Vec<u8>>> {
-    if let Some(error) = flow.error { return Ok(http::Response::builder().status(502).body(error.into_bytes())?); }
+    if let Some(error) = flow.error {
+        let body = if flow.request.method == "HEAD" { Vec::new() } else { error.into_bytes() };
+        return Ok(http::Response::builder().status(502).body(body)?);
+    }
     let response = flow.response.ok_or_else(|| anyhow::anyhow!("Missing response"))?;
-    let mut output = http::Response::builder().status(response.status).body(STANDARD.decode(response.body_base64)?)?;
+    let output = response_head(&response)?;
+    let body = if response_has_body(&flow.request.method, response.status) { STANDARD.decode(&response.body_base64)? } else { Vec::new() };
+    Ok(output.map(|()| body))
+}
+
+/// Capture forwarding uses the validated, file-backed body instead of rebuilding
+/// an entire decoded Vec. Public JSON continues to contain the same Base64 text.
+pub(crate) async fn response_head_for_flow(flow: Flow) -> Result<(http::Response<()>, BodySpool)> {
+    if let Some(error) = flow.error {
+        let body = if flow.request.method == "HEAD" { BodySpool::empty() } else { BodySpool::decode(&STANDARD.encode(error.as_bytes())).await? };
+        return Ok((http::Response::builder().status(502).body(())?, body));
+    }
+    let response = flow.response.ok_or_else(|| anyhow::anyhow!("Missing response"))?;
+    let output = response_head(&response)?;
+    let body = if response_has_body(&flow.request.method, response.status) { BodySpool::decode(&response.body_base64).await? } else { BodySpool::empty() };
+    Ok((output, body))
+}
+
+#[cfg(test)]
+mod response_spool_tests {
+    use super::*;
+
+    fn flow(method: &str, status: u16, body: &str) -> Flow {
+        serde_json::from_value(serde_json::json!({
+            "id":"response-spool", "startedAt":0, "durationMs":0, "source":"capture",
+            "request":{"method":method,"url":"https://example.invalid/","headers":[],"bodyBase64":""},
+            "response":{"status":status,"version":"HTTP/2","headers":[
+                {"name":"Content-Length","value":"12345"},
+                {"name":"X-Repeat","value":"first"}, {"name":"X-Repeat","value":"second"}
+            ],"trailers":[{"name":"X-Trailer","value":"done"}],"bodyBase64":body},
+            "error":null,"notes":[]
+        })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn response_spool_preserves_binary_headers_and_trailers() {
+        let bytes: Vec<_> = (0..128*1024+2).map(|index| (index%251) as u8).collect();
+        let original = flow("GET", 200, &STANDARD.encode(&bytes));
+        let compatibility = response_for_flow(original.clone()).unwrap();
+        let (response, mut body) = response_head_for_flow(original).await.unwrap();
+        assert_eq!(response.status(), compatibility.status());
+        assert_eq!(response.headers(), compatibility.headers());
+        assert_eq!(response.headers().get_all("x-repeat").iter().count(), 2);
+        assert_eq!(response.extensions().get::<http::HeaderMap>().unwrap()["x-trailer"], "done");
+        assert_eq!(body.len, bytes.len() as u64);
+        let mut output = Vec::new();
+        while output.len() < bytes.len() {
+            let chunk = body.next_chunk().await.unwrap();
+            assert!(!chunk.is_empty() && chunk.len() <= 64*1024);
+            output.extend_from_slice(&chunk);
+        }
+        assert!(body.next_chunk().await.unwrap().is_empty());
+        assert_eq!(output, bytes);
+        assert_eq!(compatibility.body(), &bytes);
+    }
+
+    #[tokio::test]
+    async fn head_no_content_and_not_modified_keep_headers_without_payload() {
+        for (method, status) in [("HEAD", 200), ("GET", 204), ("GET", 304)] {
+            let mut original = flow(method, status, "YWJj");
+            // A 204 has no representation length; HEAD and 304 may retain it.
+            if status == 204 { original.response.as_mut().unwrap().headers.retain(|header| !header.name.eq_ignore_ascii_case("content-length")); }
+            let compatibility = response_for_flow(original.clone()).unwrap();
+            let (response, mut body) = response_head_for_flow(original).await.unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            if status == 204 { assert!(!response.headers().contains_key("content-length")); }
+            else { assert_eq!(response.headers()["content-length"], "12345"); }
+            assert_eq!(body.len, 0);
+            assert!(body.next_chunk().await.unwrap().is_empty());
+            assert!(compatibility.body().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_flow_is_502_and_invalid_or_missing_response_is_rejected() {
+        let mut failed = flow("GET", 200, "!");
+        failed.error = Some("origin failed".into());
+        let compatibility = response_for_flow(failed.clone()).unwrap();
+        let (response, mut body) = response_head_for_flow(failed).await.unwrap();
+        assert_eq!(response.status(), 502);
+        assert!(response.extensions().get::<http::HeaderMap>().is_none());
+        assert_eq!(body.next_chunk().await.unwrap(), b"origin failed");
+        assert_eq!(compatibility.body(), b"origin failed");
+        let mut failed_head = flow("HEAD", 200, "!");
+        failed_head.error = Some("origin failed".into());
+        assert!(response_for_flow(failed_head.clone()).unwrap().body().is_empty());
+        let (head, mut body) = response_head_for_flow(failed_head).await.unwrap();
+        assert_eq!(head.status(), 502);
+        assert_eq!(body.len, 0);
+        assert!(body.next_chunk().await.unwrap().is_empty());
+        assert!(response_head_for_flow(flow("GET", 200, "!")).await.is_err());
+        let mut missing = flow("GET", 200, ""); missing.response = None;
+        assert!(response_head_for_flow(missing).await.is_err());
+    }
+
+    #[test]
+    fn declared_content_length_requires_one_decimal_u64() {
+        let mut headers = http::HeaderMap::new();
+        assert_eq!(declared_body_length(&headers).unwrap(), None);
+        for (value, expected) in [("0", 0), ("0012", 12), ("18446744073709551615", u64::MAX)] {
+            headers.insert(http::header::CONTENT_LENGTH, http::HeaderValue::from_static(value));
+            assert_eq!(declared_body_length(&headers).unwrap(), Some(expected));
+        }
+        for invalid in ["", "+1", "-1", "1.0", "1,1", "1 2", " 1", "1 ", "18446744073709551616"] {
+            headers.insert(http::header::CONTENT_LENGTH, http::HeaderValue::from_static(invalid));
+            assert!(declared_body_length(&headers).is_err(), "accepted {invalid:?}");
+        }
+        headers.insert(http::header::CONTENT_LENGTH, http::HeaderValue::from_static("4"));
+        headers.append(http::header::CONTENT_LENGTH, http::HeaderValue::from_static("4"));
+        assert!(declared_body_length(&headers).is_err());
+    }
+
+    #[test]
+    fn body_length_rejects_overflow_and_incomplete_fin() {
+        assert!(check_body_length(None, u64::MAX, true).is_ok());
+        assert!(check_body_length(Some(3), 2, false).is_ok());
+        assert!(check_body_length(Some(3), 3, false).is_ok());
+        assert!(check_body_length(Some(3), 3, true).is_ok());
+        assert!(check_body_length(Some(3), 4, false).is_err());
+        assert!(check_body_length(Some(3), 4, true).is_err());
+        assert!(check_body_length(Some(3), 2, true).is_err());
+        assert!(check_body_length(Some(0), 0, true).is_ok());
+        assert!(check_body_length(Some(0), 1, false).is_err());
+        for (method, status) in [("HEAD", 200), ("GET", 101), ("GET", 204), ("GET", 304)] {
+            let expected = if response_has_body(method, status) { Some(12345) } else { Some(0) };
+            assert!(check_body_length(expected, 0, true).is_ok());
+            assert!(check_body_length(expected, 1, false).is_err());
+        }
+    }
+}
+
+fn response_has_body(method: &str, status: u16) -> bool {
+    method != "HEAD" && !(100..200).contains(&status) && !matches!(status, 204 | 304)
+}
+
+/// H3 does not validate message length for us. Reuse the same strict parser for
+/// upstream responses and captured requests, without accepting ambiguous values.
+pub(crate) fn declared_body_length(headers: &http::HeaderMap) -> Result<Option<u64>> {
+    let mut values = headers.get_all(http::header::CONTENT_LENGTH).iter();
+    let Some(value) = values.next() else { return Ok(None); };
+    ensure!(values.next().is_none(), "Duplicate Content-Length is not accepted");
+    let bytes = value.as_bytes();
+    ensure!(!bytes.is_empty() && bytes.iter().all(u8::is_ascii_digit), "Invalid Content-Length");
+    let length = value.to_str()?.parse::<u64>().context("Content-Length exceeds u64 range")?;
+    Ok(Some(length))
+}
+
+pub(crate) fn check_body_length(expected: Option<u64>, received: u64, complete: bool) -> Result<()> {
+    if let Some(expected) = expected {
+        ensure!(received <= expected, "Body exceeds Content-Length: expected {expected}, received {received}");
+        ensure!(!complete || received == expected, "Incomplete body: Content-Length {expected}, received {received}");
+    }
+    Ok(())
+}
+
+fn response_head(response: &CapturedResponse) -> Result<http::Response<()>> {
+    let mut output = http::Response::builder().status(response.status).body(())?;
     for field in end_to_end(&response.headers) {
         output.headers_mut().append(http::header::HeaderName::from_bytes(field.name.as_bytes())?, http::HeaderValue::from_bytes(&header_bytes(&field.value)?)?);
     }
@@ -284,11 +450,29 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
     let fields: Vec<Header> = ordered_headers(response.headers(), response.extensions(), None, None)?.into_iter().filter(|h| !h.name.starts_with(':')).collect();
     let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: String::new(), raw_head_base64: None }).await?;
     let mut recv = response.into_body();
-    let body = recv_h2_body_observed(&mut recv, streaming).await?;
+    let body_base64 = if streaming {
+        STANDARD.encode(recv_h2_body_observed(&mut recv, true).await?)
+    } else {
+        recv_h2_body_spooled(&mut recv).await?.into_base64().await?
+    };
     let trailers = recv.trailers().await?.map(|map| headers(&map)).unwrap_or_default();
-    Ok((CapturedResponse { trailers, upstream_tls: None, sent_request_headers: Some(sent_fields), tls_version: None, status, version: "HTTP/2".into(), headers: fields, body_base64: STANDARD.encode(body), raw_head_base64: None }, notes))
+    Ok((CapturedResponse { trailers, upstream_tls: None, sent_request_headers: Some(sent_fields), tls_version: None, status, version: "HTTP/2".into(), headers: fields, body_base64, raw_head_base64: None }, notes))
 }
 
+async fn recv_h2_body_spooled(stream: &mut h2::RecvStream) -> Result<BodySpool> {
+    let mut body = BodySpool::empty();
+    while let Some(chunk) = stream.data().await {
+        let chunk = chunk?;
+        body.append(&chunk).await?;
+        // Do not advertise space for more DATA until the current bytes are in
+        // bounded memory or on disk. Disk pressure therefore propagates to h2.
+        stream.flow_control().release_capacity(chunk.len())?;
+    }
+    Ok(body)
+}
+
+/// Compatibility helper for callers that explicitly need decoded bytes. Capture
+/// and ordinary replay use recv_h2_body_spooled instead.
 pub async fn recv_h2_body(stream: &mut h2::RecvStream) -> Result<Vec<u8>> {
     let body=recv_h2_body_observed(stream, false).await?;
     ensure!(stream.trailers().await?.is_none(), "Request trailers are not supported yet");
@@ -388,13 +572,23 @@ pub async fn h3_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, pr
     drop(body);
     stream.finish().await?;
     let response = stream.recv_response().await?;
-    let mut body = Vec::new();
+    let declared = declared_body_length(response.headers())?;
+    let expected = if response_has_body(&draft.method, response.status().as_u16()) { declared } else { Some(0) };
+    let mut body = BodySpool::empty();
     while let Some(mut chunk) = stream.recv_data().await? {
-        body.try_reserve(chunk.remaining()).context("Unable to allocate response body")?;
-        body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()));
+        while chunk.has_remaining() {
+            let count = chunk.chunk().len();
+            ensure!(count > 0, "Empty HTTP/3 receive buffer");
+            let received = body.len.checked_add(count as u64).context("HTTP/3 response body length overflow")?;
+            check_body_length(expected, received, false)?;
+            body.append(chunk.chunk()).await?;
+            check_body_length(expected, body.len, false)?;
+            chunk.advance(count);
+        }
     }
+    check_body_length(expected, body.len, true)?;
     ensure!(stream.recv_trailers().await?.is_none(), "Trailers are not supported yet");
-    let result = CapturedResponse { trailers: vec![],  upstream_tls: Some(upstream_tls), sent_request_headers: None, tls_version: Some("TLS 1.3".into()), status: response.status().as_u16(), version: "HTTP/3".into(), headers: headers(response.headers()), body_base64: STANDARD.encode(body), raw_head_base64: None };
+    let result = CapturedResponse { trailers: vec![],  upstream_tls: Some(upstream_tls), sent_request_headers: None, tls_version: Some("TLS 1.3".into()), status: response.status().as_u16(), version: "HTTP/3".into(), headers: headers(response.headers()), body_base64: body.into_base64().await?, raw_head_base64: None };
     connection.close(0u32.into(), b"complete");
     Ok((result, notes))
     };

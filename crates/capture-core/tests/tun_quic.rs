@@ -39,6 +39,14 @@ async fn dynamic_sni_capture_records_multiple_origins_and_stops() {
             invalid.finish().await.unwrap();assert!(invalid.recv_response().await.is_err());
             let mut wrong_port=sender.send_request(http::Request::builder().uri(format!("https://{name}:8443/")).body(()).unwrap()).await.unwrap();
             wrong_port.finish().await.unwrap();assert!(wrong_port.recv_response().await.is_err());
+            for declared in [2, 16384] {
+                let mut malformed = sender.send_request(http::Request::builder().method("POST")
+                    .uri(format!("https://{name}/bad-length"))
+                    .header("content-length", declared).body(()).unwrap()).await.unwrap();
+                malformed.send_data(Bytes::from_static(b"bad")).await.unwrap();
+                malformed.finish().await.unwrap();
+                assert!(malformed.recv_response().await.is_err(), "mismatched length must reset the stream");
+            }
             // A rejected stream must not tear down other streams on this connection.
             let mut valid=sender.send_request(http::Request::builder().uri(format!("https://{name}/after-rejection")).body(()).unwrap()).await.unwrap();
             valid.finish().await.unwrap();assert_eq!(valid.recv_response().await.unwrap().status(),200);

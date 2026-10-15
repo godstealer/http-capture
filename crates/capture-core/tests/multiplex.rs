@@ -94,7 +94,7 @@ async fn h2_capture_negotiates_h1_upstream_without_losing_fields() {
 
 #[tokio::test]
 async fn h2_verified_capture_multiplexes_and_handles_flow_control() {
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         let dir = tempfile::tempdir().unwrap();
         let _ = rustls::crypto::ring::default_provider().install_default();
         let ca = CertificateAuthority::load_or_create(&dir.path().join("origin")).unwrap();
@@ -138,19 +138,22 @@ async fn h2_verified_capture_multiplexes_and_handles_flow_control() {
         tls.alpn_protocols = vec![b"h2".to_vec()];
         let io = tokio_rustls::TlsConnector::from(Arc::new(tls)).connect("localhost".try_into().unwrap(), reader).await.unwrap();
         assert_eq!(io.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()));
-        let (sender, connection) = h2::client::handshake(io).await.unwrap();
+        let (sender, connection) = h2::client::Builder::new()
+            .initial_window_size(4096).initial_connection_window_size(8192)
+            .handshake(io).await.unwrap();
         let driver = tokio::spawn(async move { let _ = connection.await; });
         let mut calls = tokio::task::JoinSet::new();
-        for _ in 0..2 {
+        for variant in 0..2 {
             let sender = sender.clone();
             calls.spawn(async move {
                 let mut sender = sender.ready().await.unwrap();
                 let mut request = http::Request::builder().method("POST").uri(format!("https://localhost:{}/echo", address.port())).header("x-test", "one").header("x-middle", "between").header("x-test", "two").header("te", "trailers").body(()).unwrap();
                 request.extensions_mut().insert(h2::ext::HeaderOrder([":path", ":authority", ":method", ":scheme", "x-test", "x-middle", "x-test", "te"].map(str::to_owned).to_vec()));
                 let (response, mut send) = sender.send_request(request, false).unwrap();
-                multiplex::send_h2_body(&mut send, Bytes::from(vec![255; 100_000])).await.unwrap();
+                let content: Vec<u8> = (0..2 * 1024 * 1024 + 2).map(|i| ((i + variant) % 251) as u8).collect();
+                multiplex::send_h2_body(&mut send, Bytes::from(content.clone())).await.unwrap();
                 let response = response.await.unwrap(); assert_eq!(response.status(), 200);
-                assert_eq!(multiplex::recv_h2_body(&mut response.into_body()).await.unwrap(), vec![255; 100_000]);
+                assert_eq!(multiplex::recv_h2_body(&mut response.into_body()).await.unwrap(), content);
             });
         }
         while let Some(result) = calls.join_next().await { result.unwrap(); }
@@ -177,7 +180,7 @@ async fn h3_socks_udp_roundtrips_binary_data_with_authentication() {
     h3_roundtrip(true).await;
 }
 async fn h3_roundtrip(via_socks: bool) {
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         let dir = tempfile::tempdir().unwrap();
         let _ = rustls::crypto::ring::default_provider().install_default();
         let ca = CertificateAuthority::load_or_create(dir.path()).unwrap();
@@ -203,7 +206,8 @@ async fn h3_roundtrip(via_socks: bool) {
         let proxy_engine = engine.clone();
         let proxy = tokio::spawn(async move { capture_core::quic_proxy::run(proxy_engine, format!("https://{address}/").parse().unwrap(), 0, Some(ready)).await.unwrap(); });
         let proxy_address = listen.await.unwrap();
-        let request = draft("h3", format!("https://{proxy_address}/echo"));
+        let mut request = draft("h3", format!("https://{proxy_address}/echo"));
+        request.body_base64 = STANDARD.encode((0..2 * 1024 * 1024 + 1).map(|i| (i % 251) as u8).collect::<Vec<_>>());
         let state = capture_core::upstream::UpstreamState::default();
         let relay_task = if via_socks {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
