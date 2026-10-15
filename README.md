@@ -2,7 +2,7 @@
 
 跨平台 HTTP/HTTPS 调试代理。Rust/Tokio 内核，React 界面，Tauri 桌面外壳。
 
-状态更新：2026-10-16。本批改动与验证边界见 [本版更新说明](docs/release-2026-10-16.md)，开发待办见 [功能状态与开发路线图](docs/roadmap.md)，协议细节见 [协议说明](docs/protocols.md)。已核实的上一版为 `build-7d3c9919ad91`（0.1.0，2026-10-14）；本批增量尚未发布，需等待对应 Check、四个平台构建及上传完成。后续重点是实际安装/更新验收与大文件低内存链路；TUN H3 排查继续暂缓。
+状态更新：2026-10-16。[0.1.16 已发布](https://github.com/godstealer/http-capture/releases/tag/build-fcf29d01ec56)，四平台 Check/构建通过，五个更新目标的包哈希和签名已核对。本版改动见 [更新说明](docs/release-2026-10-16.md)，开发待办见 [路线图](docs/roadmap.md)，协议细节见 [协议说明](docs/protocols.md)。后续继续大文件低内存开发；按用户要求暂缓实机验收，TUN H3 排查继续暂停。
 
 公开源码：[godstealer/http-capture](https://github.com/godstealer/http-capture)。功能实现、自动化验证和实机验收分别记录，不以编译通过代替跨平台可用。
 
