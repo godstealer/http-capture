@@ -1,6 +1,7 @@
 pub mod grpc_client;
 pub mod body_export;
 mod body_spool;
+mod capture_tls;
 pub mod browser_profiles;
 pub mod tls_config;
 pub mod tun;
@@ -11,6 +12,7 @@ pub mod script_tools;
 pub mod scripts;
 pub mod plugins;
 pub mod intercept;
+pub mod blocking;
 pub mod tls_details;
 pub mod upstream;
 mod socks_udp;
@@ -45,6 +47,7 @@ pub struct Engine {
     pub scripts: scripts::ScriptState,
     pub plugins: plugins::Plugins,
     pub intercept: intercept::Interceptor,
+    pub blocking: blocking::Blocking,
     pub upstream: upstream::UpstreamState,
     pub store: Arc<store::Store>,
     pub ca: ca::CertificateAuthority,
@@ -86,7 +89,7 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
+        Ok(Arc::new(Self { blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
             ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
             send_engines, upstream_roots }))
     }
@@ -108,12 +111,14 @@ impl Engine {
         let execution = self.executions.begin(id)?;
         self.execute_inner(request, parent_id, "replay", None, None, None, Some(execution)).await
     }
-    async fn execute_inner(&self, request: RequestDraft, parent_id: Option<String>, source: &str,
+    async fn execute_inner(&self, mut request: RequestDraft, parent_id: Option<String>, source: &str,
         raw_request_head_base64: Option<String>, client_protocol: Option<String>, client_tls: Option<TlsDetails>,
         mut execution: Option<executions::Execution<'_>>) -> Result<Flow> {
         let started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
         let start = Instant::now();
-        let mut flow = Flow { state: "sending".into(), websocket: None, original_request: None, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
+        let original_request = request.has_disabled_headers().then(|| request.clone());
+        request.retain_enabled_headers();
+        let mut flow = Flow { state: "sending".into(), websocket: None, original_request, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
             source: source.into(), request, response: None, error: None, raw_request_head_base64, notes: vec![], client_protocol };
         self.store.insert(&flow)?;
         if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }
@@ -123,6 +128,7 @@ impl Engine {
         let rules = self.intercept.snapshot().config.rules;
         let plugins=plugins::matching(&self.plugins.list(),&flow);
         let operation = async {
+            if self.blocking.apply(&mut flow) { return Ok(()); }
             let route=upstream.as_ref().map_err(|e|anyhow::anyhow!("{e:#}"))?.as_ref();
             script.validate()?;
             plugins::run(self,&plugins,&mut flow,false).await;
@@ -133,6 +139,8 @@ impl Engine {
                 if d.action == "modify" { flow.original_request.get_or_insert_with(||flow.request.clone()); flow.request = d.request.unwrap(); flow.notes.push("请求已通过拦截编辑；原始请求另行保留。".into()); }
                 if d.action == "replace" { flow.response = d.response; flow.notes.push("请求未发往上游，已返回自定义响应。".into()); return Ok(()); }
             }
+            flow.request.retain_enabled_headers();
+            if self.blocking.apply(&mut flow) { return Ok(()); }
             let (response, notes) = self.send_observed(&mut flow, route, (script.enabled && !script.after.trim().is_empty())||plugins.iter().any(|p|!p.after.trim().is_empty())).await?;
             flow.response = Some(response); flow.notes.extend(notes);
             plugins::run(self,&plugins,&mut flow,true).await;
@@ -150,12 +158,14 @@ impl Engine {
             _ = async { match execution.as_mut() { Some(e) => e.cancelled().await, None => std::future::pending::<()>().await } } => { cancelled=true; Err(anyhow::anyhow!("请求已取消：用户取消发送")) },
             result = operation => result,
         };
+        flow.request.retain_enabled_headers();
+        if let Some(response) = &mut flow.response { response.retain_enabled_headers(); }
         if let Err(err) = outcome { flow.error = Some(format!("{err:#}")); if !flow.response.as_ref().is_some_and(|r|sse::is_sse(&r.headers)) { flow.response = None; } }
-        if let Ok(Some(proxy)) = upstream { flow.notes.push(format!("上游代理：{}；失败不回退直连。", proxy.url)); }
+        if flow.state != "blocked" { if let Ok(Some(proxy)) = upstream { flow.notes.push(format!("上游代理：{}；失败不回退直连。", proxy.url)); } }
         if matches!(flow.client_protocol.as_deref(), Some("HTTP/3")) { flow.notes.push(crate::multiplex::HEADER_NOTE.into()); }
         flow.notes.retain(|n| n != "SSE 接收中");
         flow.duration_ms = start.elapsed().as_millis() as u64;
-        flow.state = if cancelled { "cancelled" } else if flow.error.is_some() { "failed" } else { "completed" }.into();
+        flow.state = if cancelled { "cancelled" } else if flow.error.is_some() { "failed" } else if flow.state == "blocked" { "blocked" } else { "completed" }.into();
         self.store.insert(&flow)?;
         pending.id = None;
         if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }

@@ -21,3 +21,23 @@ assert.ok(command.includes('--data-binary @-'));
 assert.equal(JSON.stringify(request), before);
 assert.ok(!toCurl({ ...request, bodyBase64: '' }).includes('--data-binary'));
 console.log('cURL export: shell quoting, ordered duplicates, binary body, framing and immutable input passed.');
+
+const disabledRequest={...request,bodyBase64:'',headers:[
+ {name:'X-Dup',value:'first'},
+ {name:'Connection',value:'X-Keep, X-Dup',disabled:true},
+ {name:'X-Dup',value:'disabled duplicate',disabled:true},
+ {name:'x-dup',value:'second',disabled:false},
+ {name:'X-Keep',value:'preserved'},
+ {name:'X-Off',value:'disabled value',disabled:true},
+]};
+const disabledBefore=JSON.stringify(disabledRequest);
+const disabledCommand=toCurl(disabledRequest);
+assert.ok(disabledCommand.includes("--header 'X-Dup: first' --header 'x-dup: second' --header 'X-Keep: preserved'"));
+assert.ok(!disabledCommand.includes('disabled duplicate'));
+assert.ok(!disabledCommand.includes('disabled value'));
+assert.ok(!disabledCommand.includes("--header 'Connection:"));
+assert.equal(JSON.stringify(disabledRequest),disabledBefore);
+const disabledContentType=toCurl({...request,headers:[{name:'Content-Type',value:'application/json',disabled:true}]});
+assert.ok(!disabledContentType.includes('application/json'));
+assert.ok(disabledContentType.includes("--header 'Content-Type:'"));
+console.log('cURL disabled headers: disabled Connection tokens do not hide enabled fields, duplicate order/case survive and disabled Content-Type is not sent.');

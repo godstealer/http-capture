@@ -3,6 +3,7 @@ import { t } from './i18n';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import type { Header } from './types';
 import { parseSse } from './sse';
+import ImagePreview from './ImagePreview';
 const CodeView = lazy(() => import('./CodeView'));
 
 interface Result { raw: string; formatted: string; language: string; error: string; binary?: boolean; kind?: string; mime?: string; blob?: Blob; size?: number; decodedBlob?: Blob }
@@ -40,14 +41,15 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
   const downloads = <><button onClick={() => download(true)}>{t('下载原始字节')}</button><button disabled={!result?.blob && !result?.decodedBlob} onClick={() => download(false)}>{t('下载解压正文')}</button><span role="status">{downloadMessage}</span></>;
   const [mediaUrl, setMediaUrl] = useState('');
   useEffect(() => {
-    if (!result?.blob) { setMediaUrl(''); return; }
-    const url = URL.createObjectURL(result.blob); setMediaUrl(url);
+    const blob = result?.blob ?? (result && /<svg[\s>]/i.test(result.raw) ? new Blob([result.raw], { type: 'image/svg+xml' }) : null);
+    if (!blob) { setMediaUrl(''); return; }
+    const url = URL.createObjectURL(blob); setMediaUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [result]);
   const contentType = headers.find(h => h.name.toLowerCase() === 'content-type')?.value ?? '';
   const encoding = headers.find(h => h.name.toLowerCase() === 'content-encoding')?.value ?? '';
   const isSse = contentType.split(';')[0].trim().toLowerCase() === 'text/event-stream';
-  const isSvg = contentType.split(';')[0].trim().toLowerCase() === 'image/svg+xml';
+  const isSvg = contentType.split(';')[0].trim().toLowerCase() === 'image/svg+xml' || /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(result?.raw ?? '');
   const canPreview = !!result && (result.language === 'html' || isSvg) && !result.binary;
   // Empty sandbox blocks scripts, forms, popups and access to the app origin.
   // Place CSP before untrusted markup so resources cannot phone home.
@@ -76,12 +78,12 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
         <button onClick={() => onCopy(value)}>{t('复制当前内容')}</button>
       </div>
       <div className="format-note">{t('二进制响应：Hex 显示解压正文的前 64 KiB；Base64 与原始下载保留捕获字节。')}</div>
-      <div className="formatted-scroll">
+      {showPreview && mediaUrl && result.kind === 'image' ? <ImagePreview src={mediaUrl} /> : <div className="formatted-scroll">
         {showPreview && mediaUrl ? <div className="response-media">
           {result.kind === 'image' ? <img src={mediaUrl} alt={t('响应图片')} /> : result.kind === 'video' ? <video src={mediaUrl} controls preload="metadata" /> : <audio src={mediaUrl} controls preload="metadata" />}
           <p>{t('预览需要浏览器支持该媒体编码；无法播放时请下载查看。')}</p>
         </div> : <pre>{value}</pre>}
-      </div>
+      </div>}
     </div>;
   }
   return <div className="formatted-response">
@@ -95,7 +97,7 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
       {downloads}<button disabled={!result && mode !== 'base64'} onClick={() => onCopy(text)}>{t("复制当前内容")}</button>
     </div>
     {result?.error && <div className="format-note" role="status">{t(result.error)}{result.binary ? t("（当前显示 Base64）") : ''}</div>}
-    {isSse && mode === 'pretty' && result && !result.binary ? <div className="formatted-scroll"><div className="format-note">{t('SSE 事件 · 收到空行后显示完整事件；原文包含心跳和未完成事件。')}</div>{parseSse(result.raw).map((event, i) => <details key={i} open><summary>#{i + 1} · {event.event}{event.id ? ` · ID: ${event.id}` : ''}{event.retry ? ` · retry: ${event.retry} ms` : ''}</summary><pre>{event.data}</pre></details>)}</div> : mode === 'preview' && canPreview ? <div className="response-preview"><div className="format-note">{t("静态 HTML / SVG 预览 · 脚本与外部资源已禁用")}</div><iframe title={t("响应 HTML 预览")} sandbox="" referrerPolicy="no-referrer" srcDoc={preview} /></div> : <div className="formatted-scroll">{!result && mode !== 'base64' ? <p>{t("正在处理正文…")}</p> : text
+    {isSse && mode === 'pretty' && result && !result.binary ? <div className="formatted-scroll"><div className="format-note">{t('SSE 事件 · 收到空行后显示完整事件；原文包含心跳和未完成事件。')}</div>{parseSse(result.raw).map((event, i) => <details key={i} open><summary>#{i + 1} · {event.event}{event.id ? ` · ID: ${event.id}` : ''}{event.retry ? ` · retry: ${event.retry} ms` : ''}</summary><pre>{event.data}</pre></details>)}</div> : mode === 'preview' && canPreview ? <div className="response-preview"><div className="format-note">{t("静态 HTML / SVG 预览 · 脚本与外部资源已禁用")}</div>{isSvg ? <ImagePreview src={mediaUrl} /> : <iframe title={t("响应 HTML 预览")} sandbox="" referrerPolicy="no-referrer" srcDoc={preview} />}</div> : <div className="formatted-scroll">{!result && mode !== 'base64' ? <p>{t("正在处理正文…")}</p> : text
       ? <Suspense fallback={<pre>{text}</pre>}><CodeView text={text} language={mode === 'base64' || result?.binary ? 'text' : result?.language ?? 'text'} /></Suspense> : <p>{t("（空正文）")}</p>}</div>
     }
   </div>;

@@ -14,7 +14,7 @@ async fn shared_pipeline_edits_both_stages_and_retains_originals(){
  e.intercept.configure(Config{request:true,response:true,scope:"all".into(),rules:vec![Rule{url_contains:"example.test".into(),..Default::default()}]}).unwrap();
  for source in ["capture","replay"] {
  let other=e.clone();let task=tokio::spawn(async move{other.execute(draft(),None,source,None).await.unwrap()});
- let i=waiting(&e).await;assert_eq!(i.stage,"request");let mut d=decision(&i,"modify");let mut r=draft();r.method="POST".into();r.headers=vec![Header{name:"X-A".into(),value:"1".into()},Header{name:"X-B".into(),value:"2".into()},Header{name:"X-A".into(),value:"3".into()}];d.request=Some(r);e.intercept.resolve(d).unwrap();
+ let i=waiting(&e).await;assert_eq!(i.stage,"request");let mut d=decision(&i,"modify");let mut r=draft();r.method="POST".into();r.headers=vec![Header { disabled: false,name:"X-A".into(),value:"1".into()},Header { disabled: false,name:"X-B".into(),value:"2".into()},Header { disabled: false,name:"X-A".into(),value:"3".into()}];d.request=Some(r);e.intercept.resolve(d).unwrap();
  let i=waiting(&e).await;assert_eq!(i.stage,"response");let mut d=decision(&i,"modify");let mut r=i.flow.response.clone().unwrap();r.status=201;r.body_base64="ZWRpdGVk".into();d.response=Some(r);e.intercept.resolve(d).unwrap();let f=task.await.unwrap();assert_eq!(f.original_request.unwrap().method,"GET");assert_eq!(f.request.method,"POST");assert_eq!(f.original_response.unwrap().status,200);assert_eq!(f.response.unwrap().status,201);
  }
  assert_eq!(calls.lock().unwrap().len(),2);assert_eq!(calls.lock().unwrap()[0].headers[2].value,"3");assert!(e.intercept.snapshot().items.is_empty());

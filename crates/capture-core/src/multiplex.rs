@@ -13,13 +13,17 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
 }
 pub async fn h2_capture_with_tls<T>(io: T, engine: Arc<crate::Engine>, origin: url::Url, client_tls: Option<TlsDetails>) -> Result<()>
 where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
+    h2_capture_with_upstream(io, engine, origin, client_tls, None).await
+}
+pub(crate) async fn h2_capture_with_upstream<T>(io: T, engine: Arc<crate::Engine>, origin: url::Url, client_tls: Option<TlsDetails>, upstream_tls: Option<Arc<crate::capture_tls::CaptureTls>>) -> Result<()>
+where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
     let mut connection = h2::server::Builder::new().max_concurrent_streams(32).max_header_list_size(MAX_HEAD as u32).handshake::<_, Bytes>(io).await?;
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
             item = connection.accept() => match item {
                 Some(Ok((request, mut respond))) => {
-                    let engine = engine.clone(); let origin = origin.clone(); let client_tls = client_tls.clone();
+                    let engine = engine.clone(); let origin = origin.clone(); let client_tls = client_tls.clone(); let upstream_tls = upstream_tls.clone();
                     tasks.spawn(async move {
                         let result: Result<()> = async {
                             let (parts, mut recv) = request.into_parts();
@@ -34,7 +38,7 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
                             let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers, engine: "auto".into(), method: parts.method.to_string(), url: target,
                                 headers: fields, body_base64: STANDARD.encode(body), tls: TlsProfile::default() };
                             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-                            let work = crate::sse::DOWNSTREAM.scope(tx, engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/2".into()), client_tls));
+                            let work = crate::sse::DOWNSTREAM.scope(tx, crate::capture_tls::scope(upstream_tls, engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/2".into()), client_tls)));
                             tokio::pin!(work);
                             let mut outgoing = None;
                             let mut completed: Option<Result<Flow>> = None;
@@ -89,14 +93,14 @@ pub fn response_for_flow(flow: Flow) -> Result<http::Response<Vec<u8>>> {
     }
     if !response.trailers.is_empty() {
         let mut trailers=http::HeaderMap::new();
-        for field in &response.trailers { trailers.append(http::header::HeaderName::from_bytes(field.name.as_bytes())?,http::HeaderValue::from_bytes(&header_bytes(&field.value)?)?); }
+        for field in response.trailers.iter().filter(|h| !h.disabled) { trailers.append(http::header::HeaderName::from_bytes(field.name.as_bytes())?,http::HeaderValue::from_bytes(&header_bytes(&field.value)?)?); }
         output.extensions_mut().insert(trailers);
     }
     Ok(output)
 }
 
 pub fn headers(map: &http::HeaderMap) -> Vec<Header> {
-    map.iter().map(|(name, value)| Header { name: name.to_string(), value: value.as_bytes().iter().map(|b| *b as char).collect() }).collect()
+    map.iter().map(|(name, value)| Header { disabled: false, name: name.to_string(), value: value.as_bytes().iter().map(|b| *b as char).collect() }).collect()
 }
 
 fn ordered_headers(map: &http::HeaderMap, extensions: &http::Extensions, uri: Option<&http::Uri>, method: Option<&http::Method>) -> Result<Vec<Header>> {
@@ -118,7 +122,7 @@ fn ordered_headers(map: &http::HeaderMap, extensions: &http::Extensions, uri: Op
             *index += 1;
             latin1(value.as_bytes())
         };
-        fields.push(Header { name: name.clone(), value });
+        fields.push(Header { disabled: false, name: name.clone(), value });
     }
     Ok(fields)
 }
@@ -131,7 +135,7 @@ pub(crate) async fn request_h2(draft: &RequestDraft) -> Result<(http::Request<()
     ensure!(matches!(url.scheme(), "https" | "http"), "h2 requires HTTP or HTTPS");
     let mut request = http::Request::builder().method(draft.method.as_str()).uri(url.as_str()).body(())?;
     let pseudo_names: Vec<&str> = if draft.pseudo_headers.is_empty() { vec![":method", ":scheme", ":authority", ":path"] }
-        else { draft.pseudo_headers.iter().map(|h| h.name.as_str()).collect() };
+        else { draft.pseudo_headers.iter().filter(|h| !h.disabled).map(|h| h.name.as_str()).collect() };
     let mut fields = Vec::new();
     for name in pseudo_names {
         let value = match name {
@@ -140,14 +144,14 @@ pub(crate) async fn request_h2(draft: &RequestDraft) -> Result<(http::Request<()
             _ => anyhow::bail!("Unsupported HTTP/2 pseudo header: {name}"),
         };
         ensure!(!fields.iter().any(|h: &Header| h.name == name), "Repeated HTTP/2 pseudo header");
-        fields.push(Header { name: name.into(), value });
+        fields.push(Header { disabled: false, name: name.into(), value });
     }
     // The h2 URI encoder supplies these fields. Never silently invent one for a captured request.
     ensure!([":method", ":scheme", ":path"].iter().all(|n| fields.iter().any(|h| h.name == *n)), "Missing required HTTP/2 pseudo header");
-    ensure!(fields.iter().any(|h| h.name == ":authority") || draft.headers.iter().any(|h| h.name.eq_ignore_ascii_case("host")), "Missing HTTP/2 authority/Host");
+    ensure!(fields.iter().any(|h| h.name == ":authority") || draft.headers.iter().any(|h| !h.disabled && h.name.eq_ignore_ascii_case("host")), "Missing HTTP/2 authority/Host");
     let retained = end_to_end(&draft.headers);
     let mut notes = vec!["HTTP/2 按客户端/编辑列表的字段顺序编码，包含伪头部和交错重复字段；HPACK 压缩字节、帧边界及 TLS 握手不作原样复制。".into()];
-    for original in &draft.headers {
+    for original in draft.headers.iter().filter(|h| !h.disabled) {
         let name = original.name.to_ascii_lowercase();
         if name == "expect" || (!retained.contains(original) && !(name == "te" && original.value == "trailers")) {
             notes.push(format!("移除字段 {}。", original.name)); continue;
@@ -155,7 +159,7 @@ pub(crate) async fn request_h2(draft: &RequestDraft) -> Result<(http::Request<()
         let value = if name == "host" { authority(&url) } else if name == "content-length" { body.len.to_string() } else { original.value.clone() };
         if value != original.value { notes.push(format!("{} 按目标/正文修正，位置不变。", original.name)); }
         request.headers_mut().append(http::header::HeaderName::from_bytes(name.as_bytes())?, http::HeaderValue::from_bytes(&header_bytes(&value)?)?);
-        fields.push(Header { name, value });
+        fields.push(Header { disabled: false, name, value });
     }
     request.extensions_mut().insert(h2::ext::HeaderOrder(fields.iter().map(|h| h.name.clone()).collect()));
     Ok((request, body, notes, fields))

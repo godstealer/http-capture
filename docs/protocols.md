@@ -6,10 +6,30 @@ server certificate, require HTTPS and compatible per-request TLS settings (H3 re
 than silently falling back to HTTP/1.1. H3 sends QUIC over UDP directly to the
 URL's port; it does not discover alternative ports through Alt-Svc.
 
-The CONNECT proxy negotiates `h2` or `http/1.1` using ALPN. H2 connections
-support concurrent streams and use Auto for the independent upstream TLS negotiation: h2 when selected, otherwise HTTP/1.1. The captured client protocol remains HTTP/2; the response records the actual upstream protocol. Manually selecting the h2 engine still requires h2 and never silently downgrades. H1 capture forwards with the native H1 engine; upstream h2 support does not upgrade a captured H1 request. Connections
-currently have a 60-second lifetime. Bodies are limited to 8 MiB; trailers,
+The CONNECT proxy first negotiates upstream TLS using the client's supported HTTP ALPN values, then offers only the upstream-selected protocol to the client. An upstream without ALPN also leaves downstream ALPN unset and uses HTTP/1.1. The first request reuses that verified upstream TLS connection; subsequent H2 streams keep the selected ALPN when opening upstream connections. H2 connections support concurrent streams. Changes to the request's target, upstream route or TLS profile invalidate the prepared connection and use the requested transport settings. If eager negotiation fails, request processing still proceeds so local response replacement remains available; a request that needs the origin reports the upstream error. Long interception pauses can expire the prepared socket and require a new connection. Manually selecting the h2 engine still requires h2 and never silently downgrades. Captured client and upstream protocol details are recorded separately. Connections
+currently have a 360-second lifetime. Ordinary HTTP bodies no longer have the old fixed 8 MiB rejection, but still have memory and timeout limits; this is not an end-to-end low-memory guarantee. Trailers,
 extended CONNECT and server push are not supported. WebSocket uses HTTP/1 Upgrade as described below.
+
+## Request blocking
+
+The Block requests page stores a master switch, scope (capture only by default,
+or capture plus manual requests), and up to 100 rules. Enabled rules match by
+case-sensitive URL substring, Rust regular expression, or exact hostname, with
+an optional HTTP method. Empty rule lists never block all traffic. Changes are
+validated before replacing the saved configuration and apply to later requests.
+The request context menu can add an exact URL or hostname rule directly.
+
+A match returns a local 403 with `X-HTTP-Capture-Blocked`, a `blocked` flow state
+and the matching rule ID. No HTTP request is sent to the origin. Matching runs
+before scripts/interception and again before sending a modified request. HTTP,
+captured WebSocket handshakes, manual WebSocket and interactive gRPC use the
+same rules when included by scope. Existing messages on an upgraded WebSocket
+or an active streaming session are not interrupted.
+
+For decrypted HTTPS, a method-free hostname rule also skips eager upstream TLS.
+An undecrypted bypass tunnel only supports this method-free hostname check at
+CONNECT time; its internal URLs and methods are unavailable. This is request
+blocking inside the capture tool, not an OS network or DNS firewall.
 
 ## SSE (2026-10-09)
 

@@ -4,7 +4,7 @@ import type { RequestEditor } from './useRequestWorkspace';
 export function applyRequestResult(editors: RequestEditor[], id: string, sent: string, flow: Flow): RequestEditor[] {
   return editors.map(editor => editor.id === id ? {
     ...editor, selected: flow.id,
-    draft: JSON.stringify(editor.draft) === sent ? structuredClone(flow.request) : editor.draft,
+    draft: JSON.stringify(editor.draft) === sent && !editor.draft.headers.some(header => header.disabled) ? structuredClone(flow.request) : editor.draft,
   } : editor);
 }
 

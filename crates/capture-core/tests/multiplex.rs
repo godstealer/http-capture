@@ -12,7 +12,7 @@ fn roots(ca: &CertificateAuthority) -> rustls::RootCertStore {
 }
 fn draft(engine: &str, url: String) -> RequestDraft {
     RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: engine.into(), method: "POST".into(), url,
-        headers: vec![Header { name: "x-test".into(), value: "one".into() }, Header { name: "x-test".into(), value: "two".into() }],
+        headers: vec![Header { disabled: false, name: "x-test".into(), value: "one".into() }, Header { disabled: false, name: "x-test".into(), value: "two".into() }],
         body_base64: STANDARD.encode(vec![255; 100_000]), tls: TlsProfile::default() }
 }
 
@@ -63,6 +63,8 @@ async fn h2_capture_negotiates_h1_upstream_without_losing_fields() {
                 let (_, _, fields) = capture_core::http1::parse_request(&head).unwrap();
                 let names: Vec<_> = fields.iter().filter(|h| h.name.starts_with("x-")).map(|h| (h.name.as_str(), h.value.as_str())).collect();
                 assert_eq!(names, [("x-test", "one"), ("x-middle", "between"), ("x-test", "two")]);
+                let cookies: Vec<_> = fields.iter().filter(|h| h.name.eq_ignore_ascii_case("cookie")).map(|h| h.value.as_str()).collect();
+                assert_eq!(cookies, ["analytics=first; ASP.NET_SessionId=session; locale=ja"]);
                 io.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
             });
             let (client, proxy_io) = tokio::io::duplex(65536);
@@ -71,8 +73,8 @@ async fn h2_capture_negotiates_h1_upstream_without_losing_fields() {
             let capture = tokio::spawn(async move { multiplex::h2_capture(proxy_io, proxy_engine, target).await });
             let (mut sender, connection) = h2::client::handshake(client).await.unwrap();
             let driver = tokio::spawn(connection);
-            let mut request = http::Request::builder().uri(url).header("x-test", "one").header("x-middle", "between").header("x-test", "two").body(()).unwrap();
-            request.extensions_mut().insert(h2::ext::HeaderOrder([":method", ":scheme", ":authority", ":path", "x-test", "x-middle", "x-test"].map(str::to_owned).to_vec()));
+            let mut request = http::Request::builder().uri(url).header("cookie", "analytics=first").header("x-test", "one").header("cookie", "ASP.NET_SessionId=session").header("x-middle", "between").header("cookie", "locale=ja").header("x-test", "two").body(()).unwrap();
+            request.extensions_mut().insert(h2::ext::HeaderOrder([":method", ":scheme", ":authority", ":path", "cookie", "x-test", "cookie", "x-middle", "cookie", "x-test"].map(str::to_owned).to_vec()));
             let (response, _) = sender.send_request(request, true).unwrap();
             let response = response.await.unwrap();
             assert_eq!(response.status(), 200);
@@ -80,7 +82,10 @@ async fn h2_capture_negotiates_h1_upstream_without_losing_fields() {
             let flow = engine.store.list().unwrap().remove(0);
             assert_eq!(flow.client_protocol.as_deref(), Some("HTTP/2"));
             assert_eq!(flow.request.engine, "auto");
-            assert_eq!(flow.response.unwrap().version, "HTTP/1.1");
+            assert_eq!(flow.request.headers.iter().filter(|h| h.name == "cookie").count(), 3);
+            let response = flow.response.unwrap();
+            assert_eq!(response.version, "HTTP/1.1");
+            assert_eq!(response.sent_request_headers.unwrap().iter().filter(|h| h.name.eq_ignore_ascii_case("cookie")).count(), 1);
             origin.await.unwrap();
             driver.abort(); capture.abort();
         }

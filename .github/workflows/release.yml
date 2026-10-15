@@ -12,12 +12,44 @@ concurrency:
   group: release-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
+env:
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+  SOURCE_CHECK_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+  SOURCE_CHECK_CREATED_AT: ${{ github.event.workflow_run.created_at }}
+  # Optional consistency check; the committed tauri.conf.json is authoritative.
+  TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+
 jobs:
-  build:
+  preflight:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify release and updater fixtures
+        run: node --test scripts/test-release-updater.mjs
+      - name: Require updater signing configuration
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node scripts/release-updater.mjs preflight
+      - name: Fix version from the successful source Check
+        id: identity
+        shell: bash
+        run: echo "version=$(node scripts/release-updater.mjs version)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -30,12 +62,14 @@ jobs:
             bundles: deb,appimage
           - os: macos-15
             label: macos-arm64
-            bundles: dmg
+            bundles: app,dmg
           - os: macos-15-intel
             label: macos-x64
-            bundles: dmg
+            bundles: app,dmg
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,9 +96,14 @@ jobs:
         run: go test -mod=readonly ./...
       - name: Prepare packaged helper and resources
         run: node scripts/prepare-release.mjs
-      - name: Build installer
+      - name: Build signed updater artifacts and installers
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri -- build --config "${{ github.workspace }}/apps/desktop/src-tauri/tauri.release.json" --bundles ${{ matrix.bundles }} -- --locked
-      - name: Collect installer and checksum
+      - name: Verify updater lifecycle
+        run: cargo test --release --locked -p http-capture-desktop --bin http-capture app_update::tests
+      - name: Collect and validate signed artifacts and checksums
         run: node scripts/collect-release.mjs ${{ matrix.label }}
       - uses: actions/upload-artifact@v4
         with:
@@ -74,50 +113,32 @@ jobs:
           retention-days: 14
 
   publish:
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
+    # Serialize channel reads + writes across commits, including delayed old builds.
+    concurrency:
+      group: updater-preview-publish
+      cancel-in-progress: false
     permissions:
       contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: actions/download-artifact@v4
         with:
           pattern: installer-*
           path: release-assets
           merge-multiple: true
-      - name: Publish complete prerelease
+      - name: Require all four signed updater artifacts
+        run: node scripts/generate-updater.mjs
+      - name: Publish immutable build and advance preview update channel
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="build-${SOURCE_SHA:0:12}"
-          cat > notes.md <<EOF
-          Automated desktop preview from commit ${SOURCE_SHA}.
-
-          Check passed for this exact commit; all four installer builds succeeded.
-          Windows x64: NSIS installer. Linux x64: Debian package, AppImage, and FUSE-free portable tar.gz (Ubuntu 22.04 baseline). macOS Intel and Apple Silicon: separate DMGs.
-          Includes native HTTP/1, HTTP/2, HTTP/3 engines and the httpcloak helper.
-          wreq and the optional TUN helper are not included in this package.
-          Unsigned preview: no Windows signing or macOS notarization. Installer build success does not replace clean-machine installation and runtime testing.
-          Active WebSocket message editing/sending, HAR/session tools, request collections and environments are included.
-          Custom ClientHello Hex templates are available through httpcloak (TCP TLS only; ECH/PSK/0-RTT/QUIC imports rejected).
-          H3 stream isolation and timeout handling improved; Windows TUN H3 remains unverified. Automatic in-app updates are not enabled.
-          Linux graphics compatibility is enabled by default. For systems without FUSE, extract the portable tar.gz and run AppRun; no apt or manual environment setup needed.
-          This preview adds native HTTP/2 gRPC debugging, local JavaScript HTTP plugins, HAR progress/save dialogs, code editors and header-order verification.
-          gRPC environment variables, workspace session retention and persistent message drafts are included. Normal desktop exit explicitly stops proxy listeners and cancels requests.
-          gRPC streaming capture, plugin UI/stream hooks and full low-memory large-body processing remain incomplete.
-          Detailed completed/remaining scope: https://github.com/${GH_REPO}/blob/${SOURCE_SHA}/docs/release-2026-10-14.md
-          SHA256 checksums accompany each installer.
-          EOF
-          if gh release view "$tag" --json isDraft --jq '.isDraft' > draft.txt 2>/dev/null; then
-            if [ "$(cat draft.txt)" != true ]; then
-              echo "Release already published; keeping existing assets immutable."
-              exit 0
-            fi
-          else
-            gh release create "$tag" --target "$SOURCE_SHA" --title "HTTP Capture preview ${SOURCE_SHA:0:12}" --notes-file notes.md --draft --prerelease
-          fi
-          gh release upload "$tag" release-assets/* --clobber
-          gh release edit "$tag" --draft=false --prerelease --latest=false
+        run: node scripts/publish-release.mjs

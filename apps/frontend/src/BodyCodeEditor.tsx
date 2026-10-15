@@ -22,5 +22,5 @@ export default function BodyCodeEditor({value,parser,onChange,disabled=false,lab
  },[]);
  useEffect(()=>{view.current?.dispatch({effects:config.current.reconfigure(extensions())})},[parser,disabled,locale,label]);
  useEffect(()=>{const editor=view.current;if(editor&&editor.state.doc.toString()!==value){syncing.current=true;try{editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:value}})}finally{syncing.current=false}}},[value]);
- return <div ref={parent} style={{flex:1,minHeight:220,overflow:'hidden'}}/>;
+ return <div className="body-code-editor" ref={parent} style={{flex:1,minHeight:220,overflow:'hidden'}}/>;
 }

@@ -25,7 +25,7 @@ pub async fn send<S>(draft: &RequestDraft<S>, headers: Vec<Header>, body: Vec<u8
     if let Some(v) = draft.tls.permute_extensions { tls.permute_extensions = Some(v); }
     let mut original = OrigHeaderMap::new();
     let mut map = HeaderMap::new();
-    for h in headers {
+    for h in headers.into_iter().filter(|h| !h.disabled) {
         let name = HeaderName::from_bytes(h.name.as_bytes())?;
         original.insert(h.name);
         map.append(name, HeaderValue::from_bytes(&header_bytes(&h.value)?)?);
@@ -49,7 +49,7 @@ pub async fn send<S>(draft: &RequestDraft<S>, headers: Vec<Header>, body: Vec<u8
         info.peer_certificate_chain().map(|chain| chain.map(|der| der.to_vec()).collect::<Vec<_>>()).unwrap_or_else(|| info.peer_certificate().map(|der| vec![der.to_vec()]).unwrap_or_default())
     }).unwrap_or_default();
 
-    let headers = response.headers().iter().map(|(n, v)| Header { name: n.as_str().into(), value: latin1(v.as_bytes()) }).collect();
+    let headers = response.headers().iter().map(|(n, v)| Header { disabled: false, name: n.as_str().into(), value: latin1(v.as_bytes()) }).collect();
     let mut body = Vec::new();
     let mut chunks = response.bytes_stream();
     while let Some(chunk) = chunks.next().await {

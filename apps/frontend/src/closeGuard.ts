@@ -1,5 +1,6 @@
-export type CloseFailure = 'dirty-library' | 'save-failed';
+export type CloseFailure = 'dirty-library' | 'save-failed' | 'update-in-progress';
 interface Actions {
+  blocked?:()=>boolean;
   dirty:()=>boolean;
   flush:()=>Promise<boolean>;
   destroy:()=>Promise<void>;
@@ -17,9 +18,11 @@ export function createCloseGuard(actions:Actions) {
       actions.busy(true);
       pending=Promise.resolve().then(async()=>{
         if(disposed)return;
+        if(actions.blocked?.())throw 'update-in-progress' satisfies CloseFailure;
         if(actions.dirty())throw 'dirty-library' satisfies CloseFailure;
         if(!await actions.flush())throw 'save-failed' satisfies CloseFailure;
         if(disposed)return;
+        if(actions.blocked?.())throw 'update-in-progress' satisfies CloseFailure;
         if(actions.dirty())throw 'dirty-library' satisfies CloseFailure;
         await actions.destroy();
       }).catch(error=>{if(!disposed)actions.error(error);}).finally(()=>{

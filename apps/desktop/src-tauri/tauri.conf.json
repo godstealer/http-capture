@@ -33,5 +33,17 @@
         "bundleMediaFramework": true
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "requireSignedVersion": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCRTc5NDAxOTlCMDIyMEMKUldRTUlyQ1pBWlRuVzJ0Y0l3N2hKNUdVZnpQa053eXFrOVhHQkhHRis0aVppbE9UVzB3RkJYajEK",
+      "endpoints": [
+        "https://github.com/godstealer/http-capture/releases/download/updater-preview/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

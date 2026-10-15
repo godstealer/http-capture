@@ -13,5 +13,10 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
  dirty=false;save=deferred();const raced=guard.close();await Promise.resolve();dirty=true;save.resolve(true);await raced;assert.equal(closed,1);assert.equal(errors.at(-1),'dirty-library');
  dirty=false;save=deferred();const cancelled=guard.close();await Promise.resolve();guard.dispose();save.resolve(true);await cancelled;assert.equal(closed,1);
  let failure;const broken=createCloseGuard({dirty:()=>false,flush:async()=>{throw new Error('IPC unavailable');},destroy:async()=>assert.fail('must not close'),error:e=>failure=e,busy:()=>{}});await broken.close();assert.match(failure.message,/IPC unavailable/);
- console.log('Close guard: pending save, duplicate close, save failure, retry, dirty library race, disposal and IPC failure passed.');
+ let updating=true;const updateErrors=[];let updateClosed=0;const updateSave=deferred();
+ const updateGuard=createCloseGuard({blocked:()=>updating,dirty:()=>false,flush:()=>updateSave.promise,destroy:async()=>{updateClosed++;},error:e=>updateErrors.push(e),busy:()=>{}});
+ await updateGuard.close();assert.equal(updateClosed,0);assert.equal(updateErrors.at(-1),'update-in-progress');
+ updating=false;const waiting=updateGuard.close();await Promise.resolve();updating=true;updateSave.resolve(true);await waiting;assert.equal(updateClosed,0);assert.equal(updateErrors.at(-1),'update-in-progress');
+ updating=false;await updateGuard.close();assert.equal(updateClosed,1);
+ console.log('Close guard: pending save, duplicate close, save failure, retry, dirty library/update races, disposal and IPC failure passed.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

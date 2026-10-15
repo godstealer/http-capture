@@ -5,7 +5,9 @@ import { toCurl } from './curl';
 import type { Flow } from './types';
 
 export interface MenuTarget { flow: Flow; x: number; y: number; anchor: HTMLElement }
-export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy, replayDisabled, onSave, onDelete, selectionCount = 1 }: {
+export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy, replayDisabled, onSave, onDelete, onInterceptResponse, onBlock, selectionCount = 1 }: {
+  onBlock?: (flow: Flow, kind: 'url' | 'host') => void;
+  onInterceptResponse?: (flow: Flow) => void;
   selectionCount?: number; onSave?: (flow: Flow) => void; onDelete?: (flow: Flow) => void;
   target: MenuTarget; onClose: () => void; onEdit: (flow: Flow) => void;
   onReplay: (flow: Flow) => void; onCopy: (text: string) => void; replayDisabled: boolean;
@@ -48,6 +50,8 @@ export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy,
     {onDelete && <button role="menuitem" onClick={() => run(() => onDelete(target.flow))}>{t("删除选中（")}{selectionCount}）</button>}
     <button role="menuitem" onClick={() => run(() => onEdit(target.flow))}>{t("编辑")}<span>Ctrl+Shift+Enter</span></button>
     <button role="menuitem" disabled={replayDisabled} onClick={() => run(() => onReplay(target.flow))}>{t("直接 Replay")}<span>{t("立即发送")}</span></button>
+    {onInterceptResponse && <button role="menuitem" disabled={!!target.flow.websocket} onClick={() => run(() => onInterceptResponse(target.flow))}>{t('拦截替换响应')}<span>{t('下次请求生效')}</span></button>}
+    {onBlock && <><button role="menuitem" disabled={request.method === 'CONNECT'} title={request.method === 'CONNECT' ? t('HTTPS 直通请求请使用域名阻止') : undefined} onClick={() => run(() => onBlock(target.flow, 'url'))}>{t('阻止此 URL')}<span>{t('下次请求生效')}</span></button><button role="menuitem" onClick={() => run(() => onBlock(target.flow, 'host'))}>{t('阻止此域名')}<span>{t('下次请求生效')}</span></button></>}
     <div role="separator" />
     <button role="menuitem" title="Bash / Git Bash" onClick={() => run(() => onCopy(toCurl(request)))}>{t("复制 cURL")}<span>Ctrl+Shift+C</span></button>
     <button role="menuitem" onClick={() => run(() => onCopy(request.url))}>{t("复制 URL")}<span>Ctrl+C</span></button>

@@ -2,6 +2,28 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde_json::{json, Value};
 
+#[tokio::test]
+async fn blocking_api_requires_auth_and_rejects_invalid_updates_atomically() {
+ let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();
+ let state=Arc::new(Service{engine:engine.clone(),proxy:Mutex::new(None),token:"contract-test".into()});
+ let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+ let task=tokio::spawn(async move{axum::serve(listener,router(state)).await.unwrap()});
+ let config=json!({"enabled":true,"scope":"all","rules":[{"id":"api-rule","enabled":true,"matchType":"urlContains","pattern":"/blocked","method":""}]});
+ assert_eq!(call(address,"/blocking",json!({"config":config}),false).await.0,401);
+ assert!(!engine.blocking.snapshot().enabled);
+ assert_eq!(call(address,"/blocking",json!({"config":config}),true).await.0,200);
+ let mut socket=tokio::net::TcpStream::connect(address).await.unwrap();
+ socket.write_all(b"GET /blocking HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer contract-test\r\nConnection: close\r\n\r\n").await.unwrap();
+ let mut bytes=vec![];socket.read_to_end(&mut bytes).await.unwrap();let split=bytes.windows(4).position(|v|v==b"\r\n\r\n").unwrap();
+ assert_eq!(serde_json::from_slice::<Value>(&bytes[split+4..]).unwrap(),config);
+ let mut invalid=config.clone();invalid["rules"][0]["matchType"]=json!("urlRegex");invalid["rules"][0]["pattern"]=json!("[");
+ assert_eq!(call(address,"/blocking",json!({"config":invalid}),true).await.0,400);
+ assert_eq!(serde_json::to_value(engine.blocking.snapshot()).unwrap(),config);
+ let (code,flow)=call(address,"/replay",json!({"request":{"method":"GET","url":"http://127.0.0.1:9/blocked?secret=hidden","headers":[],"bodyBase64":""}}),true).await;
+ assert_eq!(code,200);assert_eq!(flow["state"],"blocked");assert_eq!(flow["response"]["status"],403);assert!(flow["error"].is_null());
+ task.abort();let _=task.await;
+}
+
 async fn call(address:std::net::SocketAddr,path:&str,body:Value,authorized:bool)->(u16,Value){
  let body=body.to_string();
  let mut socket=tokio::net::TcpStream::connect(address).await.unwrap();

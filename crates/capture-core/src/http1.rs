@@ -69,7 +69,7 @@ pub fn parse_request(head: &[u8]) -> Result<(String, String, Vec<Header>)> {
     let mut parsed = httparse::Request::new(&mut storage);
     ensure!(parsed.parse(head)?.is_complete(), "Incomplete request head");
     ensure!(parsed.version == Some(1), "Capture currently supports HTTP/1.1 only");
-    let headers = parsed.headers.iter().map(|h| Header { name: h.name.into(), value: latin1(h.value) }).collect();
+    let headers = parsed.headers.iter().map(|h| Header { disabled: false, name: h.name.into(), value: latin1(h.value) }).collect();
     Ok((parsed.method.context("Missing method")?.into(), parsed.path.context("Missing target")?.into(), headers))
 }
 pub fn parse_response(head: &[u8]) -> Result<(u16, String, Vec<Header>)> {
@@ -77,11 +77,11 @@ pub fn parse_response(head: &[u8]) -> Result<(u16, String, Vec<Header>)> {
     let mut parsed = httparse::Response::new(&mut storage);
     ensure!(parsed.parse(head)?.is_complete(), "Incomplete response head");
     Ok((parsed.code.context("Missing status")?, format!("HTTP/1.{}", parsed.version.unwrap_or(1)),
-        parsed.headers.iter().map(|h| Header { name: h.name.into(), value: latin1(h.value) }).collect()))
+        parsed.headers.iter().map(|h| Header { disabled: false, name: h.name.into(), value: latin1(h.value) }).collect()))
 }
 
 pub fn values<'a>(headers: &'a [Header], name: &'a str) -> impl Iterator<Item = &'a str> {
-    headers.iter().filter(move |h| h.name.eq_ignore_ascii_case(name)).map(|h| h.value.as_str())
+    headers.iter().filter(move |h| !h.disabled && h.name.eq_ignore_ascii_case(name)).map(|h| h.value.as_str())
 }
 
 /// Returns (decoded entity bytes, trailers were present).
@@ -185,11 +185,29 @@ async fn read_piece<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(reader: &mut
 pub fn end_to_end(headers: &[Header]) -> Vec<Header> {
     let connection_tokens: Vec<_> = values(headers, "connection")
         .flat_map(|v| v.split(',')).map(|v| v.trim().to_ascii_lowercase()).collect();
-    headers.iter().filter(|h| {
+    headers.iter().filter(|h| !h.disabled).filter(|h| {
         let n = h.name.to_ascii_lowercase();
         !["connection", "proxy-connection", "proxy-authorization", "proxy-authenticate", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade"].contains(&n.as_str())
             && !connection_tokens.contains(&n)
     }).cloned().collect()
+}
+
+/// RFC 9113 section 8.2.3: split HTTP/2 Cookie fields must be joined with
+/// "; " before forwarding to HTTP/1.1. Other duplicates (notably Set-Cookie)
+/// retain their order and individual field lines.
+pub fn join_request_cookies(headers: &mut Vec<Header>) -> bool {
+    let cookies: Vec<_> = headers.iter().filter(|h| h.name.eq_ignore_ascii_case("cookie")).map(|h| h.value.as_str()).collect();
+    if cookies.len() < 2 { return false; }
+    let value = cookies.join("; ");
+    let mut first = true;
+    headers.retain_mut(|h| {
+        if !h.name.eq_ignore_ascii_case("cookie") { return true; }
+        if !first { return false; }
+        first = false;
+        h.value = value.clone();
+        true
+    });
+    true
 }
 
 pub fn prepare(draft: &RequestDraft) -> Result<(Url, Vec<Header>, Vec<u8>, Vec<String>)> {
@@ -202,7 +220,7 @@ pub(crate) fn prepare_fields(draft:&RequestDraft,body_len:u64)->Result<(Url,Vec<
     ensure!(!["CONNECT", "TRACE"].contains(&draft.method.as_str()), "CONNECT and TRACE are not supported by the editor");
     let url = validate_url(&draft.url)?;
     ensure!(draft.headers.len() <= 256, "Too many headers");
-    for h in &draft.headers { ensure!(token(&h.name), "Invalid header name: {}", h.name); header_bytes(&h.value)?; }
+    for h in draft.headers.iter().filter(|h| !h.disabled) { ensure!(token(&h.name), "Invalid header name: {}", h.name); header_bytes(&h.value)?; }
     ensure!(values(&draft.headers, "host").count() <= 1, "Multiple Host fields are ambiguous");
     ensure!(values(&draft.headers, "content-length").count() <= 1, "Multiple Content-Length fields are ambiguous");
     ensure!(values(&draft.headers, "expect").all(|v| v.eq_ignore_ascii_case("100-continue")), "Unsupported Expect header");
@@ -216,12 +234,12 @@ pub(crate) fn prepare_fields(draft:&RequestDraft,body_len:u64)->Result<(Url,Vec<
     let host = authority(&url);
     if let Some(h) = headers.iter_mut().find(|h| h.name.eq_ignore_ascii_case("host")) {
         if h.value != host { h.value = host; notes.push("Host 已按目标 URL 更新，位置保持不变。".into()); }
-    } else { headers.insert(0, Header { name: "Host".into(), value: host }); notes.push("自动补充 Host。".into()); }
+    } else { headers.insert(0, Header { disabled: false, name: "Host".into(), value: host }); notes.push("自动补充 Host。".into()); }
     if let Some(h) = headers.iter_mut().find(|h| h.name.eq_ignore_ascii_case("content-length")) {
         if h.value != body_len.to_string() { notes.push("Content-Length 已按正文字节数更新。".into()); }
         h.value = body_len.to_string();
     } else if body_len != 0 || matches!(draft.method.as_str(), "POST" | "PUT" | "PATCH") {
-        headers.push(Header { name: "Content-Length".into(), value: body_len.to_string() });
+        headers.push(Header { disabled: false, name: "Content-Length".into(), value: body_len.to_string() });
         notes.push("自动补充 Content-Length。".into());
     }
     Ok((url, headers, notes))
@@ -235,7 +253,7 @@ pub fn encode_request(method: &str, url: &Url, headers: &[Header], body: &[u8]) 
 pub fn encode_request_head(method:&str,url:&Url,headers:&[Header])->Result<Vec<u8>> {
     let target = &url[url::Position::BeforePath..url::Position::AfterQuery];
     let mut out = format!("{method} {target} HTTP/1.1\r\n").into_bytes();
-    for h in headers {
+    for h in headers.iter().filter(|h| !h.disabled) {
         out.extend_from_slice(h.name.as_bytes()); out.extend_from_slice(b": ");
         out.extend(header_bytes(&h.value)?); out.extend_from_slice(b"\r\n");
     }
@@ -248,7 +266,7 @@ pub fn ensure_browser_header_order(headers: &[Header]) -> Result<()> {
     // OrigHeaderMap groups duplicate names. Do not silently reorder A, B, A.
     let mut seen = std::collections::HashSet::new();
     let mut last = String::new();
-    for h in headers {
+    for h in headers.iter().filter(|h| !h.disabled) {
         let name = h.name.to_ascii_lowercase();
         if name != last && !seen.insert(name.clone()) {
             bail!("浏览器发送暂不支持交错重复头；请选择 native 保序模式，或将同名字段放到相邻位置");
@@ -261,21 +279,37 @@ pub fn ensure_browser_header_order(headers: &[Header]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn joins_only_request_cookies_preserving_other_fields_and_positions() {
+        let mut headers = vec![
+            Header { disabled: false, name: "Cookie".into(), value: "a=1".into() },
+            Header { disabled: false, name: "X-Test".into(), value: "first".into() },
+            Header { disabled: false, name: "cookie".into(), value: "session=abc; locale=ja".into() },
+            Header { disabled: false, name: "X-Test".into(), value: "second".into() },
+            Header { disabled: false, name: "Set-Cookie".into(), value: "one=1".into() },
+            Header { disabled: false, name: "Set-Cookie".into(), value: "two=2".into() },
+        ];
+        assert!(join_request_cookies(&mut headers));
+        let pairs: Vec<_> = headers.iter().map(|h| (h.name.as_str(), h.value.as_str())).collect();
+        assert_eq!(pairs, [("Cookie", "a=1; session=abc; locale=ja"), ("X-Test", "first"), ("X-Test", "second"), ("Set-Cookie", "one=1"), ("Set-Cookie", "two=2")]);
+        assert!(!join_request_cookies(&mut headers));
+        assert!(!join_request_cookies(&mut vec![]));
+    }
     #[tokio::test]
     async fn base64_stream_preserves_triplets_and_message_boundaries() {
         for size in [0,1,2,3,16383,16384,16385,100001] {
             let bytes:Vec<u8>=(0..size).map(|n|(n%251) as u8).collect();
             let mut wire=bytes.clone();wire.extend_from_slice(b"NEXT");
             let mut reader=tokio::io::BufReader::with_capacity(7,wire.as_slice());
-            let headers=vec![Header{name:"Content-Length".into(),value:size.to_string()}];
+            let headers=vec![Header { disabled: false,name:"Content-Length".into(),value:size.to_string()}];
             let (encoded,trailers)=read_body_base64(&mut reader,&headers,false,false).await.unwrap();
             assert_eq!(encoded,STANDARD.encode(bytes));assert!(!trailers);
             let mut next=Vec::new();reader.read_to_end(&mut next).await.unwrap();assert_eq!(next,b"NEXT");
         }
-        let headers=vec![Header{name:"Transfer-Encoding".into(),value:"chunked".into()}];
+        let headers=vec![Header { disabled: false,name:"Transfer-Encoding".into(),value:"chunked".into()}];
         let mut reader=&b"1\r\na\r\n2\r\nbc\r\n1\r\nd\r\n0\r\n\r\n"[..];
         assert_eq!(read_body_base64(&mut reader,&headers,false,false).await.unwrap().0,"YWJjZA==");
-        let mut short=&b"abc"[..];let headers=vec![Header{name:"Content-Length".into(),value:"4".into()}];
+        let mut short=&b"abc"[..];let headers=vec![Header { disabled: false,name:"Content-Length".into(),value:"4".into()}];
         assert!(read_body_base64(&mut short,&headers,false,false).await.is_err());
     }
     #[test]
@@ -287,13 +321,13 @@ mod tests {
     #[tokio::test]
     async fn chunked_body_and_trailers_are_framed() {
         let mut input = &b"3\r\nabc\r\n2\r\nde\r\n0\r\nX-T: yes\r\n\r\n"[..];
-        let headers = vec![Header { name: "Transfer-Encoding".into(), value: "chunked".into() }];
+        let headers = vec![Header { disabled: false, name: "Transfer-Encoding".into(), value: "chunked".into() }];
         assert_eq!(read_body(&mut input, &headers, false).await.unwrap(), (b"abcde".to_vec(), true));
     }
     #[tokio::test]
     async fn rejects_ambiguous_framing() {
         let mut input = &b""[..];
-        let headers = vec![Header { name: "Content-Length".into(), value: "0".into() }, Header { name: "Transfer-Encoding".into(), value: "chunked".into() }];
+        let headers = vec![Header { disabled: false, name: "Content-Length".into(), value: "0".into() }, Header { disabled: false, name: "Transfer-Encoding".into(), value: "chunked".into() }];
         assert!(read_body(&mut input, &headers, false).await.is_err());
     }
     #[test]
@@ -306,19 +340,19 @@ mod tests {
         let size=9*1024*1024;
         let bytes=vec![0x81;size];let mut wire=bytes.clone();wire.extend_from_slice(b"NEXT");
         let mut input=wire.as_slice();let mut file=tokio::fs::File::create(&path).await.unwrap();
-        let headers=vec![Header{name:"Content-Length".into(),value:size.to_string()}];
+        let headers=vec![Header { disabled: false,name:"Content-Length".into(),value:size.to_string()}];
         assert_eq!(copy_body(&mut input,&mut file,&headers,false,size as u64,false).await.unwrap(),(size as u64,false));
         file.flush().await.unwrap();assert_eq!(input,b"NEXT");assert_eq!(tokio::fs::read(&path).await.unwrap(),bytes);
     }
     #[tokio::test]
     async fn streaming_boundaries_limits_and_sink_failure(){
-        let headers=vec![Header{name:"Transfer-Encoding".into(),value:"chunked".into()}];
+        let headers=vec![Header { disabled: false,name:"Transfer-Encoding".into(),value:"chunked".into()}];
         let mut input=&b"3\r\nabc\r\n0\r\nX-T: yes\r\n\r\nNEXT"[..];let mut output=Vec::new();
         assert_eq!(copy_body(&mut input,&mut output,&headers,false,3,false).await.unwrap(),(3,true));assert_eq!(input,b"NEXT");assert_eq!(output,b"abc");
         let mut input=&b"4\r\nabcd\r\n0\r\n\r\n"[..];let mut output=Vec::new();assert!(copy_body(&mut input,&mut output,&headers,false,3,false).await.is_err());assert!(output.is_empty());
         let mut input=&b"abc"[..];let mut output=Vec::new();assert_eq!(copy_body(&mut input,&mut output,&[],true,3,false).await.unwrap(),(3,false));assert_eq!(output,b"abc");
         let mut input=&b"abcd"[..];assert!(copy_body(&mut input,&mut tokio::io::sink(),&[],true,3,false).await.is_err());
-        let fixed=vec![Header{name:"Content-Length".into(),value:"4".into()}];let mut input=&b"abc"[..];assert!(copy_body(&mut input,&mut tokio::io::sink(),&fixed,false,4,false).await.is_err());
+        let fixed=vec![Header { disabled: false,name:"Content-Length".into(),value:"4".into()}];let mut input=&b"abc"[..];assert!(copy_body(&mut input,&mut tokio::io::sink(),&fixed,false,4,false).await.is_err());
         let (mut sink,peer)=tokio::io::duplex(1);drop(peer);let mut input=&b"abcd"[..];assert!(copy_body(&mut input,&mut sink,&fixed,false,4,false).await.is_err());
     }
 

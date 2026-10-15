@@ -20,12 +20,12 @@ export default function RequestBodyEditor({
     const headers = draft.headers
       .filter(
         (h) =>
-          !["content-length", "transfer-encoding"].includes(
+          h.disabled || !["content-length", "transfer-encoding"].includes(
             h.name.toLowerCase(),
           ),
       )
       .map((h) => {
-        if (mime && h.name.toLowerCase() === "content-type") {
+        if (mime && !h.disabled && h.name.toLowerCase() === "content-type") {
           found = true;
           return { ...h, value: mime };
         }

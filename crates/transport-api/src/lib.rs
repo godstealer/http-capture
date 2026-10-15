@@ -3,6 +3,9 @@ use serde::{Serialize, Deserialize};
 /// An ordered sequence, including duplicate names and their original casing.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Header {
+    /// Editor-only state; disabled fields never enter an HTTP transport.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disabled: bool,
     pub name: String,
     /// ISO-8859-1 byte mapping; never decode HTTP/1 values with lossy UTF-8.
     pub value: String,
@@ -27,6 +30,25 @@ pub struct RequestDraft<S = serde_json::Value> {
     pub body_base64: String,
     #[serde(default)]
     pub tls: TlsProfile,
+}
+
+fn is_false(value: &bool) -> bool { !*value }
+
+impl<S> RequestDraft<S> {
+    pub fn has_disabled_headers(&self) -> bool {
+        self.headers.iter().chain(&self.pseudo_headers).any(|h| h.disabled)
+    }
+    pub fn retain_enabled_headers(&mut self) {
+        self.headers.retain(|h| !h.disabled);
+        self.pseudo_headers.retain(|h| !h.disabled);
+    }
+}
+
+impl CapturedResponse {
+    pub fn retain_enabled_headers(&mut self) {
+        self.headers.retain(|h| !h.disabled);
+        self.trailers.retain(|h| !h.disabled);
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

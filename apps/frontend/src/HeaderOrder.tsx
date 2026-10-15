@@ -5,6 +5,8 @@ import { PropertyTable } from './RequestDetails';
 export default function HeaderOrder({ headers, sent, captured = false, original = true, onCopy }: {
   headers: Header[]; sent?: Header[] | null; captured?: boolean; original?: boolean; onCopy: (value: string) => void;
 }) {
+  headers = headers.filter(header => !header.disabled);
+  sent = sent?.filter(header => !header.disabled);
   function list(fields: Header[]) {
     return <><div className="order-copy-actions"><button className="text-button" disabled={!fields.length} onClick={() => onCopy(fields.map(h => h.name).join('\n'))}>{t("复制字段名")}</button><button className="text-button" disabled={!fields.length} onClick={() => onCopy(JSON.stringify(fields.map(h => h.name), null, 2))}>{t("复制 JSON 数组")}</button></div><PropertyTable rows={fields.map((h, i) => [`${i + 1}`, h.name || t("（空字段名）")])} /></>;
   }

@@ -10,6 +10,7 @@ struct Message {opcode:u8,bytes:Vec<u8>,ack:oneshot::Sender<Result<(),String>>}
 pub struct Clients(Mutex<HashMap<String,mpsc::Sender<Message>>>);
 
 pub fn connect(engine:Arc<Engine>,mut request:RequestDraft)->Result<String>{
+ request.retain_enabled_headers();
  ensure!(matches!(request.engine.as_str(),"auto"|"native"),"WebSocket currently requires Auto or Native (HTTP/1 Upgrade)");
  ensure!(request.tls.preset=="native","WebSocket currently requires Native TLS");
  ensure!(!request.scripts.enabled || (request.scripts.before.trim().is_empty()&&request.scripts.after.trim().is_empty()),"Active WebSocket handshake scripts are not yet supported");
@@ -22,7 +23,7 @@ pub fn connect(engine:Arc<Engine>,mut request:RequestDraft)->Result<String>{
  ensure!(request.headers.len()<=512 && request.headers.iter().map(|h|h.name.len()+h.value.len()+4).sum::<usize>()<=60000,"WebSocket request headers too large");
  for h in &request.headers {let _:http::HeaderName=h.name.parse()?;let _=http::HeaderValue::from_bytes(&header_bytes(&h.value)?)?;}
  let key=STANDARD.encode(uuid::Uuid::new_v4().as_bytes());
- for (name,value) in [("Host",authority(&url)),("Connection","Upgrade".into()),("Upgrade","websocket".into()),("Sec-WebSocket-Version","13".into()),("Sec-WebSocket-Key",key)]{request.headers.push(Header{name:name.into(),value});}
+ for (name,value) in [("Host",authority(&url)),("Connection","Upgrade".into()),("Upgrade","websocket".into()),("Sec-WebSocket-Version","13".into()),("Sec-WebSocket-Key",key)]{request.headers.push(Header { disabled: false,name:name.into(),value});}
  crate::tls_config::config(&request.tls,&engine.upstream_roots,"native")?;
  if let Some(id)=request.upstream_profile_id.as_deref(){engine.upstream.profile_snapshot(id)?;}
  let id=engine.executions.prepare()?;

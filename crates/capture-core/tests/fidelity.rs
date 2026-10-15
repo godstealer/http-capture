@@ -18,8 +18,8 @@ async fn h1_contract(engine: &dyn SendEngine, profile: &str) {
     });
     let request = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: engine.id().into(), method: "POST".into(),
         url: format!("http://{address}/echo?q=1"), headers: vec![
-            Header { name: "X-First".into(), value: "1".into() },
-            Header { name: "X-Second".into(), value: "2".into() },
+            Header { disabled: false, name: "X-First".into(), value: "1".into() },
+            Header { disabled: false, name: "X-Second".into(), value: "2".into() },
         ], body_base64: STANDARD.encode([0, 255, 128, 42]),
         tls: TlsProfile { preset: profile.into(), ..Default::default() } };
     let before = serde_json::to_value(&request).unwrap();
@@ -67,7 +67,7 @@ async fn native_reports_exact_sent_order_with_interleaved_duplicates() {
         let fields = [("X-A", "1"), ("hOsT", "old.test"), ("X-B", "2"), ("x-a", "3"),
             ("content-length", "999"), ("Connection", "X-Remove"), ("X-Remove", "gone"), ("Expect", "100-continue")];
         let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "native".into(), method: "POST".into(), url: format!("http://{address}/"),
-            headers: fields.into_iter().map(|(n,v)| Header { name:n.into(), value:v.into() }).collect(),
+            headers: fields.into_iter().map(|(n,v)| Header { disabled: false, name:n.into(), value:v.into() }).collect(),
             body_base64: STANDARD.encode(b"abc"), tls: TlsProfile::default() };
         let response = NativeEngine::new(rustls::RootCertStore::empty()).send(&draft).await.unwrap().0;
         let actual = observer.await.unwrap();

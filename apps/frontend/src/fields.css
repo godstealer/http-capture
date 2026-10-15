@@ -1,0 +1,66 @@
+:root {
+  --field-bg: #ffffff;
+  --field-border: #aeb8c4;
+  --field-text: #303b49;
+  --field-placeholder: #707d8d;
+  --field-focus: #bd7900;
+  --field-ring: #ffb52e30;
+  --field-disabled: #eef1f5;
+}
+:root[data-theme="dark"] {
+  --field-bg: #171d25;
+  --field-border: #586677;
+  --field-text: #e0e7ef;
+  --field-placeholder: #98a5b6;
+  --field-focus: #65d5b0;
+  --field-ring: #65d5b030;
+  --field-disabled: #262e38;
+}
+:root .app-shell :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), textarea, select) {
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--field-border);
+  border-radius: 5px;
+  background: var(--field-bg);
+  color: var(--field-text);
+  transition: border-color .12s, box-shadow .12s;
+}
+:root .app-shell :is(input, textarea)::placeholder { color: var(--field-placeholder); opacity: 1; }
+:root .app-shell :is(input, textarea, select):focus-visible {
+  border-color: var(--field-focus);
+  outline: 2px solid var(--field-ring);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 2px var(--field-ring);
+}
+:root .app-shell :is(input, textarea, select):disabled {
+  background: var(--field-disabled);
+  cursor: not-allowed;
+  opacity: .65;
+}
+:root .app-shell textarea { resize: vertical; line-height: 1.6; }
+:root .app-shell input[aria-invalid="true"] { border-color: #c6473d; box-shadow: 0 0 0 1px #c6473d30; }
+#listener-port-status { margin: 6px 0 12px; font-size: 12px; line-height: 1.6; }
+#listener-port-status[role="alert"] { color: #c6473d; }
+:root .app-shell input:is([type="checkbox"], [type="radio"]) { accent-color: var(--field-focus); }
+:root .app-shell .header-row { gap: 10px; padding-top: 5px; padding-bottom: 5px; }
+:root .app-shell .header-row input { min-width: 0; }
+:root .app-shell .body-code-editor {
+  border: 1px solid var(--field-border);
+  border-radius: 5px;
+  background: var(--field-bg);
+}
+:root .app-shell .body-code-editor:focus-within { border-color: var(--field-focus); box-shadow: 0 0 0 2px var(--field-ring); }
+.interception-rules .interception-rule {
+  padding: 14px;
+  margin: 10px 0;
+  gap: 10px;
+  border: 1px solid var(--field-border);
+  border-radius: 7px;
+  background: var(--field-disabled);
+}
+.interception-rule > input { flex: 1 1 160px; width: 160px; min-width: 0; }
+.interception-rule > input[aria-label^="URL"] { flex: 2 1 320px; }
+.interception-rule > input[type="number"] { flex: 0 1 120px; }
+.interception-rule > label { white-space: nowrap; }
+.interception-rule > button { padding: 7px 10px; border: 1px solid var(--field-border); border-radius: 5px; }

@@ -128,6 +128,12 @@ impl SendEngines {
     pub async fn send(&self, draft: &RequestDraft) -> SendResult { self.send_via(draft, None).await }
     pub async fn send_via(&self, draft: &RequestDraft, proxy: Option<&crate::upstream::UpstreamProxy>) -> SendResult {
         use anyhow::Context;
+        let mut enabled_draft;
+        let draft = if draft.has_disabled_headers() {
+            enabled_draft = draft.clone();
+            enabled_draft.retain_enabled_headers();
+            &enabled_draft
+        } else { draft };
         anyhow::ensure!(draft.tls.client_hello_hex.is_none() || draft.engine == "httpcloak", "ClientHello Hex requires the httpcloak engine");
         let (info, engine) = self.entries.get(&draft.engine)
             .with_context(|| format!("Unknown send engine: {}", draft.engine))?;

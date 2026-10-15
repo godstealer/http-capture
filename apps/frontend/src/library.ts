@@ -36,7 +36,8 @@ export function resolveEnvironment(
       return scope[name];
     });
   draft.url = replace(draft.url);
-  draft.headers = draft.headers.map((h) => ({
+  draft.headers = draft.headers.map((h) => h.disabled ? h : ({
+    ...h,
     name: replace(h.name),
     value: replace(h.value),
   }));
@@ -119,7 +120,8 @@ export function parseLibrary(text: string, revision: number): Library {
         (h: any) =>
           !object(h) ||
           typeof h.name !== "string" ||
-          typeof h.value !== "string",
+          typeof h.value !== "string" ||
+          (h.disabled !== undefined && typeof h.disabled !== "boolean"),
       ) ||
       !object(r.tls) ||
       typeof r.tls.preset !== "string" ||

@@ -41,6 +41,11 @@ async fn network_interfaces(State(s): State<Shared>, headers: HeaderMap) -> Resu
     authorize(&headers,&s)?;
     tokio::task::spawn_blocking(capture_core::network::interfaces).await.map_err(error)?.map(Json).map_err(error)
 }
+#[derive(Deserialize)] struct PortCheck { host: String, port: u16 }
+async fn check_listener_port(State(s): State<Shared>, headers: HeaderMap, Json(input): Json<PortCheck>) -> Result<Json<()>, ApiError> {
+    authorize(&headers, &s)?;
+    capture_core::network::check_listener_port(&input.host, input.port).await.map(Json).map_err(error)
+}
 async fn status(State(s): State<Shared>, headers: HeaderMap) -> Result<Json<ProxyStatus>, ApiError> {
     authorize(&headers, &s)?;
     let proxy = s.proxy.lock().await;
@@ -138,6 +143,14 @@ async fn set_upstream(State(s): State<Shared>, headers: HeaderMap, Json(input): 
     authorize(&headers, &s)?; s.engine.upstream.update(input.config).map_err(error)?; Ok(Json(()))
 }
 
+async fn blocking(State(s):State<Shared>, headers:HeaderMap) -> Result<Json<capture_core::blocking::Config>,ApiError> {
+ authorize(&headers,&s)?; Ok(Json(s.engine.blocking.snapshot()))
+}
+#[derive(Deserialize)] struct BlockConfig { config:capture_core::blocking::Config }
+async fn configure_blocking(State(s):State<Shared>, headers:HeaderMap, Json(input):Json<BlockConfig>) -> Result<Json<()>,ApiError> {
+ authorize(&headers,&s)?; s.engine.blocking.configure(input.config).map_err(error)?; Ok(Json(()))
+}
+
 async fn interception(State(s): State<Shared>, headers: HeaderMap) -> Result<Json<capture_core::intercept::Snapshot>, ApiError> {
  authorize(&headers,&s)?; Ok(Json(s.engine.intercept.snapshot()))
 }
@@ -200,12 +213,13 @@ async fn main() -> Result<()> {
 
 fn router(state:Shared)->Router {
     Router::new().route("/grpc/poll",post(grpc_poll)).route("/grpc/start",post(grpc_start).layer(axum::extract::DefaultBodyLimit::disable())).route("/grpc/send",post(grpc_send).layer(axum::extract::DefaultBodyLimit::disable())).route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library).layer(axum::extract::DefaultBodyLimit::disable())).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
-        .route("/imports/begin",post(begin_import)).route("/imports/append",post(append_import).layer(axum::extract::DefaultBodyLimit::max(64*1024*1024))).route("/imports/finish",post(finish_import)).route("/tun",get(tun_status)).route("/tun/start",post(start_tun)).route("/tun/stop",post(stop_tun)).route("/network/interfaces",get(network_interfaces)).route("/status", get(status)).route("/flows", get(list)).route("/flows/changes",post(flow_changes)).route("/flows/revision", get(flow_revision)).route("/flows/delete",post(delete_flows)).route("/flows/import",post(import_flows))
+        .route("/imports/begin",post(begin_import)).route("/imports/append",post(append_import).layer(axum::extract::DefaultBodyLimit::max(64*1024*1024))).route("/imports/finish",post(finish_import)).route("/tun",get(tun_status)).route("/tun/start",post(start_tun)).route("/tun/stop",post(stop_tun)).route("/network/interfaces",get(network_interfaces)).route("/network/check-port",post(check_listener_port)).route("/status", get(status)).route("/flows", get(list)).route("/flows/changes",post(flow_changes)).route("/flows/revision", get(flow_revision)).route("/flows/delete",post(delete_flows)).route("/flows/import",post(import_flows))
         .route("/workspace",get(workspace).post(save_workspace).layer(axum::extract::DefaultBodyLimit::disable())).route("/start", post(start)).route("/stop", post(stop)).route("/replay", post(replay).layer(axum::extract::DefaultBodyLimit::disable())).route("/replay/prepare",post(prepare_replay)).route("/replay/cancel",post(cancel_replay))
         .route("/upstream/profiles",get(upstream_profiles).post(save_upstream_profile)).route("/upstream/select",post(select_upstream_profile)).route("/upstream/delete",post(delete_upstream_profile))
         .route("/plugins",get(plugins_list).post(plugins_save))
         .route("/plugins/logs",get(plugin_logs))
         .route("/scripts", get(capture_scripts).post(set_capture_scripts))
+        .route("/blocking", get(blocking).post(configure_blocking))
         .route("/interception", get(interception).post(configure_interception)).route("/interception/resolve", post(resolve_interception).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/certificate", get(certificate)).route("/upstream", post(set_upstream))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)).layer(axum::middleware::from_fn_with_state(state.clone(), authenticated)).with_state(state)

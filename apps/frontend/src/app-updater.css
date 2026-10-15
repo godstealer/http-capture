@@ -1,0 +1,36 @@
+.app-update-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 5px 9px; border: 1px solid transparent; border-radius: 5px; color: inherit; white-space: nowrap; font-size: 12px; }
+.app-update-trigger:hover:not(:disabled) { border-color: var(--field-border); background: var(--field-disabled); }
+.app-update-trigger.has-update { border-color: #d99a2f; background: #fff4df; color: #84530c; }
+.app-update-backdrop { --update-accent: #ffb52e; --update-accent-text: #3c2a0a; --update-soft: #fff7e8; --update-danger: #b83b31; position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: #080b1099; backdrop-filter: blur(3px); }
+.app-update-dialog { width: min(560px, 100%); max-height: min(780px, 90vh); overflow: auto; padding: 24px; border: 1px solid var(--field-border); border-radius: 12px; background: var(--field-bg); color: var(--field-text); box-shadow: 0 20px 80px #0005; outline: none; }
+.app-update-dialog > header { display: flex; align-items: center; gap: 12px; }
+.app-update-symbol { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 10px; background: var(--update-soft); color: #8b5b0e; }
+.app-update-dialog h2 { flex: 1; margin: 0; font-size: 19px; font-weight: 650; overflow-wrap: anywhere; }
+.app-update-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 11px; border: 1px solid var(--field-border); border-radius: 6px; background: var(--field-bg); color: var(--field-text); font-size: 12px; }
+.app-update-dialog button:hover:not(:disabled) { border-color: var(--field-focus); background: var(--update-soft); }
+.app-update-dialog button:focus-visible { outline: 2px solid var(--field-focus); outline-offset: 2px; }
+.app-update-dialog .app-update-close { flex-shrink: 0; width: 30px; min-height: 30px; padding: 4px; border-color: transparent; color: var(--field-placeholder); }
+.app-update-dialog > p { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.app-update-dialog .app-update-version { margin: 16px 0 4px; color: var(--field-placeholder); font-size: 12px; }
+.app-update-dialog .app-update-demo { margin: 14px 0 0; color: var(--field-focus); font-size: 12px; font-weight: 600; }
+.app-update-date { display: inline-block; margin-left: 12px; color: var(--field-placeholder); font-size: 12px; }
+.app-update-reason { display: block; margin-top: 8px; color: var(--field-placeholder); font-size: 12px; }
+.app-update-notes { margin: 18px 0; padding: 14px; border: 1px solid var(--field-border); border-radius: 7px; background: var(--field-disabled); }
+.app-update-notes h3 { margin: 0 0 9px; font-size: 13px; font-weight: 600; }
+.app-update-notes pre { max-height: 260px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.8; }
+.app-update-dialog .app-update-restart-note { color: var(--field-placeholder); font-size: 12px; }
+.app-update-progress { display: grid; gap: 10px; margin: 18px 0; padding: 14px; border-radius: 7px; background: var(--update-soft); }
+.app-update-progress strong { font-size: 13px; font-weight: 600; }
+.app-update-progress progress { display: block; width: 100%; height: 8px; border: 0; border-radius: 6px; overflow: hidden; accent-color: var(--update-accent); }
+.app-update-progress progress::-webkit-progress-bar { background: var(--field-disabled); }
+.app-update-progress progress::-webkit-progress-value { background: var(--update-accent); }
+.app-update-progress > span { color: var(--field-placeholder); font-size: 12px; }
+.app-update-dialog .app-update-error { padding: 10px 12px; border: 1px solid var(--update-danger); border-radius: 6px; color: var(--update-danger); }
+.app-update-dialog > footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.app-update-dialog > footer > button:first-child { margin-right: auto; }
+.app-update-dialog .app-update-install { border-color: var(--update-accent); background: var(--update-accent); color: var(--update-accent-text); font-weight: 600; }
+.app-update-dialog .app-update-install:hover:not(:disabled) { border-color: var(--field-focus); background: var(--update-accent); }
+[data-theme='dark'] .app-update-trigger.has-update { border-color: #4a9b7f; background: #20392f; color: #a0eccf; }
+[data-theme='dark'] .app-update-backdrop { --update-accent: #65d5b0; --update-accent-text: #102a23; --update-soft: #20392f; --update-danger: #ff9b91; }
+[data-theme='dark'] .app-update-symbol { color: #a0eccf; }
+@media (max-width: 560px) { .app-update-dialog { padding: 18px; }.app-update-dialog > footer > button:first-child { flex-basis: 100%; margin-right: 0; }.app-update-trigger span { display: none; } }

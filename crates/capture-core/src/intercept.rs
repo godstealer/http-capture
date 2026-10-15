@@ -30,7 +30,7 @@ impl Rule {
    && (self.host.is_empty() || url::Url::parse(&f.request.url).ok().and_then(|u|u.host_str().map(str::to_owned)).is_some_and(|h|h.eq_ignore_ascii_case(&self.host)))
    && (self.method.is_empty() || f.request.method.eq_ignore_ascii_case(&self.method))
    && self.status.is_none_or(|status|f.response.as_ref().is_some_and(|r|r.status==status))
-   && (self.header_name.is_empty() || f.request.headers.iter().any(|h|h.name.eq_ignore_ascii_case(&self.header_name) && h.value.contains(&self.header_contains)))
+   && (self.header_name.is_empty() || f.request.headers.iter().any(|h|!h.disabled && h.name.eq_ignore_ascii_case(&self.header_name) && h.value.contains(&self.header_contains)))
  }
 }
 pub(crate) fn matches_rules(rules:&[Rule],flow:&Flow)->bool {
@@ -82,12 +82,13 @@ impl Interceptor {
   if d.action=="modify" && item.stage=="request" { let r=d.request.as_ref().ok_or_else(||anyhow::anyhow!("缺少请求"))?; crate::http1::prepare(r)?; }
   if d.action=="replace" || (d.action=="modify" && item.stage=="response") {
    let r=d.response.as_mut().ok_or_else(||anyhow::anyhow!("缺少响应"))?;
+   r.retain_enabled_headers();
    ensure!((200..=599).contains(&r.status),"响应状态码必须在 200–599 之间");
    let body=base64::engine::general_purpose::STANDARD.decode(&r.body_base64)?; ensure!(body.len()<=8*1024*1024,"正文超过 8 MiB");
    ensure!(r.headers.len()<=512,"响应头过多");
    for h in &r.headers { let _:http::HeaderName=h.name.parse()?; let _:http::HeaderValue=h.value.parse()?; }
    r.headers.retain(|h| !["content-length","transfer-encoding","connection"].contains(&h.name.to_ascii_lowercase().as_str()));
-   r.headers.push(Header{name:"Content-Length".into(),value:body.len().to_string()}); r.raw_head_base64=None;
+   r.headers.push(Header { disabled: false,name:"Content-Length".into(),value:body.len().to_string()}); r.raw_head_base64=None;
    // TLS/protocol metadata comes from the actual connection, never the editor.
    if let Some(original)=&item.flow.response { r.version=original.version.clone(); r.upstream_tls=original.upstream_tls.clone(); r.tls_version=original.tls_version.clone(); r.sent_request_headers=original.sent_request_headers.clone(); }
    else { r.version="HTTP/1.1".into(); r.upstream_tls=None; r.tls_version=None; r.sent_request_headers=None; }

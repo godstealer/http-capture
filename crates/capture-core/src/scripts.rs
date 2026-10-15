@@ -52,7 +52,9 @@ impl ScriptState {
 }
 #[derive(Deserialize)]
 pub struct Output { pub request:RequestDraft, pub response:Option<CapturedResponse>, pub variables:BTreeMap<String,String>, pub logs:Vec<String>, pub error:Option<String> }
-fn run(code:String,request:RequestDraft,response:Option<CapturedResponse>,variables:BTreeMap<String,String>,modules:crate::script_tools::Modules,after:bool,stopped:Arc<std::sync::atomic::AtomicBool>)->Result<Output>{
+fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse>,variables:BTreeMap<String,String>,modules:crate::script_tools::Modules,after:bool,stopped:Arc<std::sync::atomic::AtomicBool>)->Result<Output>{
+ request.retain_enabled_headers();
+ if let Some(response)=&mut response { response.retain_enabled_headers(); }
  ensure!(code.len()<=64*1024,"脚本过长");
  let runtime=Runtime::new()?;runtime.set_memory_limit(64*1024*1024);runtime.set_max_stack_size(256*1024);
  let deadline=Instant::now()+Duration::from_secs(2);
@@ -101,16 +103,18 @@ fn run(code:String,request:RequestDraft,response:Option<CapturedResponse>,variab
   result.request=request;
   let original=response.context("响应脚本没有响应")?;
   let r=result.response.as_mut().context("不能删除响应")?;
+  r.retain_enabled_headers();
   ensure!((200..=599).contains(&r.status),"响应状态码必须为 200–599");
   let bytes=STANDARD.decode(&r.body_base64).context("响应正文不是有效 Base64")?;
   ensure!(bytes.len()<=8*1024*1024,"响应正文超过 8 MiB");
   ensure!(r.headers.iter().map(|h|h.name.len()+h.value.len()+4).sum::<usize>()<=64*1024,"响应头超过 64 KiB");
   for h in &r.headers {let _:http::HeaderName=h.name.parse()?;let _:http::HeaderValue=h.value.parse()?;}
   let changed=r.body_base64!=original.body_base64;
-  if changed {r.headers.retain(|h|!["content-encoding","content-length","transfer-encoding"].contains(&h.name.to_ascii_lowercase().as_str()));r.headers.push(Header{name:"Content-Length".into(),value:bytes.len().to_string()});}
+  if changed {r.headers.retain(|h|!["content-encoding","content-length","transfer-encoding"].contains(&h.name.to_ascii_lowercase().as_str()));r.headers.push(Header { disabled: false,name:"Content-Length".into(),value:bytes.len().to_string()});}
   r.version=original.version;r.tls_version=original.tls_version;r.upstream_tls=original.upstream_tls;r.sent_request_headers=original.sent_request_headers;r.raw_head_base64=None;
  } else {
   result.request.scripts=request.scripts;
+  result.request.retain_enabled_headers();
   crate::http1::prepare(&result.request).context("请求脚本生成了无效请求")?;
   result.response=response;
  }

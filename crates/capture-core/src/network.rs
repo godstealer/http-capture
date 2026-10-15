@@ -2,6 +2,42 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::net::{IpAddr, SocketAddr};
 
+pub async fn check_listener_port(host: &str, port: u16) -> Result<()> {
+    ensure!(port >= 1024, "端口必须在 1024–65535 之间");
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    let address: SocketAddr = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
+        .parse().context("监听 IP 无效")?;
+    let listener = tokio::net::TcpListener::bind(address).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AddrInUse {
+            anyhow::anyhow!("端口 {port} 已被占用，请使用其他端口")
+        } else { anyhow::anyhow!("无法监听 {address}：{error}") }
+    })?;
+    drop(listener);
+    Ok(())
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn detects_occupied_ports_and_releases_probe_socket() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(check_listener_port("127.0.0.1", port).await.unwrap_err().to_string().contains("已被占用"));
+        drop(listener);
+        check_listener_port("127.0.0.1", port).await.unwrap();
+        let _listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_range_and_host() {
+        assert!(check_listener_port("127.0.0.1", 0).await.is_err());
+        assert!(check_listener_port("127.0.0.1", 1023).await.is_err());
+        assert!(check_listener_port("invalid", 8080).await.is_err());
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct InterfaceAddress {

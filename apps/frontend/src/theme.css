@@ -63,6 +63,18 @@
 
 .response-protocol { border: 1px solid currentColor; border-radius: 10px; padding: 2px 8px; white-space: nowrap; font-weight: 600; }
 
-.upstream-settings select{width:100%;padding:8px;margin-top:6px}.upstream-profile-list{max-height:240px;overflow:auto;margin:12px 0}.upstream-profile{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid #8883}.upstream-profile>div{flex:1;min-width:0}.upstream-profile small{display:block;overflow-wrap:anywhere;margin-top:5px}.upstream-profile button{padding:5px}.upstream-profile-editor{border-top:1px solid #8883;margin-top:12px;padding-top:12px}
+.upstream-settings select{width:100%;padding:8px;margin-top:6px}.upstream-profile-list{max-height:240px;overflow:auto;margin:12px 0}.upstream-profile{display:flex;align-items:center;gap:8px;margin:6px 0;padding:12px 10px;border:1px solid transparent;border-bottom-color:#8883;border-left:3px solid transparent;border-radius:6px}.upstream-profile>div{flex:1;min-width:0}.upstream-profile small{display:block;overflow-wrap:anywhere;margin-top:5px}.upstream-profile button{padding:5px}.upstream-profile-editor{border-top:1px solid #8883;margin-top:12px;padding-top:12px}
+.upstream-profile.is-current{background:#fff6e1;border-color:#e7c479;border-left-color:#c78a0b}
+.upstream-profile.is-current strong{color:#825900}
+.upstream-current-badge{display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:2px 6px;border-radius:4px;background:#f5dfaa;color:#755000;font-size:11px;font-weight:600;white-space:nowrap}
+[data-theme="dark"] .upstream-profile.is-current{background:#203c32;border-color:#467f69;border-left-color:#65d5b0}
+[data-theme="dark"] .upstream-profile.is-current strong{color:#b7efd7}
+[data-theme="dark"] .upstream-current-badge{background:#315b49;color:#b7efd7}
+.traffic-dot.blocked{background:#c95045}
+.session-table td.blocked-status{color:#b84138;font-weight:700}
+.blocked-banner{padding:10px 16px;background:#fff0eb;border-bottom:1px solid #e7b3a5;color:#9a392c;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.proxy-toolbar .blocking-nav.is-on{color:#b84138}
+[data-theme="dark"] .session-table td.blocked-status,[data-theme="dark"] .proxy-toolbar .blocking-nav.is-on{color:#ffaaa0}
+[data-theme="dark"] .blocked-banner{background:#382621;border-color:#805047;color:#ffc1b4}
 
 .workspace-save-status { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:3px 14px; font-size:12px; opacity:.8; }

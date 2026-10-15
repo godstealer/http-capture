@@ -2,8 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readJson, releaseConfiguration } from './release-updater.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Validate release identity and the committed trust key before doing a costly build.
+// This overlay intentionally leaves plugins.updater in tauri.conf.json untouched.
+const configuration = releaseConfiguration(readJson(path.join(root, 'apps/desktop/src-tauri/tauri.conf.json')), process.env);
 const staging = path.join(root, 'apps/desktop/src-tauri/release-resources');
 mkdirSync(staging, { recursive: true });
 const executable = path.join(staging, `http-capture-httpcloak${process.platform === 'win32' ? '.exe' : ''}`);
@@ -25,6 +29,4 @@ for (const line of modules.trim().split(/\r?\n/)) {
 if (!notices.length) throw new Error('No Go dependency licenses found');
 writeFileSync(path.join(staging, 'GO-THIRD-PARTY-LICENSES.txt'), notices.join('\n'));
 copyFileSync(path.join(root, 'vendor/h2/LICENSE'), path.join(staging, 'H2-LICENSE.txt'));
-writeFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.release.json'), JSON.stringify({
-  bundle: { resources: { 'release-resources/': 'helpers/' }, icon: ['icons/32x32.png', 'icons/128x128.png', 'icons/128x128@2x.png', 'icons/icon.icns', 'icons/icon.ico'] },
-}, null, 2));
+writeFileSync(path.join(root, 'apps/desktop/src-tauri/tauri.release.json'), JSON.stringify(configuration, null, 2) + '\n');

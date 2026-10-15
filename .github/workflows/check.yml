@@ -32,3 +32,4 @@ jobs:
       - run: npm run build
       - run: npm run test:frontend
       - run: node scripts/test-ci-retry.cjs
+      - run: node --test scripts/test-release-updater.mjs

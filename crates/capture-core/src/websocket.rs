@@ -4,7 +4,7 @@ use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Serialize, Deserialize};
 use sha1::{Sha1, Digest};
-use std::{sync::Arc, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader}, sync::mpsc};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,7 +49,8 @@ pub async fn capture<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S
     run(client,request,raw_head,engine,client_tls,"capture",None).await
 }
 
-pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S>, request: RequestDraft, raw_head: &[u8], engine: &Engine, client_tls: Option<TlsDetails>, source:&str, execution_id:Option<String>) -> Result<()> {
+pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReader<S>, mut request: RequestDraft, raw_head: &[u8], engine: &Engine, client_tls: Option<TlsDetails>, source:&str, execution_id:Option<String>) -> Result<()> {
+    request.retain_enabled_headers();
     let mut execution = engine.executions.begin(match execution_id {Some(id)=>id,None=>engine.executions.prepare()?})?;
     let started = Instant::now();
     let mut guard = Guard { engine, done: false, flow: Flow { state: "sending".into(),
@@ -63,6 +64,10 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
     engine.store.insert(&guard.flow)?;
     let mut upgraded = false;
     let operation = async {
+        if engine.blocking.apply(&mut guard.flow) {
+            crate::blocking::write_response(client, guard.flow.response.as_ref().unwrap()).await?;
+            return Ok(());
+        }
         let config = engine.intercept.snapshot().config;
         let (script, _) = if source=="capture" {engine.scripts.snapshot()} else {(guard.flow.request.scripts.clone(),0)};
         check_handshake_rules(&guard.flow, &config, &script, false)?;
@@ -77,22 +82,28 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
         else if transport_url.scheme()=="wss" {transport_url.set_scheme("https").map_err(|_|anyhow::anyhow!("Invalid URL"))?;}
         let url = validate_url(transport_url.as_str())?;
         let route = if source=="capture" {engine.upstream.snapshot()} else {request.upstream_profile_id.as_deref().map(|id|engine.upstream.profile_snapshot(id)).transpose()?};
-        let connection = crate::upstream::connect(&url, route.as_ref()).await?;
+        let mut absolute_form = false;
+        let mut authorization = None;
         let mut tls_details = None;
         let stream: crate::replay::Stream = if url.scheme() == "https" {
             let config = crate::tls_config::config(&request.tls, &engine.upstream_roots, "native")?;
-            let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(hostname(&url).try_into()?, connection.stream).await?;
+            let tls = crate::capture_tls::connect(&request, &url, route.as_ref(), config).await?;
             let mut details = crate::tls_details::negotiated(tls.get_ref().1); details.server_name = Some(hostname(&url)); tls_details = Some(details);
             Box::new(tls)
-        } else { connection.stream };
+        } else {
+            let connection = crate::upstream::connect(&url, route.as_ref()).await?;
+            absolute_form = connection.absolute_form;
+            authorization = connection.authorization;
+            connection.stream
+        };
         let mut server = BufReader::new(stream);
         let mut headers: Vec<_> = request.headers.iter().filter(|h| !h.name.eq_ignore_ascii_case("proxy-authorization") && !h.name.eq_ignore_ascii_case("proxy-connection")).cloned().collect();
         ensure!(values(&headers, "host").count() <= 1, "Duplicate Host");
         if let Some(host) = headers.iter_mut().find(|h|h.name.eq_ignore_ascii_case("host")) { host.value = authority(&url); }
-        else { headers.insert(0, Header { name: "Host".into(), value: authority(&url) }); }
-        let target = if connection.absolute_form { url.as_str() } else { &url[url::Position::BeforePath..url::Position::AfterQuery] };
+        else { headers.insert(0, Header { disabled: false, name: "Host".into(), value: authority(&url) }); }
+        let target = if absolute_form { url.as_str() } else { &url[url::Position::BeforePath..url::Position::AfterQuery] };
         let mut out = format!("GET {target} HTTP/1.1\r\n").into_bytes();
-        if connection.absolute_form { if let Some(auth) = connection.authorization { out.extend_from_slice(format!("Proxy-Authorization: {auth}\r\n").as_bytes()); } }
+        if absolute_form { if let Some(auth) = authorization { out.extend_from_slice(format!("Proxy-Authorization: {auth}\r\n").as_bytes()); } }
         for h in &headers { out.extend_from_slice(h.name.as_bytes()); out.extend_from_slice(b": "); out.extend(header_bytes(&h.value)?); out.extend_from_slice(b"\r\n"); }
         out.extend_from_slice(b"\r\n"); server.write_all(&out).await?; server.flush().await?;
         let head = read_head(&mut server).await?;
@@ -141,8 +152,8 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
         _ = execution.cancelled() => Err(anyhow::anyhow!("WebSocket stopped by user")),
         result = tokio::time::timeout(Duration::from_secs(300), operation) => result.unwrap_or_else(|_|Err(anyhow::anyhow!("WebSocket session reached 300 second limit"))),
     };
-    guard.flow.websocket.as_mut().unwrap().state = if result.is_ok() { "closed" } else { "stopped" }.into();
-    guard.flow.state = if result.is_ok() {"completed"} else {"failed"}.into();
+    guard.flow.websocket.as_mut().unwrap().state = if guard.flow.state=="blocked" { "blocked" } else if result.is_ok() { "closed" } else { "stopped" }.into();
+    guard.flow.state = if result.is_err() { "failed" } else if guard.flow.state=="blocked" { "blocked" } else { "completed" }.into();
     guard.flow.error = result.as_ref().err().map(|e|format!("{e:#}")); guard.flow.duration_ms = started.elapsed().as_millis() as u64;
     engine.store.insert(&guard.flow)?; let _ = engine.events.send(guard.flow.clone()); guard.done = true;
     // Never inject an HTTP error response into an upgraded WebSocket connection.

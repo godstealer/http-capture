@@ -71,7 +71,8 @@ async fn https_connect_is_decrypted_with_trusted_ca_and_upstream_verified() {
     let server = tokio::spawn(async move {
         let (tcp, _) = origin.accept().await.unwrap();
         let tls = acceptor.accept(tcp).await.unwrap();
-        assert_eq!(tls.get_ref().1.alpn_protocol(), Some(b"http/1.1".as_slice()));
+        // This client sends no ALPN; the proxy preserves that upstream too.
+        assert_eq!(tls.get_ref().1.alpn_protocol(), None);
         let mut reader = BufReader::new(tls);
         let head = read_head(&mut reader).await.unwrap();
         assert_eq!(parse_request(&head).unwrap().1, "/secret");
@@ -274,7 +275,8 @@ async fn tun_connect_ip_uses_sni_for_certificate_and_upstream() {
     let server = tokio::spawn(async move {
         let (tcp, _) = origin.accept().await.unwrap();
         let tls = acceptor.accept(tcp).await.unwrap();
-        assert_eq!(tls.get_ref().1.alpn_protocol(), Some(b"http/1.1".as_slice()));
+        // This client sends no ALPN; the proxy preserves that upstream too.
+        assert_eq!(tls.get_ref().1.alpn_protocol(), None);
         let mut reader = BufReader::new(tls);
         let head = read_head(&mut reader).await.unwrap();
         assert_eq!(parse_request(&head).unwrap().1, "/secret");

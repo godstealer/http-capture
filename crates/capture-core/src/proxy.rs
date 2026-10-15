@@ -94,6 +94,15 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
         prevent_loop(&url, address).await?;
         let bypass:Vec<String>=engine.store.setting("decryption.bypass.v1")?.unwrap_or_default();
         if !transparent && crate::decryption::matches(&hostname(&url),&bypass) {
+            if let Some(hit) = engine.blocking.host_match_before_tls(&url, "capture") {
+                let request=RequestDraft { method:"CONNECT".into(), url:url.to_string(), headers:parse_request(&head)?.2, body_base64:String::new(), upstream_profile_id:None, scripts:Default::default(), pseudo_headers:vec![], engine:"native".into(), tls:Default::default() };
+                let mut flow=Flow { state:"blocked".into(), id:uuid::Uuid::new_v4().to_string(), parent_id:None, started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64, duration_ms:0, source:"capture".into(), request, response:None, error:None, notes:vec!["解密例外隧道命中域名阻止规则；未建立上游连接。".into()], client_protocol:Some("HTTP/1.1".into()), client_tls:None, raw_request_head_base64:Some(STANDARD.encode(&head)), original_request:None, original_response:None, websocket:None };
+                hit.apply(&mut flow);
+                engine.store.insert(&flow)?;
+                let _=engine.events.send(flow.clone());
+                crate::blocking::write_response(&mut stream,flow.response.as_ref().unwrap()).await?;
+                return Ok(());
+            }
             let route=engine.upstream.snapshot();let mut upstream=crate::upstream::connect(&url,route.as_ref()).await?.stream;
             stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;stream.flush().await?;
             let started=std::time::Instant::now();
@@ -126,8 +135,21 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
         if transparent {
             if let Some(name)=start.client_hello().server_name() { url.set_host(Some(name))?; }
         }
+        prevent_loop(&url, address).await?;
+        let offers = start.client_hello().alpn().into_iter().flatten()
+            .filter(|p| *p == b"h2" || *p == b"http/1.1").map(Vec::from).collect();
+        let upstream_tls = if engine.blocking.blocks_host_before_tls(&url, "capture") { None } else { match Box::pin(crate::capture_tls::CaptureTls::prepare(&engine, &url, offers)).await {
+            Ok(context) => Some(context),
+            Err(error) => {
+                // Still let clients reach request interception and return local
+                // replacement responses when the origin is offline/untrusted.
+                tracing::debug!(%error, "Eager TLS unavailable; deferring upstream failure to request processing");
+                None
+            }
+        } };
         let mut config = (*engine.ca.server_config(&hostname(&url))?).clone();
-        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        config.alpn_protocols = upstream_tls.as_ref().map(|c| c.downstream_alpn())
+            .unwrap_or_else(||vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
         let config = Arc::new(config);
         let mut client_tls = crate::tls_details::client_hello(&start.client_hello());
         let local_chain = config.cert_resolver.resolve(start.client_hello()).map(|key| crate::tls_details::certificates(&key.cert)).unwrap_or_default();
@@ -137,12 +159,12 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
         client_tls.alpn = negotiated.alpn; client_tls.handshake_kind = negotiated.handshake_kind;
         client_tls.certificates = local_chain;
         if tls.get_ref().1.alpn_protocol() == Some(b"h2") {
-            return crate::multiplex::h2_capture_with_tls(tls, engine, url, Some(client_tls)).await;
+            return crate::multiplex::h2_capture_with_upstream(tls, engine, url, Some(client_tls), upstream_tls).await;
         }
         let mut tls = BufReader::new(tls);
         let head = read_head(&mut tls).await?;
         if head.is_empty() { return Ok(()); }
-        if let Err(err) = exchange(&mut tls, &head, Some(&url), &engine, address, Some(client_tls)).await {
+        if let Err(err) = crate::capture_tls::scope(upstream_tls, exchange(&mut tls, &head, Some(&url), &engine, address, Some(client_tls))).await {
             error_response(&mut tls, 502, &format!("{err:#}")).await?;
         }
         tls.shutdown().await?;
@@ -238,7 +260,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
     if method != "HEAD" && response.status != 304 {
         headers.retain(|h| !h.name.eq_ignore_ascii_case("content-length"));
         if response.status != 204 {
-            headers.push(Header { name: "Content-Length".into(), value: body.len.to_string() });
+            headers.push(Header { disabled: false, name: "Content-Length".into(), value: body.len.to_string() });
         }
     }
     let mut out = format!("HTTP/1.1 {} \r\n", response.status).into_bytes();

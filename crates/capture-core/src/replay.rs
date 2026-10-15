@@ -1,9 +1,8 @@
 use crate::{http1::*, model::*};
 use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use std::sync::Arc;
 use tokio::{io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader}};
-use tokio_rustls::{rustls, TlsConnector};
+use tokio_rustls::rustls;
 
 pub trait IoStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> IoStream for T {}
@@ -23,14 +22,13 @@ pub(crate) async fn native(draft: &RequestDraft, roots: &rustls::RootCertStore) 
 pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertStore, proxy: Option<&crate::upstream::UpstreamProxy>) -> Result<(CapturedResponse, Vec<String>)> {
     let config = crate::tls_config::config(&draft.tls, roots, &draft.engine)?;
     let mut body=crate::body_spool::BodySpool::decode(&draft.body_base64).await?;
-    let (url, headers, mut notes) = prepare_fields(draft,body.len)?;
-    let connection = crate::upstream::connect(&url, proxy).await?;
-    let tcp = connection.stream;
+    let (url, mut headers, mut notes) = prepare_fields(draft,body.len)?;
+    let mut absolute_form = false;
+    let mut authorization = None;
     let mut tls_version = None;
     let mut upstream_tls = None;
     let mut stream: Stream = if url.scheme() == "https" {
-        let name = rustls::pki_types::ServerName::try_from(hostname(&url))?;
-        let tls = TlsConnector::from(Arc::new(config)).connect(name, tcp).await?;
+        let tls = crate::capture_tls::connect(draft, &url, proxy, config).await?;
         let mut details = crate::tls_details::negotiated(tls.get_ref().1);
         details.server_name = Some(hostname(&url));
         upstream_tls = Some(details);
@@ -43,13 +41,21 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
             return Ok((response, notes));
         }
         Box::new(tls)
-    } else { tcp };
-    let proxy_authenticated = connection.absolute_form && connection.authorization.is_some();
+    } else {
+        let connection = crate::upstream::connect(&url, proxy).await?;
+        absolute_form = connection.absolute_form;
+        authorization = connection.authorization;
+        connection.stream
+    };
+    if join_request_cookies(&mut headers) {
+        notes.push("HTTP/1.1 转发已按协议使用分号合并分拆的 Cookie；原始字段保留在请求记录中。".into());
+    }
+    let proxy_authenticated = absolute_form && authorization.is_some();
     let mut wire = encode_request_head(&draft.method, &url, &headers)?;
-    if connection.absolute_form {
+    if absolute_form {
         let end = wire.windows(2).position(|b| b == b"\r\n").unwrap();
         let mut absolute = format!("{} {} HTTP/1.1\r\n", draft.method, url.as_str()).into_bytes();
-        if let Some(auth) = connection.authorization { absolute.extend_from_slice(format!("Proxy-Authorization: {auth}\r\n").as_bytes()); }
+        if let Some(auth) = authorization { absolute.extend_from_slice(format!("Proxy-Authorization: {auth}\r\n").as_bytes()); }
         absolute.extend_from_slice(&wire[end + 2..]); wire = absolute;
         notes.push("HTTP 请求使用 absolute-form 发送给上游代理；代理认证仅发送到上游，不保存在请求记录中。".into());
     }
@@ -59,8 +65,8 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
     drop(wire);
     stream.flush().await?;
     let mut sent_request_headers = headers.clone();
-    if proxy_authenticated { sent_request_headers.insert(0, Header { name: "Proxy-Authorization".into(), value: "[redacted]".into() }); }
-    sent_request_headers.push(Header { name: "Connection".into(), value: "close".into() });
+    if proxy_authenticated { sent_request_headers.insert(0, Header { disabled: false, name: "Proxy-Authorization".into(), value: "[redacted]".into() }); }
+    sent_request_headers.push(Header { disabled: false, name: "Connection".into(), value: "close".into() });
     notes.push("native 模式保留端到端头部的顺序、大小写和重复字段；连接使用 HTTP/1.1，追加 Connection: close。".into());
     let mut reader = BufReader::new(stream);
     for _ in 0..16 {

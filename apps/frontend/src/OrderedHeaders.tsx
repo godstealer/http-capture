@@ -1,7 +1,108 @@
+import { useId, useState } from 'react';
+import { ArrowUp, ArrowDown, X, Plus, Check, Copy, ClipboardPaste, FileText } from 'lucide-react';
 import { t } from './i18n';
-import { ArrowUp, ArrowDown, X, Plus, Check } from 'lucide-react';
+import { readClipboard, writeClipboard } from './clipboard';
+import { parseHeaderText, serializeHeaders, HeaderTextError } from './headerText';
 import type { Header } from './types';
-export default function OrderedHeaders({headers,onChange}:{headers:Header[];onChange:(headers:Header[])=>void}) {
-const draft={headers}; const setDraft=(value:{headers:Header[]})=>onChange(value.headers);
-return <><div className="table-head"><span>#</span><span>{t("字段名")}</span><span>{t("值")}</span><span /></div><div className="headers-scroll">{draft.headers.map((h, index) => <div className="header-row" key={index}><span className="row-number">{String(index + 1).padStart(2, '0')}</span><input aria-label={t("字段名 {v0}", { v0: index + 1 })} value={h.name} onChange={e => setDraft({ ...draft, headers: draft.headers.map((x, i) => i === index ? { ...x, name: e.target.value } : x) })} /><input aria-label={t("字段值 {v0}", { v0: index + 1 })} value={h.value} onChange={e => setDraft({ ...draft, headers: draft.headers.map((x, i) => i === index ? { ...x, value: e.target.value } : x) })} /><div className="row-actions"><button title={t("上移")} disabled={index === 0} onClick={() => { const headers = [...draft.headers]; [headers[index - 1], headers[index]] = [headers[index], headers[index - 1]]; setDraft({ ...draft, headers }); }}><ArrowUp size={12} /></button><button title={t("下移")} disabled={index === draft.headers.length - 1} onClick={() => { const headers = [...draft.headers]; [headers[index + 1], headers[index]] = [headers[index], headers[index + 1]]; setDraft({ ...draft, headers }); }}><ArrowDown size={12} /></button><button title={t("删除字段")} onClick={() => setDraft({ ...draft, headers: draft.headers.filter((_, i) => i !== index) })}><X size={12} /></button></div></div>)}</div><button className="add-header" onClick={() => setDraft({ ...draft, headers: [...draft.headers, { name: '', value: '' }] })}><Plus size={13} />{t("添加请求头")}</button><div className="field-note"><Check size={12} />{t("按列表顺序保存，保留重复字段与原始大小写")}</div></>;
+import './ordered-headers.css';
+
+function replaceEnabled(current: Header[], incoming: Header[]): Header[] {
+  const result: Header[] = [];
+  let index = 0;
+  for (const header of current) {
+    if (header.disabled) result.push(header);
+    else if (index < incoming.length) result.push(incoming[index++]);
+  }
+  return [...result, ...incoming.slice(index)];
+}
+
+export default function OrderedHeaders({ headers, onChange }: { headers: Header[]; onChange: (headers: Header[]) => void }) {
+  const textId = useId();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const [mode, setMode] = useState('replace');
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const enabled = headers.filter(header => !header.disabled).length;
+  function message(error: unknown) {
+    if (error instanceof HeaderTextError) return t('第 {v0} 行请求头格式无效，请检查字段名、值或换行。', { v0: error.line });
+    return String(error);
+  }
+  function currentText() { return serializeHeaders(headers.filter(header => header.name || header.value)); }
+  function openText() {
+    setError(''); setNotice('');
+    try { setText(currentText()); setMode('replace'); setEditing(true); }
+    catch (error) { setError(message(error)); }
+  }
+  async function paste() {
+    setError(''); setNotice(''); setBusy(true); setEditing(true); setMode('replace');
+    try { setText(await readClipboard()); }
+    catch { setError(t('无法读取剪贴板，请在下方编辑框中手动粘贴请求头。')); }
+    finally { setBusy(false); }
+  }
+  async function copy() {
+    setError(''); setNotice('');
+    try { await writeClipboard(currentText()); setNotice(t('已复制启用的请求头')); }
+    catch (error) { setError(error instanceof HeaderTextError ? message(error) : t('当前环境无法访问剪贴板')); }
+  }
+  function apply() {
+    setError(''); setNotice('');
+    try {
+      const parsed = parseHeaderText(text);
+      onChange(mode === 'append' ? [...headers, ...parsed.headers] : replaceEnabled(headers, parsed.headers));
+      setEditing(false);
+      setNotice(t('已应用 {v0} 个请求头', { v0: parsed.headers.length }) + (parsed.pseudoHeaders.length ? t('；已忽略 {v0} 个 HTTP/2 伪头，URL 和方法保持当前设置。', { v0: parsed.pseudoHeaders.length }) : ''));
+    } catch (error) { setError(message(error)); }
+  }
+  function update(index: number, patch: Partial<Header>) { onChange(headers.map((header, i) => i === index ? { ...header, ...patch } : header)); }
+  function move(index: number, offset: number) {
+    const next = [...headers];
+    [next[index], next[index + offset]] = [next[index + offset], next[index]];
+    onChange(next);
+  }
+  return <div className="ordered-headers">
+    <div className="headers-toolbar">
+      <span>{t('已启用 {v0} / {v1}', { v0: enabled, v1: headers.length })}</span>
+      <div className="headers-toolbar-actions">
+        <button type="button" aria-expanded={editing} onClick={openText}><FileText size={14} />{t('文本编辑')}</button>
+        <button type="button" disabled={busy} onClick={() => void paste()}><ClipboardPaste size={14} />{t('粘贴导入')}</button>
+        <button type="button" onClick={() => void copy()}><Copy size={14} />{t('复制请求头')}</button>
+      </div>
+    </div>
+    {editing && <div className="headers-text-editor">
+      <label htmlFor={textId}>{t('请求头文本')}</label>
+      <p>{t('支持 Name: value 和浏览器复制的名称、值分行格式；保留重复字段与顺序。')}</p>
+      <textarea id={textId} aria-label={t('请求头文本')} disabled={busy} value={text} onChange={event => { setText(event.target.value); setError(''); }} spellCheck={false} wrap="off" placeholder={'Accept: application/json\nUser-Agent: Mozilla/5.0\nX-Test: value'} />
+      <div className="headers-text-actions">
+        <select aria-label={t('请求头导入方式')} value={mode} onChange={event => setMode(event.target.value)}>
+          <option value="replace">{t('替换启用项，保留禁用项')}</option>
+          <option value="append">{t('追加到列表')}</option>
+        </select>
+        <button type="button" className="headers-apply" disabled={busy} onClick={apply}><Check size={14} />{t('应用到列表')}</button>
+        <button type="button" onClick={() => { setEditing(false); setError(''); }}>{t('取消')}</button>
+      </div>
+    </div>}
+    {error && <p className="headers-message headers-error" role="alert">{error}</p>}
+    {notice && <p className="headers-message" role="status">{notice}</p>}
+    <div className="headers-table">
+      <div className="table-head">
+        <input type="checkbox" aria-label={t('启用全部字段')} title={t('启用或禁用全部字段')} checked={headers.length > 0 && enabled === headers.length} ref={input => { if (input) input.indeterminate = enabled > 0 && enabled < headers.length; }} disabled={!headers.length} onChange={event => onChange(headers.map(header => ({ ...header, disabled: event.target.checked ? undefined : true })))} />
+        <span>#</span><span>{t('字段名')}</span><span>{t('值')}</span><span />
+      </div>
+      <div className="headers-scroll">{headers.map((header, index) => <div className={'header-row' + (header.disabled ? ' header-disabled' : '')} key={index}>
+        <input type="checkbox" aria-label={t('启用字段 {v0}', { v0: index + 1 })} checked={!header.disabled} onChange={event => update(index, { disabled: event.target.checked ? undefined : true })} />
+        <span className="row-number">{String(index + 1).padStart(2, '0')}</span>
+        <input aria-label={t('字段名 {v0}', { v0: index + 1 })} placeholder={t('字段名')} value={header.name} spellCheck={false} onChange={event => update(index, { name: event.target.value })} />
+        <input aria-label={t('字段值 {v0}', { v0: index + 1 })} placeholder={t('值')} value={header.value} spellCheck={false} onChange={event => update(index, { value: event.target.value })} />
+        <div className="row-actions">
+          <button type="button" title={t('上移')} aria-label={t('上移字段 {v0}', { v0: index + 1 })} disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={13} /></button>
+          <button type="button" title={t('下移')} aria-label={t('下移字段 {v0}', { v0: index + 1 })} disabled={index === headers.length - 1} onClick={() => move(index, 1)}><ArrowDown size={13} /></button>
+          <button type="button" title={t('删除字段')} aria-label={t('删除字段 {v0}', { v0: index + 1 })} onClick={() => onChange(headers.filter((_, i) => i !== index))}><X size={13} /></button>
+        </div>
+      </div>)}</div>
+    </div>
+    <button type="button" className="add-header" onClick={() => onChange([...headers, { name: '', value: '' }])}><Plus size={13} />{t('添加请求头')}</button>
+    <div className="field-note"><Check size={12} />{t('保留顺序、重复字段和原始大小写；禁用字段不发送。')}</div>
+  </div>;
 }

@@ -1,5 +1,5 @@
 import { t } from './i18n';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from './api';
 interface InterfaceAddress { name: string; address: string; family: string; available: boolean; loopback: boolean }
 export default function ListenerSettings({ host, port, running, onHost, onPort }: {
@@ -10,6 +10,30 @@ export default function ListenerSettings({ host, port, running, onHost, onPort }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [manual, setManual] = useState(false);
+  const [portText, setPortText] = useState(String(port));
+  const [portError, setPortError] = useState('');
+  const [checkingPort, setCheckingPort] = useState(false);
+  const [portAvailable, setPortAvailable] = useState(false);
+  const portCheck = useRef(0);
+  useEffect(() => setPortText(String(port)), [port]);
+  useEffect(() => { portCheck.current++; setCheckingPort(false); setPortAvailable(false); setPortError(''); }, [host]);
+  useEffect(() => () => { portCheck.current++; }, []);
+  async function commitPort() {
+    const check = ++portCheck.current;
+    const value = Number(portText);
+    setPortAvailable(false); setCheckingPort(false);
+    if (!/^\d+$/.test(portText) || value < 1024 || value > 65535) {
+      setPortError(t('端口必须在 1024–65535 之间')); return;
+    }
+    setPortError(''); setCheckingPort(true);
+    try {
+      await invoke('check_listener_port', { host: host.trim(), port: value });
+      if (check !== portCheck.current) return;
+      setPortText(String(value)); onPort(value);
+      setPortAvailable(true);
+    } catch (error) { if (check === portCheck.current) setPortError(String(error)); }
+    finally { if (check === portCheck.current) setCheckingPort(false); }
+  }
   useEffect(() => {
     let alive = true;
     setLoading(true); setError('');
@@ -37,7 +61,13 @@ export default function ListenerSettings({ host, port, running, onHost, onPort }
     {error && <p role="alert">{t("读取网卡失败：")}{error}{t("。仍可手动填写 IP。")}</p>}
     {!loading && !error && !interfaces.length && <p>{t("未发现网卡地址，可刷新或手动填写 IP。")}</p>}
     {mode === 'manual' && <label className="setting-label">{t("本机 IP")}<input aria-label={t("监听 IP")} disabled={running} placeholder={t("例如 192.168.1.10")} value={host} onChange={e => onHost(e.target.value)} /></label>}
-    <label className="setting-label">{t("监听端口")}<input aria-label={t("监听端口")} type="number" min="1024" max="65535" disabled={running} value={port} onChange={e => onPort(Math.max(1024, Math.min(65535, Number(e.target.value) || 8080)))} /></label>
+    <label className="setting-label">{t("监听端口")}<input aria-label={t("监听端口")} aria-invalid={!!portError} aria-describedby="listener-port-status" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={5} disabled={running} value={portText} onChange={e => {
+      if (!/^\d*$/.test(e.target.value)) return;
+      portCheck.current++; setCheckingPort(false); setPortAvailable(false); setPortError(''); setPortText(e.target.value);
+    }} onBlur={() => { if (!running) void commitPort(); }} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { portCheck.current++; setPortText(String(port)); setPortError(''); setCheckingPort(false); setPortAvailable(false); } }} /></label>
+    <div id="listener-port-status" role={portError ? 'alert' : 'status'}>
+      {portError || (checkingPort ? t('正在检查端口…') : portAvailable ? t('端口可用；启动时将再次检查。') : t('仅支持 1024–65535，输入完成后自动检查占用。'))}
+    </div>
     <p className="muted">{t("按所选网卡的 IP 监听；IP 变化后请停止抓包、刷新并重新选择。IPv6 链路本地地址中的 % 后为本机网卡索引，其他设备连接时需使用其自己的接口范围。")}</p>
   </div>;
 }

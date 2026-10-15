@@ -1,4 +1,4 @@
-export interface Header { name: string; value: string }
+export interface Header { name: string; value: string; disabled?: boolean }
 export interface TlsProfile {
   clientHelloHex?: string | null;
   browserVersion?: string | null;

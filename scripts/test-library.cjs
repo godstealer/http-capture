@@ -7,3 +7,35 @@ const draft={url:'https://{{host}}/{{path}}',method:'POST',headers:[{name:'X-A',
 const valid={format:'http-capture-library',version:1,library:{revision:88,collections:[{id:'c',name:'Collection'}],requests:[],environments:[{id:'e',name:'Environment',variables:{host:'example.invalid'}}],scripts:[]}};
 assert.equal(parseLibrary(JSON.stringify(valid),2).revision,2);
 for(const mutate of [v=>v.library.environments[0].variables={host:3},v=>v.library.collections.push({id:'c',name:'Duplicate'}),v=>v.library.requests.push({id:'r',name:'Bad',collectionId:'missing',draft:{}})]){const bad=structuredClone(valid);mutate(bad);assert.throws(()=>parseLibrary(JSON.stringify(bad),0));}
+
+const disabledDraft={...draft,url:'https://example.invalid/api',scripts:{...draft.scripts,enabled:false,before:'',after:''},headers:[
+ {name:'X-A',value:'{{token}}'},
+ {name:'{{undefinedHeaderName}}',value:'{{undefinedHeaderValue}}',disabled:true},
+ {name:'X-A',value:'{{token}}',disabled:false},
+ {name:'X-A',value:'last'},
+]};
+const disabledBefore=JSON.stringify(disabledDraft);
+const resolvedDisabled=resolveEnvironment(disabledDraft,{});
+assert.deepEqual(resolvedDisabled.headers,[
+ {name:'X-A',value:'local'},
+ {name:'{{undefinedHeaderName}}',value:'{{undefinedHeaderValue}}',disabled:true},
+ {name:'X-A',value:'local',disabled:false},
+ {name:'X-A',value:'last'},
+]);
+assert.equal(JSON.stringify(disabledDraft),disabledBefore);
+const reenabled=structuredClone(disabledDraft);reenabled.headers[1].disabled=false;
+assert.throws(()=>resolveEnvironment(reenabled,{}),/Undefined variable: undefinedHeaderName/);
+
+// The reusable library JSON keeps disabled rows and their positions so reloading
+// a saved request does not silently re-enable or lose them.
+const saved=structuredClone(valid);
+saved.library.requests=[{id:'r-disabled',name:'Saved headers',collectionId:'c',draft:disabledDraft}];
+const reloaded=parseLibrary(JSON.stringify(saved),9);
+assert.equal(reloaded.revision,9);
+assert.deepEqual(reloaded.requests[0].draft.headers,disabledDraft.headers);
+assert.deepEqual(resolveEnvironment(reloaded.requests[0].draft,{}).headers,resolvedDisabled.headers);
+for(const invalid of ['true',1,null]){
+ const bad=structuredClone(saved);bad.library.requests[0].draft.headers[1].disabled=invalid;
+ assert.throws(()=>parseLibrary(JSON.stringify(bad),0),/Invalid saved request/);
+}
+console.log('Disabled headers: unresolved variables stay editable, enabled variables resolve, saved library state/order survive reload and invalid flags are rejected.');

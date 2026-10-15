@@ -9,6 +9,7 @@ import './response.css';
 import './workbench.css';
 import './theme.css';
 import './request-details.css';
+import './fields.css';
 import { applyTheme, readTheme } from './theme';
 
 applyTheme(readTheme());

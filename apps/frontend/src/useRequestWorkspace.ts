@@ -62,7 +62,10 @@ export function useRequestWorkspace() {
     if (!ready) return;
     const state = persistence.current;
     state.latest = JSON.stringify({ editors, activeEditor });
-    if (state.latest === state.saved) return;
+    if (state.latest === state.saved) {
+      if (!state.running) { setMessage('请求已保存'); setError(false); }
+      return;
+    }
     setMessage('请求有未保存的修改');
     const timer = setTimeout(() => void flush(), 400);
     return () => clearTimeout(timer);

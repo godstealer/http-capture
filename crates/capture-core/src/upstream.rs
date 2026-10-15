@@ -155,6 +155,9 @@ impl UpstreamState {
     }
 }
 impl UpstreamProxy {
+    pub(crate) fn same_route(&self, other: &Self) -> bool {
+        self.url == other.url && self.username == other.username && self.password == other.password && self.listener == other.listener
+    }
     pub(crate) async fn for_helper(&self)->Result<transport_api::UpstreamProxyConfig> {
         let addresses:Vec<_>=tokio::net::lookup_host((hostname(&self.url).as_str(),self.port())).await.context("无法解析上游代理")?.collect();
         ensure!(!addresses.is_empty(),"上游代理没有可用地址");

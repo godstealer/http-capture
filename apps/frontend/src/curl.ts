@@ -5,11 +5,11 @@ const octal = (binary: string) => Array.from(binary, c => `\\${c.charCodeAt(0).t
 
 /** Bash command; body goes through stdin so NUL and non-UTF-8 bytes survive. */
 export function toCurl(request: RequestDraft): string {
-  const connectionTokens = request.headers.filter(h => h.name.toLowerCase() === 'connection')
+  const connectionTokens = request.headers.filter(h => !h.disabled && h.name.toLowerCase() === 'connection')
     .flatMap(h => h.value.toLowerCase().split(',').map(v => v.trim()));
   const omitted = new Set(['host', 'content-length', 'transfer-encoding', 'connection', 'proxy-connection',
     'proxy-authorization', 'keep-alive', 'te', 'trailer', 'upgrade', ...connectionTokens]);
-  const headers = request.headers.filter(h => !omitted.has(h.name.toLowerCase()));
+  const headers = request.headers.filter(h => !h.disabled && !omitted.has(h.name.toLowerCase()));
   const args = ['curl', '--globoff', '--path-as-is', '--request', quote(request.method), '--url', quote(request.url)];
   for (const header of headers) {
     // Captured HTTP/1 field values are mapped byte-for-byte to Latin-1 characters.

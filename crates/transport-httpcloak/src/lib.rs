@@ -20,7 +20,13 @@ impl Helper {
  }
  pub async fn send<S:Serialize>(&self,request:&RequestDraft<S>,preset:&str,proxy:Option<&transport_api::UpstreamProxyConfig>)->Result<(CapturedResponse,Vec<String>)>{
   ensure!(request.tls.client_hello_hex.is_none() || self.capabilities.custom_client_hello,"This httpcloak helper does not support ClientHello Hex; rebuild the helper");
-  let input=serde_json::to_vec(&serde_json::json!({"request":request,"preset":preset,"proxy":proxy}))?;
+  let mut request_json=serde_json::to_value(request)?;
+  for key in ["headers", "pseudoHeaders"] {
+   if let Some(headers)=request_json.get_mut(key).and_then(serde_json::Value::as_array_mut) {
+    headers.retain(|h| h.get("disabled").and_then(serde_json::Value::as_bool)!=Some(true));
+   }
+  }
+  let input=serde_json::to_vec(&serde_json::json!({"request":request_json,"preset":preset,"proxy":proxy}))?;
   let mut cmd=Command::new(&self.path);
   cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
   #[cfg(windows)] cmd.creation_flags(0x08000000);

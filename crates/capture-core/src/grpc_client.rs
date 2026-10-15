@@ -11,6 +11,7 @@ struct Abort(tokio::task::JoinHandle<Result<()>>);
 impl Drop for Abort{fn drop(&mut self){self.0.abort()}}
 fn save(engine:&Engine,flow:&Flow)->Result<()>{engine.store.insert(flow)?;if engine.events.receiver_count()>0{let _=engine.events.send(flow.clone());}Ok(())}
 pub fn start(engine:Arc<Engine>,mut request:RequestDraft,half_close:bool)->Result<String>{
+ request.retain_enabled_headers();
  ensure!(request.tls.preset=="native","Interactive gRPC requires Native TLS");
  ensure!(!request.scripts.enabled,"Interactive gRPC scripts are not supported; disable scripts for this request");
  validate_url(&request.url)?;request.engine="h2".into();request.method="POST".into();
@@ -30,7 +31,7 @@ pub fn start(engine:Arc<Engine>,mut request:RequestDraft,half_close:bool)->Resul
   }.await;
   engine.grpc_clients.0.lock().unwrap().remove(&id);
   let mut flow=flow.lock().unwrap();flow.duration_ms=started.elapsed().as_millis() as u64;
-  if flow.state!="cancelled"{flow.state=if result.is_ok(){"completed"}else{"failed"}.into()}
+  if !matches!(flow.state.as_str(),"cancelled"|"blocked"){flow.state=if result.is_ok(){"completed"}else{"failed"}.into()}
   flow.error=result.err().map(|e|format!("{e:#}"));let _=save(&engine,&flow);
  });Ok(output)
 }
@@ -41,6 +42,7 @@ pub async fn send(engine:&Engine,id:&str,body:&str,end:bool)->Result<()>{
  tokio::time::timeout(Duration::from_secs(30),rx).await.map_err(|_|anyhow::anyhow!("gRPC send timed out"))??.map_err(anyhow::Error::msg)
 }
 async fn drive(engine:Arc<Engine>,flow:Arc<Mutex<Flow>>,initial:Vec<u8>,half_close:bool,mut rx:mpsc::Receiver<Action>)->Result<()>{
+ { let mut current=flow.lock().unwrap(); if engine.blocking.apply(&mut current) { save(&engine,&current)?; return Ok(()); } }
  let request=flow.lock().unwrap().request.clone();let url=validate_url(&request.url)?;
  let route=request.upstream_profile_id.as_deref().map(|id|engine.upstream.profile_snapshot(id)).transpose()?;
  let conn=crate::upstream::connect(&url,route.as_ref()).await?;ensure!(!conn.absolute_form,"h2c requires direct or SOCKS5 connection");

@@ -14,9 +14,12 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 rfd = "0.15"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-updater = "2"
 tauri = { version = "2", features = [] }
 capture-core = { path = "../../../crates/capture-core" }
 serde.workspace = true
+serde_json.workspace = true
+time = { version = "0.3", features = ["formatting"] }
 tokio.workspace = true
 
 [[bin]]

@@ -8,9 +8,9 @@ function size(body: string) { return `${body.length * 3 / 4 - (body.endsWith('==
 export function RequestOverview({ request, flow }: { request: RequestDraft; flow?: Flow }) {
   return <div className="request-details">
     <PropertyTable rows={[
-      ['URL', request.url || t("未填写")], [t("状态"), flow ? flow.error ? t("失败") : flow.response ? t("已完成") : t("处理中") : t("未发送")],
+      ['URL', request.url || t("未填写")], [t("状态"), flow?.state === 'blocked' ? t('已阻止') : flow ? flow.error ? t("失败") : flow.response ? t("已完成") : t("处理中") : t("未发送")],
       [t("方法"), request.method], [t("客户端协议"), flow?.clientProtocol ?? t("未记录")],
-      [t("上游协议"), flow?.response?.version ?? t("未记录")], [t("响应状态码"), flow?.response?.status ?? '—'],
+      [t("上游协议"), flow?.state === 'blocked' ? t('本地阻止') : flow?.response?.version ?? t("未记录")], [t("响应状态码"), flow?.response?.status ?? '—'],
       [t("发送引擎"), request.engine ?? 'auto'],
     ]} />
     <details open><summary>{t("时间")}</summary><PropertyTable rows={[
