@@ -251,8 +251,19 @@ async fn roundtrip(client_alpn: &[&[u8]], origin_alpn: &[&[u8]], selected: Optio
                     .header("content-length", "2").body(()).unwrap(), false).unwrap();
                 body.send_data(bytes::Bytes::from_static(b"ok"), true).unwrap();
                 connection.graceful_shutdown();
+                // The one-shot upstream client closes its driver after reading the
+                // complete response. That can race our final GOAWAY writes; the
+                // browser below must still receive 200 and the complete body.
                 while let Some(request) = connection.accept().await {
-                    panic!("unexpected additional request: {:?}", request.err());
+                    match request {
+                        Ok(_) => panic!("unexpected additional request"),
+                        Err(error) if error.get_io().is_some_and(|io| matches!(io.kind(),
+                            std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::UnexpectedEof)) => break,
+                        Err(error) => panic!("unexpected HTTP/2 shutdown failure: {error:?}"),
+                    }
                 }
             } else {
                 let mut tls = BufReader::new(tls);
