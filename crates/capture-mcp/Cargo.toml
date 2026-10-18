@@ -16,6 +16,7 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-util = "0.7"
 
 [dev-dependencies]

@@ -91,6 +91,11 @@ pub struct ClientManager {
 
 impl ClientManager {
     pub fn new(store: Arc<Store>) -> Result<Arc<Self>> {
+        // MCP clients can be created without CaptureRuntime/Engine. Reqwest's
+        // rustls-no-provider backend requires a process default even for HTTP
+        // URLs because ClientBuilder prepares its HTTPS connector eagerly.
+        // Keep a previously selected provider; otherwise use core's ring choice.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let entries: Vec<StoredClient> = store.setting(KEY)?.unwrap_or_default();
         ensure!(entries.len() <= 32, "最多保存 32 个外部 MCP 服务");
         let mut ids = std::collections::HashSet::new();
@@ -356,14 +361,18 @@ async fn close(session: Option<Session>) {
     }
 }
 
+fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build().map_err(|_| anyhow::anyhow!("无法创建 MCP HTTP 客户端"))
+}
+
 async fn establish(entry: &StoredClient, token: Option<&str>, cancel: CancellationToken) -> Result<RunningService<RoleClient, ()>> {
     validate(entry, token)?;
     let connect = async {
         if entry.transport == "http" {
-            let client = reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(CONNECT_TIMEOUT)
-                .build().map_err(|_| anyhow::anyhow!("无法创建 MCP HTTP 客户端"))?;
+            let client = http_client()?;
             let mut config = StreamableHttpClientTransportConfig::with_uri(entry.url.clone())
                 // A retried tool may have side effects. Session expiry is shown
                 // to the user rather than transparently replaying a call.
@@ -422,6 +431,29 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(&directory.path().join("sessions.db")).unwrap());
         (directory, store)
+    }
+
+    #[test]
+    fn isolated_http_client_initializes_tls_provider() {
+        // A fresh filtered process is essential: core's parallel tests also
+        // install a provider and used to hide the standalone client panic.
+        let output=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","client::tests::http_provider_child_fixture","--nocapture"])
+            .env("HTTP_CAPTURE_MCP_TLS_TEST_CHILD","1").output().unwrap();
+        assert!(output.status.success(),"isolated MCP TLS regression failed:\n{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn http_provider_child_fixture() {
+        if std::env::var("HTTP_CAPTURE_MCP_TLS_TEST_CHILD").as_deref()!=Ok("1") { return; }
+        assert!(rustls::crypto::CryptoProvider::get_default().is_none(),"fixture must start without an Engine-installed provider");
+        let runtime=tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let (_directory,store)=store();
+            let _manager=ClientManager::new(store).unwrap();
+            assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+            http_client().expect("standalone MCP ClientManager must prepare its own TLS provider");
+        });
     }
 
     #[tokio::test]
