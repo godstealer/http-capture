@@ -44,16 +44,36 @@ export function assetPath(directory, name) {
   if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes('..')) throw new Error('Unsafe release asset filename');
   return path.join(directory, name);
 }
+function canonicalBase64(value, message) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error(message);
+  const decoded = Buffer.from(value, 'base64');
+  // Node ignores invalid characters, missing padding and non-zero padding bits.
+  // The desktop verifier is strict, so every layer must have one canonical form.
+  if (decoded.toString('base64') !== value) throw new Error(message);
+  return decoded;
+}
+function envelopeLines(bytes, message) {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) throw new Error(message);
+  // Only remove the final line ending. Trimming the envelope would hide illegal
+  // whitespace appended to the final Base64 line from strict validation.
+  return text.replace(/\r?\n$/, '').split(/\r?\n/);
+}
 export function signatureContent(text, expectedVersion, updaterPublicKey) {
-  const value = text.trim();
-  if (!value || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error('Updater signature must contain the base64 content of a .sig file');
-  const decoded = Buffer.from(value, 'base64').toString('utf8').trim().split(/\r?\n/);
-  const payload = Buffer.from(decoded[1] ?? '', 'base64');
-  if (decoded.length !== 4 || !decoded[0].startsWith('untrusted comment: ') || !decoded[2].startsWith('trusted comment: ') || payload.length !== 74 || Buffer.from(decoded[3], 'base64').length !== 64) throw new Error('Invalid Tauri updater signature envelope');
-  const versions = decoded[2].slice('trusted comment: '.length).split('\t').map(field => field.trim()).filter(field => field.startsWith('version:'));
+  const value = typeof text === 'string' ? text.trim() : '';
+  const invalid = 'Invalid Tauri updater signature envelope: expected canonical base64';
+  const decoded = envelopeLines(canonicalBase64(value, 'Updater signature must contain canonical base64 content of a .sig file'), invalid);
+  if (decoded.length !== 4 || !decoded[0].startsWith('untrusted comment: ') || !decoded[2].startsWith('trusted comment: ')) throw new Error('Invalid Tauri updater signature envelope');
+  const payload = canonicalBase64(decoded[1], invalid);
+  if (payload.length !== 74 || canonicalBase64(decoded[3], invalid).length !== 64) throw new Error('Invalid Tauri updater signature envelope');
+  // Match the desktop updater's tab-separated strip_prefix("version:") parser.
+  // Whitespace is signed data, not normalization: accepting it here would claim
+  // a package is installable when the application rejects its signed version.
+  const versions = decoded[2].slice('trusted comment: '.length).split('\t').filter(field => field.startsWith('version:'));
   if (expectedVersion && (versions.length !== 1 || versions[0].slice('version:'.length) !== assertVersion(expectedVersion))) throw new Error('Updater signature is missing the matching signed app version; use Tauri CLI 2.11.5 or newer');
   if (updaterPublicKey) {
-    const key = Buffer.from(Buffer.from(updaterPublicKey, 'base64').toString('utf8').trim().split(/\r?\n/)[1] ?? '', 'base64');
+    const trustedKey = publicKey({ plugins: { updater: { pubkey: updaterPublicKey } } });
+    const key = canonicalBase64(envelopeLines(canonicalBase64(trustedKey, invalid), invalid)[1], invalid);
     if (key.length !== 42 || !key.subarray(2, 10).equals(payload.subarray(2, 10))) throw new Error('Updater signature key id differs from the committed public key');
   }
   return value;
@@ -61,8 +81,9 @@ export function signatureContent(text, expectedVersion, updaterPublicKey) {
 export function publicKey(config, provided) {
   const key = config.plugins?.updater?.pubkey?.trim();
   if (!key) throw new Error('Missing committed plugins.updater.pubkey in tauri.conf.json');
-  const decoded = Buffer.from(key, 'base64').toString('utf8').trim().split(/\r?\n/);
-  if (decoded.length !== 2 || !decoded[0].startsWith('untrusted comment: ') || Buffer.from(decoded[1], 'base64').length !== 42) throw new Error('Invalid committed Tauri updater public key');
+  const invalid = 'Invalid committed Tauri updater public key: expected canonical base64';
+  const decoded = envelopeLines(canonicalBase64(key, invalid), invalid);
+  if (decoded.length !== 2 || !decoded[0].startsWith('untrusted comment: ') || canonicalBase64(decoded[1], invalid).length !== 42) throw new Error('Invalid committed Tauri updater public key');
   if (provided?.trim() && key !== provided.trim()) throw new Error('TAURI_UPDATER_PUBLIC_KEY differs from the committed updater public key');
   return key;
 }

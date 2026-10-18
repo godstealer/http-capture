@@ -200,7 +200,7 @@ impl Engine {
                         sse::Event::Data(data) => body.extend_from_slice(data),
                     }
                     use base64::Engine as _;
-                    if let Some(response) = &mut flow.response { response.body_base64 = base64::engine::general_purpose::STANDARD.encode(&body); }
+                    if let Some(response) = &mut flow.response { response.body_base64 = base64::engine::general_purpose::STANDARD.encode(&body).into(); }
                     dirty = true;
                     sse::downstream(event).await?;
                 }

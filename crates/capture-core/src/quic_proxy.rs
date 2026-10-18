@@ -119,7 +119,7 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                             let path = request.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
                                             let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "h3".into(), method: request.method().to_string(),
                                                 url: format!("https://{}{path}", authority(&target)), headers: multiplex::headers(request.headers()),
-                                                body_base64: body.into_base64().await?, tls: TlsProfile::default() };
+                                                body_base64: body.into_base64().await?.into(), tls: TlsProfile::default() };
                                             let flow = crate::traffic_origin::scope(Some(traffic_origin), engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/3".into()), Some(client_tls))).await?;
                                             let (response, mut body) = multiplex::response_head_for_flow(flow).await?;
                                             let (parts, ()) = response.into_parts();

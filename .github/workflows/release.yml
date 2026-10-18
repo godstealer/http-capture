@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: 22
       - name: Verify release and updater fixtures
-        run: node --test scripts/test-release-updater.mjs
+        run: node --test scripts/test-release-updater.mjs scripts/test-verify-published-release.mjs
       - name: Require updater signing configuration
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

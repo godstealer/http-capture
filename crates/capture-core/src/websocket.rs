@@ -108,7 +108,7 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
         out.extend_from_slice(b"\r\n"); server.write_all(&out).await?; server.flush().await?;
         let head = read_head(&mut server).await?;
         let (status, version, fields) = parse_response(&head)?;
-        guard.flow.response = Some(CapturedResponse { trailers: vec![],  status, version, tls_version: tls_details.as_ref().and_then(|d|d.version.clone()), upstream_tls: tls_details, headers: fields.clone(), body_base64: String::new(), raw_head_base64: Some(STANDARD.encode(&head)), sent_request_headers: Some(headers) });
+        guard.flow.response = Some(CapturedResponse { trailers: vec![],  status, version, tls_version: tls_details.as_ref().and_then(|d|d.version.clone()), upstream_tls: tls_details, headers: fields.clone(), body_base64: Default::default(), raw_head_base64: Some(STANDARD.encode(&head)), sent_request_headers: Some(headers) });
         check_handshake_rules(&guard.flow, &config, &script, true)?;
         ensure!(status == 101, "WebSocket upgrade rejected by server: HTTP {status}");
         ensure!(token_header(&fields, "connection", "upgrade") && requested(&fields) && single(&fields, "sec-websocket-accept")? == accept(&key), "Invalid WebSocket upgrade response");

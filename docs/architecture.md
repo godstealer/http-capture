@@ -35,7 +35,7 @@ cargo check -p http-capture-desktop
 
 Rust workspace 在根目录维护 `Cargo.lock`；npm workspace 在根目录维护 `package-lock.json`，子模块无需各自安装和维护锁文件。可选浏览器发送引擎分别通过 `capture-service/browser-replay` 或 `http-capture-desktop/browser-replay` feature 启用。
 
-Windows 需要 MSVC C++ 工具链和 WebView2，macOS 需要 Xcode Command Line Tools；Linux 的 core 凭据库需 D-Bus 开发依赖及运行时 Secret Service，Tauri 另需 WebKitGTK 等平台依赖。CI 配置覆盖三个平台的 core/服务及前端构建；具体运行结果需在 Actions 核对，尚不执行桌面安装包发布。
+Windows 需要 MSVC C++ 工具链和 WebView2，macOS 需要 Xcode Command Line Tools；Linux 的 core 凭据库需 D-Bus 开发依赖及运行时 Secret Service，Tauri 另需 WebKitGTK 等平台依赖。CI 覆盖三平台的 core/服务及前端检查；main 的成功 Check 触发四组桌面产物构建和签名，完整汇总后发布正式版及更新清单。详见 [发布流程](releases.md)。
 
 ## GitHub 提交
 

@@ -38,7 +38,7 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
                             ensure!(recv.trailers().await?.is_none(), "Request trailers are not supported yet");
                             // Downstream h2 does not imply upstream h2 support. Negotiate each leg independently.
                             let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers, engine: "auto".into(), method: parts.method.to_string(), url: target,
-                                headers: fields, body_base64: body.into_base64().await?, tls: TlsProfile::default() };
+                                headers: fields, body_base64: body.into_base64().await?.into(), tls: TlsProfile::default() };
                             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
                             let work = crate::sse::DOWNSTREAM.scope(tx, crate::capture_tls::scope(upstream_tls, engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/2".into()), client_tls)));
                             tokio::pin!(work);
@@ -449,7 +449,7 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
     let response = response.await?;
     let status = response.status().as_u16();
     let fields: Vec<Header> = ordered_headers(response.headers(), response.extensions(), None, None)?.into_iter().filter(|h| !h.name.starts_with(':')).collect();
-    let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: String::new(), raw_head_base64: None }).await?;
+    let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: Default::default(), raw_head_base64: None }).await?;
     let mut recv = response.into_body();
     let body_base64 = if streaming {
         STANDARD.encode(recv_h2_body_observed(&mut recv, true).await?)
@@ -457,7 +457,7 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
         recv_h2_body_spooled(&mut recv).await?.into_base64().await?
     };
     let trailers = recv.trailers().await?.map(|map| headers(&map)).unwrap_or_default();
-    Ok((CapturedResponse { trailers, upstream_tls: None, sent_request_headers: Some(sent_fields), tls_version: None, status, version: "HTTP/2".into(), headers: fields, body_base64, raw_head_base64: None }, notes))
+    Ok((CapturedResponse { trailers, upstream_tls: None, sent_request_headers: Some(sent_fields), tls_version: None, status, version: "HTTP/2".into(), headers: fields, body_base64: body_base64.into(), raw_head_base64: None }, notes))
 }
 
 async fn recv_h2_body_spooled(stream: &mut h2::RecvStream) -> Result<BodySpool> {
@@ -589,7 +589,7 @@ pub async fn h3_send_via(draft: &RequestDraft, roots: &rustls::RootCertStore, pr
     }
     check_body_length(expected, body.len, true)?;
     ensure!(stream.recv_trailers().await?.is_none(), "Trailers are not supported yet");
-    let result = CapturedResponse { trailers: vec![],  upstream_tls: Some(upstream_tls), sent_request_headers: None, tls_version: Some("TLS 1.3".into()), status: response.status().as_u16(), version: "HTTP/3".into(), headers: headers(response.headers()), body_base64: body.into_base64().await?, raw_head_base64: None };
+    let result = CapturedResponse { trailers: vec![],  upstream_tls: Some(upstream_tls), sent_request_headers: None, tls_version: Some("TLS 1.3".into()), status: response.status().as_u16(), version: "HTTP/3".into(), headers: headers(response.headers()), body_base64: body.into_base64().await?.into(), raw_head_base64: None };
     connection.close(0u32.into(), b"complete");
     Ok((result, notes))
     };

@@ -5,7 +5,7 @@ use tokio::{net::TcpListener, io::{AsyncReadExt, AsyncWriteExt, BufReader}};
 
 const FIRST: &[u8] = b"id: 1\ndata: first\n\n";
 fn draft(url: String) -> RequestDraft {
-    RequestDraft { method: "GET".into(), url, engine: "auto".into(), headers: vec![], pseudo_headers: vec![], body_base64: String::new(), tls: Default::default(), scripts: Default::default(), upstream_profile_id: None }
+    RequestDraft { method: "GET".into(), url, engine: "auto".into(), headers: vec![], pseudo_headers: vec![], body_base64: Default::default(), tls: Default::default(), scripts: Default::default(), upstream_profile_id: None }
 }
 async fn origin(chunked: bool) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub use transport_api::{Header, TlsProfile, CapturedResponse, TlsDetails, CertificateDetails};
+pub use transport_api::{Header, TlsProfile, CapturedResponse, TlsDetails, CertificateDetails, SharedBody};
 pub type RequestDraft = transport_api::RequestDraft<crate::scripts::Scripts>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -2,13 +2,13 @@
 
 跨平台 HTTP/HTTPS 调试代理。Rust/Tokio 内核，React 界面，Tauri 桌面外壳。
 
-状态更新：2026-10-18。下载与当前正式版本见 [Releases Latest](https://github.com/godstealer/http-capture/releases/latest)，本轮改动见 [正式版更新说明](docs/release-2026-10-18.md)。开发状态见 [路线图](docs/roadmap.md)，协议边界见 [协议说明](docs/protocols.md)。按用户要求暂缓手工实机验收，独立记录在 [验收清单](docs/acceptance-2026-10-18.md)；TUN H3 实机排查继续暂停。
+状态更新：2026-10-18。正式版 [0.1.19](https://github.com/godstealer/http-capture/releases/tag/build-c65e4d49b4d9) 已发布为 Latest，四平台构建和公开更新包验签通过，改动见 [正式版更新说明](docs/release-2026-10-18.md)。开发状态见 [路线图](docs/roadmap.md)，协议边界见 [协议说明](docs/protocols.md)。按用户要求暂缓手工实机验收，独立记录在 [验收清单](docs/acceptance-2026-10-18.md)；TUN H3 实机排查继续暂停。
 
 公开源码：[godstealer/http-capture](https://github.com/godstealer/http-capture)。功能实现、自动化验证和实机验收分别记录，不以编译通过代替跨平台可用。
 
 本轮包含：请求页直接保存/更新/另存为，按语言和库导出 20 种代码示例，CodeMirror 6 拦截正文与可选粘贴格式化，正文类型/二进制编辑，头部复制，原生缩放修正，监听设置恢复，五页代理设置、十套主题及流量来源。代码导出与保存入口位于请求区上方右侧。使用与验证记录见 [使用反馈修复记录](docs/ui-feedback-2026-10-16.md) 和上述版本说明。
 
-流量来源支持 Windows 本机 TCP 进程识别；Linux 待实机，macOS、TUN 原始进程及 UDP/QUIC 识别仍有边界。H2/H3 分块暂存已实现，完整 Base64 副本与整进程内存峰值仍是后续 P0 工作。
+流量来源支持 Windows 本机 TCP 进程识别；Linux 待实机，macOS、TUN 原始进程及 UDP/QUIC 识别仍有边界。0.1.19 包含 H2/H3 分块暂存；发布后独立开发分支继续减少正文快照及序列化副本，见 [大正文内存改造](docs/body-memory.md)，这部分尚未发布，整进程峰值测量和完整文件引用仍待完成。
 
 正式发布保留旧安装包使用的兼容更新地址；完整四平台产物及五个签名更新目标通过后才推进版本。0.1.0 等不带更新器的旧版需先手动安装新版。真实安装升级与系统集成仍按清单验收。
 

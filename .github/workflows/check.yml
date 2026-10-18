@@ -14,7 +14,7 @@ jobs:
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config dbus-daemon dconf-cli dconf-service gsettings-desktop-schemas
-      - run: cargo test --locked -p capture-core --no-default-features
+      - run: cargo test --locked -p transport-api -p transport-httpcloak -p capture-core --no-default-features
       - name: Verify GNOME proxy in an isolated session
         if: runner.os == 'Linux'
         run: bash scripts/test-gnome-proxy.sh
@@ -32,4 +32,4 @@ jobs:
       - run: npm run build
       - run: npm run test:frontend
       - run: node scripts/test-ci-retry.cjs
-      - run: node --test scripts/test-release-updater.mjs
+      - run: node --test scripts/test-release-updater.mjs scripts/test-verify-published-release.mjs

@@ -1,4 +1,6 @@
 //! Transport data only: no storage, scripts runtime, UI or capture dependencies.
+mod body;
+pub use body::SharedBody;
 use serde::{Serialize, Deserialize};
 /// An ordered sequence, including duplicate names and their original casing.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,7 +29,7 @@ pub struct RequestDraft<S = serde_json::Value> {
     pub method: String,
     pub url: String,
     pub headers: Vec<Header>,
-    pub body_base64: String,
+    pub body_base64: SharedBody,
     #[serde(default)]
     pub tls: TlsProfile,
 }
@@ -94,7 +96,7 @@ pub struct CapturedResponse {
     pub status: u16,
     pub version: String,
     pub headers: Vec<Header>,
-    pub body_base64: String,
+    pub body_base64: SharedBody,
     pub raw_head_base64: Option<String>,
 }
 

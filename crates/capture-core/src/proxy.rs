@@ -100,7 +100,7 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
         let bypass:Vec<String>=engine.store.setting("decryption.bypass.v1")?.unwrap_or_default();
         if !transparent && crate::decryption::matches(&hostname(&url),&bypass) {
             if let Some(hit) = engine.blocking.host_match_before_tls(&url, "capture") {
-                let request=RequestDraft { method:"CONNECT".into(), url:url.to_string(), headers:parse_request(&head)?.2, body_base64:String::new(), upstream_profile_id:None, scripts:Default::default(), pseudo_headers:vec![], engine:"native".into(), tls:Default::default() };
+                let request=RequestDraft { method:"CONNECT".into(), url:url.to_string(), headers:parse_request(&head)?.2, body_base64:Default::default(), upstream_profile_id:None, scripts:Default::default(), pseudo_headers:vec![], engine:"native".into(), tls:Default::default() };
                 let mut flow=Flow { state:"blocked".into(), id:uuid::Uuid::new_v4().to_string(), parent_id:None, started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64, duration_ms:0, source:"capture".into(), request, response:None, error:None, notes:vec!["解密例外隧道命中域名阻止规则；未建立上游连接。".into()], client_protocol:Some("HTTP/1.1".into()), client_tls:None, raw_request_head_base64:Some(STANDARD.encode(&head)), original_request:None, original_response:None, websocket:None, traffic_origin:crate::traffic_origin::current("capture") };
                 hit.apply(&mut flow);
                 engine.store.insert(&flow)?;
@@ -111,7 +111,7 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
             let route=engine.upstream.snapshot();let mut upstream=crate::upstream::connect(&url,route.as_ref()).await?.stream;
             stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;stream.flush().await?;
             let started=std::time::Instant::now();
-            let request=RequestDraft{method:"CONNECT".into(),url:url.to_string(),headers:parse_request(&head)?.2,body_base64:String::new(),upstream_profile_id:None,scripts:Default::default(),pseudo_headers:vec![],engine:"native".into(),tls:Default::default()};
+            let request=RequestDraft{method:"CONNECT".into(),url:url.to_string(),headers:parse_request(&head)?.2,body_base64:Default::default(),upstream_profile_id:None,scripts:Default::default(),pseudo_headers:vec![],engine:"native".into(),tls:Default::default()};
             let flow=Flow{state:"receiving".into(),id:uuid::Uuid::new_v4().to_string(),parent_id:None,started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64,duration_ms:0,source:"capture".into(),request,response:None,error:None,notes:vec!["HTTPS 直通：TLS 未解密，无法查看内部请求/响应。".into()],client_protocol:Some("HTTP/1.1".into()),client_tls:None,raw_request_head_base64:Some(STANDARD.encode(&head)),original_request:None,original_response:None,websocket:None,traffic_origin:crate::traffic_origin::current("capture")};
             engine.store.insert(&flow)?;
             let mut guard=crate::PendingFlow{engine:&engine,id:Some(flow.id.clone())};
@@ -206,7 +206,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
         validate_url(&normalized)?
     };
     prevent_loop(&url, address).await?;
-    let mut request = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "native".into(), method: method.clone(), url: url.to_string(), headers, body_base64: String::new(),
+    let mut request = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "native".into(), method: method.clone(), url: url.to_string(), headers, body_base64: Default::default(),
         tls: TlsProfile { preset: "native".into(), ..Default::default() } };
     if crate::websocket::requested(&request.headers) { return crate::websocket::capture(stream, request, head, engine, client_tls).await; }
     let body_result: Result<String> = async {
@@ -222,7 +222,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut BufReader<S>, 
         Ok(body)
     }.await;
     match body_result {
-        Ok(body) => request.body_base64 = body,
+        Ok(body) => request.body_base64 = body.into(),
         Err(error) => {
             engine.record_failure(request, STANDARD.encode(head), format!("{error:#}"))?;
             error_response(stream, 400, &format!("{error:#}")).await?;

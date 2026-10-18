@@ -18,6 +18,7 @@ async fn http_proxy_preserves_order_duplicates_binary_body_and_persists() {
     let dir = tempfile::tempdir().unwrap();
     let engine = Engine::open(dir.path()).unwrap();
     let mut events = engine.events.subscribe();
+    let mut other_events = engine.events.subscribe();
     let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin_addr = origin.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -47,8 +48,23 @@ async fn http_proxy_preserves_order_duplicates_binary_body_and_persists() {
     assert_eq!(flow.request.headers[3].name, "x-a");
     assert_eq!(flow.response.as_ref().unwrap().headers[0].name, "X-Origin");
     assert_eq!(flow.response.as_ref().unwrap().headers[1].value, "second");
-    assert!(events.recv().await.unwrap().response.is_none());
-    assert!(events.recv().await.unwrap().response.is_some());
+    let pending = events.recv().await.unwrap();
+    let completed = events.recv().await.unwrap();
+    let other_pending = other_events.recv().await.unwrap();
+    let other_completed = other_events.recv().await.unwrap();
+    assert!(pending.response.is_none());
+    assert!(completed.response.is_some());
+    assert_eq!(pending.id, completed.id);
+    assert_eq!(pending.id, other_pending.id);
+    assert_eq!(completed.id, other_completed.id);
+    // These are in-memory broadcasts of the same nonempty entity bodies.
+    // `flow` above came from SQLite and intentionally has different storage.
+    assert!(!pending.request.body_base64.is_empty());
+    assert!(!completed.response.as_ref().unwrap().body_base64.is_empty());
+    assert_eq!(pending.request.body_base64.as_ptr(), completed.request.body_base64.as_ptr());
+    assert_eq!(pending.request.body_base64.as_ptr(), other_pending.request.body_base64.as_ptr());
+    assert_eq!(completed.response.as_ref().unwrap().body_base64.as_ptr(),
+        other_completed.response.as_ref().unwrap().body_base64.as_ptr());
     handle.stop().await;
     drop(engine);
     let reopened = Engine::open(dir.path()).unwrap();
@@ -225,7 +241,7 @@ async fn invalid_upstream_certificate_is_never_accepted() {
         let (tcp, _) = origin.accept().await.unwrap();
         assert!(acceptor.accept(tcp).await.is_err());
     });
-    let request = capture_core::model::RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "native".into(), method: "GET".into(), url: format!("https://localhost:{}/", destination.port()), headers: vec![], body_base64: String::new(), tls: Default::default() };
+    let request = capture_core::model::RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "native".into(), method: "GET".into(), url: format!("https://localhost:{}/", destination.port()), headers: vec![], body_base64: String::new().into(), tls: Default::default() };
     let flow = engine.execute(request, None, "replay", None).await.unwrap();
     assert!(flow.error.unwrap().contains("certificate"));
     assert!(flow.response.is_none());

@@ -9,13 +9,13 @@ impl EngineContract<RequestDraft,capture_core::upstream::UpstreamProxy> for Prob
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok((CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: None, tls_version: None, status: 204, version: "HTTP/1.1".into(), headers: vec![],
-                body_base64: String::new(), raw_head_base64: None }, vec![self.id.into()]))
+                body_base64: Default::default(), raw_head_base64: None }, vec![self.id.into()]))
         })
     }
 }
 fn draft(engine: &str) -> RequestDraft {
     RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: engine.into(), method: "GET".into(), url: "https://localhost/".into(),
-        headers: vec![], body_base64: String::new(), tls: TlsProfile { preset: "chrome".into(), ..Default::default() } }
+        headers: vec![], body_base64: Default::default(), tls: TlsProfile { preset: "chrome".into(), ..Default::default() } }
 }
 
 #[tokio::test]

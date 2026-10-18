@@ -13,9 +13,28 @@ async fn shared_pipeline_edits_both_stages_and_retains_originals(){
  let temp=tempfile::tempdir().unwrap();let calls=Arc::new(Mutex::new(vec![]));let mut send=SendEngines::empty();send.register(Arc::new(Probe(calls.clone()))).unwrap();let e=Engine::open_with_engines(temp.path(),rustls::RootCertStore::empty(),send).unwrap();
  e.intercept.configure(Config{request:true,response:true,scope:"all".into(),rules:vec![Rule{url_contains:"example.test".into(),..Default::default()}]}).unwrap();
  for source in ["capture","replay"] {
- let other=e.clone();let task=tokio::spawn(async move{other.execute(draft(),None,source,None).await.unwrap()});
- let i=waiting(&e).await;assert_eq!(i.stage,"request");let mut d=decision(&i,"modify");let mut r=draft();r.method="POST".into();r.headers=vec![Header { disabled: false,name:"X-A".into(),value:"1".into()},Header { disabled: false,name:"X-B".into(),value:"2".into()},Header { disabled: false,name:"X-A".into(),value:"3".into()}];d.request=Some(r);e.intercept.resolve(d).unwrap();
- let i=waiting(&e).await;assert_eq!(i.stage,"response");let mut d=decision(&i,"modify");let mut r=i.flow.response.clone().unwrap();r.status=201;r.body_base64="ZWRpdGVk".into();d.response=Some(r);e.intercept.resolve(d).unwrap();let f=task.await.unwrap();assert_eq!(f.original_request.unwrap().method,"GET");assert_eq!(f.request.method,"POST");assert_eq!(f.original_response.unwrap().status,200);assert_eq!(f.response.unwrap().status,201);
+ let mut request=draft();request.body_base64="AP+A".repeat(32768).into();
+ let body=request.body_base64.clone();
+ let other=e.clone();let task=tokio::spawn(async move{other.execute(request,None,source,None).await.unwrap()});
+ let i=waiting(&e).await;assert_eq!(i.stage,"request");
+ let snapshot=e.intercept.snapshot().items.into_iter().find(|item|item.id==i.id).unwrap();
+ assert_eq!(i.flow.request.body_base64.as_ptr(),body.as_ptr());
+ assert_eq!(snapshot.flow.request.body_base64.as_ptr(),body.as_ptr());
+ let mut d=decision(&i,"modify");let mut r=i.flow.request.clone();r.method="POST".into();r.headers=vec![Header { disabled: false,name:"X-A".into(),value:"1".into()},Header { disabled: false,name:"X-B".into(),value:"2".into()},Header { disabled: false,name:"X-A".into(),value:"3".into()}];d.request=Some(r);e.intercept.resolve(d).unwrap();
+ let i=waiting(&e).await;assert_eq!(i.stage,"response");
+ let original_response_body=i.flow.response.as_ref().unwrap().body_base64.clone();
+ assert!(!original_response_body.is_empty());
+ let snapshot=e.intercept.snapshot().items.into_iter().find(|item|item.id==i.id).unwrap();
+ assert_eq!(snapshot.flow.response.as_ref().unwrap().body_base64.as_ptr(),original_response_body.as_ptr());
+ let mut d=decision(&i,"modify");let mut r=i.flow.response.clone().unwrap();r.status=201;r.body_base64="ZWRpdGVk".into();
+ let replacement_body=r.body_base64.clone();d.response=Some(r);e.intercept.resolve(d).unwrap();
+ let f=task.await.unwrap();assert_eq!(f.original_request.as_ref().unwrap().method,"GET");assert_eq!(f.request.method,"POST");assert_eq!(f.original_response.as_ref().unwrap().status,200);assert_eq!(f.response.as_ref().unwrap().status,201);
+ assert_eq!(f.original_request.as_ref().unwrap().body_base64.as_ptr(),body.as_ptr());
+ assert_eq!(f.request.body_base64.as_ptr(),body.as_ptr());
+ assert_eq!(f.original_response.as_ref().unwrap().body_base64.as_ptr(),original_response_body.as_ptr());
+ assert_eq!(f.response.as_ref().unwrap().body_base64.as_ptr(),replacement_body.as_ptr());
+ assert_eq!(original_response_body.as_str(),"b2s=");
+ assert_eq!(f.response.as_ref().unwrap().body_base64.as_str(),"ZWRpdGVk");
  }
  assert_eq!(calls.lock().unwrap().len(),2);assert_eq!(calls.lock().unwrap()[0].headers[2].value,"3");assert!(e.intercept.snapshot().items.is_empty());
 }

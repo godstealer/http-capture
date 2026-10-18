@@ -17,7 +17,7 @@ fn restart_restores_drafts_rules_scripts_and_committed_variables() {
  let engine=Engine::open(dir.path()).unwrap();
  let config=engine.intercept.snapshot();assert!(config.config.request);assert!(config.items.is_empty());assert!(config.config.rules[0].compiled_url.as_ref().unwrap().is_match("https://example.test/path"));
  let scripts=engine.scripts.snapshot().0;assert!(scripts.enabled);assert_eq!(scripts.variables.get("counter").unwrap(),"2");assert!(!scripts.variables.contains_key("removed"));
- let work=engine.store.workspace().unwrap();assert_eq!(work.active_editor,"draft-1");assert_eq!(work.editors[0].draft.headers[2].name,"X-A");assert_eq!(work.editors[0].draft.body_base64,"AAEC/w==");assert!(work.editors[0].draft.url.is_empty());
+ let work=engine.store.workspace().unwrap();assert_eq!(work.active_editor,"draft-1");assert_eq!(work.editors[0].draft.headers[2].name,"X-A");assert_eq!(work.editors[0].draft.body_base64.as_str(),"AAEC/w==");assert!(work.editors[0].draft.url.is_empty());
  let grpc=work.editors[0].grpc_draft.as_ref().unwrap();assert_eq!(grpc.method,"/demo.Echo/Bidi");assert_eq!(grpc.json,r#"{"text":"{{message}}""#);
  engine.store.save_workspace(Workspace{revision:work.revision,..Default::default()}).unwrap();drop(engine);
  assert!(Engine::open(dir.path()).unwrap().store.workspace().unwrap().editors.is_empty());

@@ -114,8 +114,8 @@ async fn large_workspace_and_library_survive_restart() {
  receiver.await.unwrap();
  task.abort();let _=task.await;drop(engine);
  let reopened=Engine::open(temp.path()).unwrap();
- assert_eq!(reopened.store.workspace().unwrap().editors[0].draft.body_base64,body);
- assert_eq!(reopened.store.library().unwrap().requests[0].draft.body_base64,body);
+ assert_eq!(reopened.store.workspace().unwrap().editors[0].draft.body_base64.as_str(),body.as_str());
+ assert_eq!(reopened.store.library().unwrap().requests[0].draft.body_base64.as_str(),body.as_str());
  assert_eq!(reopened.store.workspace().unwrap().revision,1);
  assert_eq!(reopened.store.library().unwrap().revision,1);
 }

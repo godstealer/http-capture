@@ -4,7 +4,7 @@ use base64::{Engine as _,engine::general_purpose::STANDARD};
 struct Probe(Arc<Mutex<Vec<RequestDraft>>>);
 impl EngineContract<RequestDraft,capture_core::upstream::UpstreamProxy> for Probe {
  fn id(&self)->&'static str{"probe"} fn profiles(&self)->Vec<String>{vec!["native".into()]}
- fn send<'a>(&'a self,r:&'a RequestDraft)->SendFuture<'a>{Box::pin(async move{self.0.lock().unwrap().push(r.clone());Ok((CapturedResponse { trailers: vec![], status:200,version:"HTTP/2".into(),headers:vec![Header { disabled: false,name:"Content-Encoding".into(),value:"br".into()}],body_base64:STANDARD.encode(b"original"),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:Some(r.headers.clone())},vec![]))})}
+ fn send<'a>(&'a self,r:&'a RequestDraft)->SendFuture<'a>{Box::pin(async move{self.0.lock().unwrap().push(r.clone());Ok((CapturedResponse { trailers: vec![], status:200,version:"HTTP/2".into(),headers:vec![Header { disabled: false,name:"Content-Encoding".into(),value:"br".into()}],body_base64:STANDARD.encode(b"original").into(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:Some(r.headers.clone())},vec![]))})}
 }
 fn draft()->RequestDraft{serde_json::from_str(r#"{"method":"GET","url":"http://example.test/","engine":"probe","headers":[{"name":"X-A","value":"1"},{"name":"X-B","value":"2"},{"name":"X-A","value":"3"}],"bodyBase64":""}"#).unwrap()}
 fn engine()->(tempfile::TempDir,Arc<Engine>,Arc<Mutex<Vec<RequestDraft>>>) {

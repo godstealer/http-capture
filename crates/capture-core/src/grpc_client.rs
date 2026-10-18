@@ -63,15 +63,15 @@ async fn drive(engine:Arc<Engine>,flow:Arc<Mutex<Flow>>,initial:Vec<u8>,half_clo
   let mut all=initial;
   while let Some(action)=rx.recv().await{
    let result=crate::multiplex::send_h2_chunk(&mut stream,Bytes::from(action.body.clone()),action.end).await;
-   match result{Ok(())=>{all.extend_from_slice(&action.body);let mut f=upload_flow.lock().unwrap();f.request.body_base64=STANDARD.encode(&all);save(&upload_engine,&f)?;let _=action.ack.send(Ok(()));},Err(e)=>{let _=action.ack.send(Err(e.to_string()));return Err(e)}}
+   match result{Ok(())=>{all.extend_from_slice(&action.body);let mut f=upload_flow.lock().unwrap();f.request.body_base64=STANDARD.encode(&all).into();save(&upload_engine,&f)?;let _=action.ack.send(Ok(()));},Err(e)=>{let _=action.ack.send(Err(e.to_string()));return Err(e)}}
    if action.end{return Ok(())}
   }Ok(())
  }));
  let receiving=async{
   let response=response.await?;let status=response.status().as_u16();let headers=crate::multiplex::headers(response.headers());
-  {let mut f=flow.lock().unwrap();f.state="receiving".into();f.response=Some(CapturedResponse{trailers:vec![],status,version:"HTTP/2".into(),headers,body_base64:String::new(),raw_head_base64:None,tls_version:details.as_ref().and_then(|d|d.version.clone()),upstream_tls:details,sent_request_headers:Some(sent)});save(&engine,&f)?;}
+  {let mut f=flow.lock().unwrap();f.state="receiving".into();f.response=Some(CapturedResponse{trailers:vec![],status,version:"HTTP/2".into(),headers,body_base64:Default::default(),raw_head_base64:None,tls_version:details.as_ref().and_then(|d|d.version.clone()),upstream_tls:details,sent_request_headers:Some(sent)});save(&engine,&f)?;}
   let mut recv=response.into_body();let mut body=Vec::new();
-  while let Some(chunk)=recv.data().await{let chunk=chunk?;recv.flow_control().release_capacity(chunk.len())?;body.extend_from_slice(&chunk);let mut f=flow.lock().unwrap();f.response.as_mut().unwrap().body_base64=STANDARD.encode(&body);save(&engine,&f)?;}
+  while let Some(chunk)=recv.data().await{let chunk=chunk?;recv.flow_control().release_capacity(chunk.len())?;body.extend_from_slice(&chunk);let mut f=flow.lock().unwrap();f.response.as_mut().unwrap().body_base64=STANDARD.encode(&body).into();save(&engine,&f)?;}
   let trailers=recv.trailers().await?.map(|m|crate::multiplex::headers(&m)).unwrap_or_default();flow.lock().unwrap().response.as_mut().unwrap().trailers=trailers;Ok::<(),anyhow::Error>(())
  };tokio::pin!(receiving);
  tokio::select!{result=&mut receiving=>result,result=&mut upload.0=>{result??;receiving.await}}

@@ -4,7 +4,7 @@ use base64::{Engine as _,engine::general_purpose::STANDARD};
 struct Probe(Arc<Mutex<Vec<RequestDraft>>>);
 impl EngineContract<RequestDraft,capture_core::upstream::UpstreamProxy> for Probe {
  fn id(&self)->&'static str{"probe"} fn profiles(&self)->Vec<String>{vec!["native".into()]}
- fn send<'a>(&'a self,r:&'a RequestDraft)->SendFuture<'a>{Box::pin(async move{self.0.lock().unwrap().push(r.clone());Ok((CapturedResponse { trailers: vec![], status:200,version:"HTTP/2".into(),headers:vec![Header { disabled: false,name:"Content-Encoding".into(),value:"br".into()}],body_base64:STANDARD.encode(b"original"),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:Some(r.headers.clone())},vec![]))})}
+ fn send<'a>(&'a self,r:&'a RequestDraft)->SendFuture<'a>{Box::pin(async move{self.0.lock().unwrap().push(r.clone());Ok((CapturedResponse { trailers: vec![], status:200,version:"HTTP/2".into(),headers:vec![Header { disabled: false,name:"Content-Encoding".into(),value:"br".into()}],body_base64:STANDARD.encode(b"original").into(),raw_head_base64:None,upstream_tls:None,tls_version:None,sent_request_headers:Some(r.headers.clone())},vec![]))})}
 }
 fn draft()->RequestDraft{serde_json::from_str(r#"{"method":"GET","url":"http://example.test/","engine":"probe","headers":[{"name":"X-A","value":"1"},{"name":"X-B","value":"2"},{"name":"X-A","value":"3"}],"bodyBase64":""}"#).unwrap()}
 fn engine()->(tempfile::TempDir,Arc<Engine>,Arc<Mutex<Vec<RequestDraft>>>) {
@@ -33,6 +33,20 @@ async fn capture_scripts_use_rules_without_manual_breakpoints_and_share_variable
  for _ in 0..2{assert!(e.execute(draft(),None,"capture",None).await.unwrap().error.is_none());}
  let mut other=draft();other.url="http://other.test/".into();assert!(e.execute(other,None,"capture",None).await.unwrap().error.is_none());
  assert_eq!(e.scripts.snapshot().0.variables["count"],"2");assert_eq!(calls.lock().unwrap()[1].headers.last().unwrap().value,"2");assert_eq!(calls.lock().unwrap()[2].headers.len(),3);
+}
+#[tokio::test]
+async fn metadata_only_scripts_reuse_unchanged_request_and_response_bodies(){
+ let (_dir,e,calls)=engine();let mut request=draft();request.body_base64="AP+A".repeat(32768).into();
+ let body=request.body_base64.clone();
+ request.scripts=Scripts{enabled:true,before:"request.headers.push({name:'X-Before',value:'yes'});".into(),after:"response.headers.push({name:'X-After',value:'yes'});".into(),..Default::default()};
+ let flow=e.execute(request,None,"replay",None).await.unwrap();assert!(flow.error.is_none(),"{:?}",flow.error);
+ assert_eq!(flow.request.body_base64.as_ptr(),body.as_ptr());
+ assert_eq!(flow.original_request.as_ref().unwrap().body_base64.as_ptr(),body.as_ptr());
+ assert_eq!(calls.lock().unwrap()[0].body_base64.as_ptr(),body.as_ptr());
+ let response=flow.response.as_ref().unwrap();let original=flow.original_response.as_ref().unwrap();
+ assert_eq!(response.body_base64.as_ptr(),original.body_base64.as_ptr());
+ assert_eq!(STANDARD.decode(&response.body_base64).unwrap(),b"original");
+ assert!(response.headers.iter().any(|h|h.name=="X-After"));
 }
 #[tokio::test]
 async fn failures_are_transactional_and_never_send_invalid_requests(){

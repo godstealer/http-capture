@@ -44,7 +44,15 @@ CI 配置要求：
 - 发布任务跨提交串行，并比较数字 SemVer。旧构建晚完成也不能将频道或 GitHub Latest 退回低版本；同版本来源或清单不同则拒绝推进。发布 build 时使用 draft，完整资产上传成功后先以正式版但 `latest=false` 公开，兼容频道更新成功后才允许提升为 Latest。发布时独立读取当前 GitHub Latest 的版本，避免前次发布部分失败造成两个指针不一致。早期没有更新清单的正式版本仅接受明确的 `HTTP Capture <数字版本>` 标题，无法识别时拒绝覆盖。
 - 已公开 build 重跑时沿用其原有清单及资产；若兼容频道已更新而最后一次 Latest 元数据修改失败，同一版本重跑可以补完 Latest，不重新上传安装包或重写签名。较旧的候选即使四平台成功，也只保留其正式下载页，不抢占更新频道或 Latest。
 
-本地验证脚本：`node --test scripts/test-release-updater.mjs`（Node 22+）。fixtures 覆盖签名缺失、签名版本/key id、Deb 独立目标、四平台完整性、版本和来源混用、文件名路径穿越、包哈希、正式版与兼容频道标记、延迟发布、Latest 部分失败恢复和不可变版本。fixtures 不代替真实系统安装或客户端密码学签名验收。
+本地验证脚本：`node --test scripts/test-release-updater.mjs scripts/test-verify-published-release.mjs`（Node 22+）。fixtures 覆盖签名缺失、签名版本/key id、严格 Base64、Deb 独立目标、四平台完整性、版本和来源混用、文件名路径穿越、包哈希、正式版与兼容频道标记、延迟发布、Latest 部分失败恢复和不可变版本。fixtures 不代替真实系统安装。
+
+发布后可将全部附件下载到独立目录，将兼容 `updater-preview/latest.json` 另存 `channel.json`，再运行只读校验。公钥和更新说明从指定来源提交读取；`--published-at` 使用 GitHub 源 Check 的 `created_at`，不依赖下载清单自报日期：
+
+```sh
+node scripts/verify-published-release.mjs --directory <附件目录> --version <版本> --source-sha <完整来源SHA> --published-at <源Check的UTC时间> --repository godstealer/http-capture --channel-file <channel.json路径>
+```
+
+该脚本核对 22 附件、17 项 SHA256、五个更新包的 Ed25519 正文及 trusted-comment 签名和兼容频道一致性。其余 DMG/portable 等附件只核对校验和。0.1.19 已按此流程验证通过；本地验证器后续收紧了格式解析，不回写已公开的不可变安装包。
 
 协议和打包依据：[Tauri updater](https://v2.tauri.app/plugin/updater/)、[CLI 2.11.5 自动签名类型](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.5/crates/tauri-cli/src/bundle.rs#L222-L286)、[签名版本绑定实现](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.5/crates/tauri-cli/src/helpers/updater_signature.rs)。
 

@@ -1,4 +1,4 @@
-use crate::model::{Flow, RequestDraft};
+use crate::model::{Flow, RequestDraft, SharedBody};
 use serde::{Serialize, Deserialize};
 use rusqlite::OptionalExtension;
 use anyhow::Result;
@@ -160,7 +160,7 @@ impl Store {
 // Keep public Flow JSON backwards compatible. Large entity bodies live in the same
 // SQLite transaction/backup as metadata; no external paths or dangling files.
 const BODY_INLINE_LIMIT:usize=64*1024;
-fn body_slots(flow:&mut Flow, mut visit:impl FnMut(&str,&mut String)->Result<()>) -> Result<()> {
+fn body_slots(flow:&mut Flow, mut visit:impl FnMut(&str,&mut SharedBody)->Result<()>) -> Result<()> {
  visit("request",&mut flow.request.body_base64)?;
  if let Some(v)=&mut flow.response {visit("response",&mut v.body_base64)?;}
  if let Some(v)=&mut flow.original_request {visit("originalRequest",&mut v.body_base64)?;}
@@ -188,7 +188,7 @@ fn write_flow(conn:&Connection,flow:&Flow)->Result<()> {
    anyhow::ensure!(written==size as u64,"Decoded body size mismatch");
    blob.close()?;
    // Explicit marker prevents a missing BLOB from looking like an empty body.
-   *body=format!("@body:{slot}");
+   *body=format!("@body:{slot}").into();
   }
   Ok(())
  })?;
@@ -200,12 +200,12 @@ fn restore_bodies(conn:&Connection,raw:&str)->Result<Flow> {
  let mut flow:Flow=serde_json::from_str(raw)?;let id=flow.id.clone();
  body_slots(&mut flow,|slot,body| {
   if body.starts_with("@body:") {
-   anyhow::ensure!(body==&format!("@body:{slot}"),"Invalid stored body reference");
+   anyhow::ensure!(body.as_str()==format!("@body:{slot}"),"Invalid stored body reference");
    let rowid:i64=conn.query_row("SELECT rowid FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,slot],|r|r.get(0))?;
    let mut blob=conn.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,true)?;
    let mut encoder=base64::write::EncoderWriter::new(Vec::new(),&STANDARD);
    std::io::copy(&mut blob,&mut encoder)?;
-   *body=String::from_utf8(encoder.finish()?)?;
+   *body=String::from_utf8(encoder.finish()?)?.into();
   }
   Ok(())
  })?;
@@ -386,7 +386,7 @@ mod body_storage_tests {
   assert_eq!(store.changes(None).unwrap().rows[0].flow.request.body_base64,f.request.body_base64);
   let backup=store.backup().unwrap();let copied=Store::open(Path::new(&backup)).unwrap();assert_eq!(copied.list().unwrap()[0].request.body_base64,f.request.body_base64);
   drop(store);let store=Store::open(&path).unwrap();assert_eq!(store.list().unwrap()[0].request.body_base64,f.request.body_base64);
-  f.request.body_base64=STANDARD.encode(b"small");store.insert(&f).unwrap();assert_eq!(store.get(&f.id).unwrap().unwrap().request.body_base64,f.request.body_base64);
+  f.request.body_base64=STANDARD.encode(b"small").into();store.insert(&f).unwrap();assert_eq!(store.get(&f.id).unwrap().unwrap().request.body_base64,f.request.body_base64);
   assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),0);
   let f=sample();store.insert(&f).unwrap();store.delete_flows(vec![f.id.clone()]).unwrap();store.insert(&f).unwrap();assert!(store.list().unwrap().is_empty());assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),0);
  }
@@ -396,6 +396,28 @@ mod body_storage_tests {
   f.original_request=Some(f.request.clone());
   f.response=Some(serde_json::from_value(serde_json::json!({"status":200,"version":"HTTP/1.1","headers":[],"bodyBase64":STANDARD.encode(vec![8u8;100000])})).unwrap());
   f.original_response=f.response.clone();
+  let request_ptr=f.request.body_base64.as_ptr();
+  let response_ptr=f.response.as_ref().unwrap().body_base64.as_ptr();
+  let mut metadata=f.clone();let mut visited=Vec::new();
+  body_slots(&mut metadata,|slot,body| {
+   let original=match slot {
+    "request"|"originalRequest"=>&f.request.body_base64,
+    "response"|"originalResponse"=>&f.response.as_ref().unwrap().body_base64,
+    _=>panic!("Unexpected body slot: {slot}"),
+   };
+   // Borrowing a slot must not coerce it to &mut String and copy the body
+   // before the visitor even decides whether an edit is needed.
+   assert_eq!(body.as_ptr(),original.as_ptr());
+   *body=format!("@body:{slot}").into();visited.push(slot.to_owned());Ok(())
+  }).unwrap();
+  assert_eq!(visited,["request","response","originalRequest","originalResponse"]);
+  body_slots(&mut metadata,|slot,body| {assert_eq!(body.as_str(),format!("@body:{slot}"));Ok(())}).unwrap();
+  assert_eq!(f.request.body_base64.as_ptr(),request_ptr);
+  assert_eq!(f.original_request.as_ref().unwrap().body_base64.as_ptr(),request_ptr);
+  assert_eq!(f.response.as_ref().unwrap().body_base64.as_ptr(),response_ptr);
+  assert_eq!(f.original_response.as_ref().unwrap().body_base64.as_ptr(),response_ptr);
+  assert_eq!(STANDARD.decode(&f.request.body_base64).unwrap(),vec![7;100000]);
+  assert_eq!(STANDARD.decode(&f.response.as_ref().unwrap().body_base64).unwrap(),vec![8;100000]);
   store.insert(&f).unwrap();let restored=store.get(&f.id).unwrap().unwrap();
   assert_eq!(serde_json::to_value(restored).unwrap(),serde_json::to_value(&f).unwrap());
   store.0.lock().unwrap().execute("DELETE FROM flow_bodies WHERE slot='response'",[]).unwrap();
@@ -407,20 +429,22 @@ mod body_storage_tests {
   let mut flow=sample();
   for extra in 0..3 {
    let bytes:Vec<u8>=(0..(9*1024*1024+extra)).map(|i|(i%251) as u8).collect();
-   flow.request.body_base64=STANDARD.encode(&bytes);
+   flow.request.body_base64=STANDARD.encode(&bytes).into();
    store.insert(&flow).unwrap();
    assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,flow.request.body_base64);
   }
   // Fail after several megabytes have already reached SQLite, not at the prefix.
   let mut invalid=flow.clone();let len=invalid.request.body_base64.len();
+  assert_eq!(invalid.request.body_base64.as_ptr(),flow.request.body_base64.as_ptr());
   invalid.request.body_base64.replace_range(len-8..len-7,"!");
+  assert_ne!(invalid.request.body_base64.as_ptr(),flow.request.body_base64.as_ptr());
   assert!(store.insert(&invalid).is_err());
   assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,flow.request.body_base64);
   assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),1);
  }
  #[test]
  fn imports_and_failed_updates_are_atomic(){
-  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("s.db")).unwrap();let f=sample();store.insert(&f).unwrap();let mut bad=f.clone();bad.request.body_base64="!".repeat(100000);assert!(store.insert(&bad).is_err());assert_eq!(store.get(&f.id).unwrap().unwrap().request.body_base64,f.request.body_base64);
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("s.db")).unwrap();let f=sample();store.insert(&f).unwrap();let mut bad=f.clone();bad.request.body_base64="!".repeat(100000).into();assert!(store.insert(&bad).is_err());assert_eq!(store.get(&f.id).unwrap().unwrap().request.body_base64,f.request.body_base64);
   let job=store.begin_import().unwrap();store.append_import(&job,0,vec![f.clone()]).unwrap();assert_eq!(store.finish_import(&job,true).unwrap(),1);store.import_flows(vec![f.clone()]).unwrap();assert_eq!(store.list().unwrap().len(),3);for row in store.list().unwrap(){assert_eq!(row.request.body_base64,f.request.body_base64);}
   store.clear().unwrap();assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies",[],|r|r.get::<_,i64>(0)).unwrap(),0);
  }

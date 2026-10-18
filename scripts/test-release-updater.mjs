@@ -14,7 +14,7 @@ const config = { version: '0.1.0', plugins: { updater: { pubkey: key, requireSig
 const env = { SOURCE_CHECK_RUN_NUMBER: '42', SOURCE_SHA: sourceSha };
 function signature(signedVersion = version, keyId = 1) {
   const payload = Buffer.alloc(74, 2); payload.write('ED'); payload.fill(keyId, 2, 10);
-  return Buffer.from(`untrusted comment: fixture signature\n${payload.toString('base64')}\ntrusted comment: timestamp:1\t file:fixture${signedVersion == null ? '' : `\t version:${signedVersion}`}\n${Buffer.alloc(64, 3).toString('base64')}\n`).toString('base64');
+  return Buffer.from(`untrusted comment: fixture signature\n${payload.toString('base64')}\ntrusted comment: timestamp:1\tfile:fixture${signedVersion == null ? '' : `\tversion:${signedVersion}`}\n${Buffer.alloc(64, 3).toString('base64')}\n`).toString('base64');
 }
 function fixture(t) {
   const parent = path.join(projectRoot, '.local'); mkdirSync(parent, { recursive: true });
@@ -125,6 +125,40 @@ test('signed version and signing key id must match the release trust configurati
   assert.throws(() => signatureContent(signature('0.1.41'), version, key), /signed app version/);
   assert.throws(() => signatureContent(signature(version, 9), version, key), /key id/);
   assert.throws(() => signatureContent('https://example.com/app.sig', version), /base64/);
+});
+
+test('all three signature Base64 layers reject ignored characters, whitespace and non-canonical padding', () => {
+  const value = signature();
+  const lines = Buffer.from(value, 'base64').toString('utf8').trim().split('\n');
+  const wrap = changed => Buffer.from(changed.join('\n') + '\n').toString('base64');
+  assert.equal(signatureContent(value + '\n', version, key), value);
+  assert.equal(signatureContent(Buffer.from(lines.join('\r\n') + '\r\n').toString('base64'), version, key).length > 0, true);
+  assert.throws(() => signatureContent(value + '!', version, key), /canonical base64/);
+  assert.throws(() => signatureContent(value + '=', version, key), /canonical base64/);
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  for (const index of [1, 3]) {
+    for (const change of [text => text.slice(0, 4) + '!' + text.slice(4), text => text + ' ', text => text.replace(/=+$/, '')]) {
+      const changed = [...lines]; changed[index] = change(changed[index]);
+      assert.throws(() => signatureContent(wrap(changed), version, key), /canonical base64/);
+    }
+    const changed = [...lines], paddingIndex = changed[index].indexOf('=') - 1;
+    const replacement = alphabet[alphabet.indexOf(changed[index][paddingIndex]) + 1];
+    changed[index] = changed[index].slice(0, paddingIndex) + replacement + changed[index].slice(paddingIndex + 1);
+    assert(Buffer.from(changed[index], 'base64').equals(Buffer.from(lines[index], 'base64')));
+    assert.throws(() => signatureContent(wrap(changed), version, key), /canonical base64/);
+  }
+});
+
+test('public trust key Base64 is strict at both envelope and inner packet layers', () => {
+  const configure = value => ({ plugins: { updater: { pubkey: value } } });
+  assert.throws(() => publicKey(configure(key + '!')), /canonical base64/);
+  assert.throws(() => publicKey(configure(key + '=')), /canonical base64/);
+  const lines = Buffer.from(key, 'base64').toString('utf8').trim().split('\n');
+  for (const value of [lines[1] + '!', lines[1] + ' ', lines[1] + '=']) {
+    const malformed = Buffer.from(`${lines[0]}\n${value}\n`).toString('base64');
+    assert.throws(() => publicKey(configure(malformed)), /canonical base64/);
+    assert.throws(() => signatureContent(signature(), version, malformed), /canonical base64/);
+  }
 });
 test('delayed old builds and reruns cannot roll the preview channel back or replace a version', t => {
   const f = buildFixture(t), candidate = f.generate();

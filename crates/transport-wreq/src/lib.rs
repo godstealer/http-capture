@@ -59,5 +59,5 @@ pub async fn send<S>(draft: &RequestDraft<S>, headers: Vec<Header>, body: Vec<u8
     }
     notes.push("浏览器预设使用独立连接；响应头来自客户端解析结果，不宣称原始响应字段顺序。HTTP/2 字段名按协议小写。".into());
     notes.push("浏览器发送的线上头部顺序及 ClientHello 仍需抓取验证；当前不标记为已认证保真。".into());
-    Ok((CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: None, tls_version: None, status, version, headers, body_base64: STANDARD.encode(body), raw_head_base64: None }, notes, chain))
+    Ok((CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: None, tls_version: None, status, version, headers, body_base64: STANDARD.encode(body).into(), raw_head_base64: None }, notes, chain))
 }

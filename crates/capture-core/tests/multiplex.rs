@@ -13,7 +13,7 @@ fn roots(ca: &CertificateAuthority) -> rustls::RootCertStore {
 fn draft(engine: &str, url: String) -> RequestDraft {
     RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: engine.into(), method: "POST".into(), url,
         headers: vec![Header { disabled: false, name: "x-test".into(), value: "one".into() }, Header { disabled: false, name: "x-test".into(), value: "two".into() }],
-        body_base64: STANDARD.encode(vec![255; 100_000]), tls: TlsProfile::default() }
+        body_base64: STANDARD.encode(vec![255; 100_000]).into(), tls: TlsProfile::default() }
 }
 
 #[tokio::test]
@@ -207,7 +207,7 @@ async fn h3_roundtrip(via_socks: bool) {
         let proxy = tokio::spawn(async move { capture_core::quic_proxy::run(proxy_engine, format!("https://{address}/").parse().unwrap(), 0, Some(ready)).await.unwrap(); });
         let proxy_address = listen.await.unwrap();
         let mut request = draft("h3", format!("https://{proxy_address}/echo"));
-        request.body_base64 = STANDARD.encode((0..2 * 1024 * 1024 + 1).map(|i| (i % 251) as u8).collect::<Vec<_>>());
+        request.body_base64 = STANDARD.encode((0..2 * 1024 * 1024 + 1).map(|i| (i % 251) as u8).collect::<Vec<_>>()).into();
         let state = capture_core::upstream::UpstreamState::default();
         let relay_task = if via_socks {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

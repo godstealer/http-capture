@@ -40,7 +40,7 @@ impl Match {
             .unwrap_or(match flow.request.engine.as_str() { "h2"=>"HTTP/2", "h3"=>"HTTP/3", _=>"HTTP/1.1" });
         flow.response = Some(self.response(version));
         // HEAD has the same representation headers as GET, without payload bytes.
-        if flow.request.method == "HEAD" { flow.response.as_mut().unwrap().body_base64.clear(); }
+        if flow.request.method == "HEAD" { flow.response.as_mut().unwrap().body_base64 = Default::default(); }
         flow.error = None;
         flow.state = "blocked".into();
         flow.notes.push(self.reason());
@@ -55,7 +55,7 @@ impl Match {
         // Do not duplicate a potentially sensitive URL/query in local error text.
         let text = format!("HTTP Capture blocked this request.\nRule: {}\nMatch type: {}\n", self.rule_id, self.match_type);
         CapturedResponse {
-            status:403, version:version.into(), body_base64:STANDARD.encode(text.as_bytes()),
+            status:403, version:version.into(), body_base64:STANDARD.encode(text.as_bytes()).into(),
             headers:vec![
                 Header { disabled:false, name:"Content-Type".into(), value:"text/plain; charset=utf-8".into() },
                 Header { disabled:false, name:"Content-Length".into(), value:text.len().to_string() },

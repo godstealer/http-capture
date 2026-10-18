@@ -52,6 +52,14 @@ impl ScriptState {
 }
 #[derive(Deserialize)]
 pub struct Output { pub request:RequestDraft, pub response:Option<CapturedResponse>, pub variables:BTreeMap<String,String>, pub logs:Vec<String>, pub error:Option<String> }
+// Serialize directly from the shared model. Building a serde_json::Value first
+// would copy each complete Base64 body before writing the same text to JSON.
+#[derive(Serialize)]
+struct Input<'a> {
+ request: &'a RequestDraft,
+ response: Option<&'a CapturedResponse>,
+ variables: &'a BTreeMap<String,String>,
+}
 fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse>,variables:BTreeMap<String,String>,modules:crate::script_tools::Modules,after:bool,stopped:Arc<std::sync::atomic::AtomicBool>)->Result<Output>{
  request.retain_enabled_headers();
  if let Some(response)=&mut response { response.retain_enabled_headers(); }
@@ -60,7 +68,7 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
  let deadline=Instant::now()+Duration::from_secs(2);
  runtime.set_interrupt_handler(Some(Box::new(move||stopped.load(std::sync::atomic::Ordering::Relaxed)||Instant::now()>deadline)));
  let context=Context::full(&runtime)?;
- let input=serde_json::to_string(&serde_json::json!({"request":request,"response":response,"variables":variables}))?;
+ let input=serde_json::to_string(&Input{request:&request,response:response.as_ref(),variables:&variables})?;
  let output=context.with(|ctx|->Result<String>{
   ctx.globals().set("__input",input)?;
   ctx.globals().set("encodeText",Function::new(ctx.clone(),|s:String| STANDARD.encode(s.as_bytes()))?)?;
@@ -110,9 +118,11 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
   ensure!(r.headers.iter().map(|h|h.name.len()+h.value.len()+4).sum::<usize>()<=64*1024,"响应头超过 64 KiB");
   for h in &r.headers {let _:http::HeaderName=h.name.parse()?;let _:http::HeaderValue=h.value.parse()?;}
   let changed=r.body_base64!=original.body_base64;
+  if !changed { r.body_base64=original.body_base64; }
   if changed {r.headers.retain(|h|!["content-encoding","content-length","transfer-encoding"].contains(&h.name.to_ascii_lowercase().as_str()));r.headers.push(Header { disabled: false,name:"Content-Length".into(),value:bytes.len().to_string()});}
   r.version=original.version;r.tls_version=original.tls_version;r.upstream_tls=original.upstream_tls;r.sent_request_headers=original.sent_request_headers;r.raw_head_base64=None;
  } else {
+  if result.request.body_base64==request.body_base64 { result.request.body_base64=request.body_base64; }
   result.request.scripts=request.scripts;
   result.request.retain_enabled_headers();
   crate::http1::prepare(&result.request).context("请求脚本生成了无效请求")?;

@@ -7,7 +7,7 @@ fn input(url: String, auth: bool) -> UpstreamInput {
 }
 fn draft(engine: &str, url: String) -> RequestDraft {
     RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: engine.into(), method: "GET".into(), url,
-        headers: vec![Header { disabled: false, name: "x-a".into(), value: "one".into() }, Header { disabled: false, name: "x-b".into(), value: "two".into() }, Header { disabled: false, name: "x-a".into(), value: "three".into() }], body_base64: String::new(), tls: Default::default() }
+        headers: vec![Header { disabled: false, name: "x-a".into(), value: "one".into() }, Header { disabled: false, name: "x-b".into(), value: "two".into() }, Header { disabled: false, name: "x-a".into(), value: "three".into() }], body_base64: Default::default(), tls: Default::default() }
 }
 #[tokio::test]
 async fn http_proxy_absolute_form_auth_redaction_and_replay_scope() {
