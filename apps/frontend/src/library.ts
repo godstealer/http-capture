@@ -1,5 +1,9 @@
 import type { RequestDraft, Scripts } from "./types";
 import { encodeText } from "./types";
+export interface SavedRequestContext {
+  grpcDraft?: { method: string; json: string };
+  requestMode?: 'http' | 'grpc' | 'websocket';
+}
 export interface Library {
   revision: number;
   collections: { id: string; name: string }[];
@@ -8,6 +12,8 @@ export interface Library {
     name: string;
     collectionId: string;
     draft: RequestDraft;
+    grpcDraft?: SavedRequestContext['grpcDraft'];
+    requestMode?: SavedRequestContext['requestMode'];
   }[];
   environments: {
     id: string;
@@ -23,6 +29,54 @@ export const emptyLibrary: Library = {
   environments: [],
   scripts: [],
 };
+export interface SaveRequestSelection {
+  name: string;
+  collectionId?: string;
+  collectionName?: string;
+}
+
+// Build from the complete local library, including edits on the collection page.
+// The caller only replaces UI state after the revision-checked save succeeds.
+export function withSavedRequest(
+  library: Library,
+  draft: RequestDraft,
+  selection: SaveRequestSelection,
+  requestId?: string,
+  context: SavedRequestContext = {},
+): { library: Library; requestId: string; collectionName: string } {
+  const name = selection.name.trim();
+  if (!name || new TextEncoder().encode(name).length > 512)
+    throw new Error('Invalid request name');
+  const next = structuredClone(library);
+  let collection = next.collections.find(c => c.id === selection.collectionId);
+  if (selection.collectionId && !collection) throw new Error('Collection not found');
+  if (!collection) {
+    const collectionName = selection.collectionName?.trim() ?? '';
+    if (!collectionName || new TextEncoder().encode(collectionName).length > 512)
+      throw new Error('Invalid collection name');
+    collection = { id: crypto.randomUUID(), name: collectionName };
+    next.collections.push(collection);
+  }
+  const index = requestId ? next.requests.findIndex(r => r.id === requestId) : -1;
+  // A removed/imported-away request must be saved explicitly as a new request.
+  if (requestId && index < 0) throw new Error('Saved request not found');
+  const id = requestId ?? crypto.randomUUID();
+  const request = { ...(index >= 0 ? next.requests[index] : {}), id, name, collectionId: collection.id, draft: structuredClone(draft), ...structuredClone(context) };
+  if (index >= 0) next.requests[index] = request;
+  else next.requests.push(request);
+  return { library: next, requestId: id, collectionName: collection.name };
+}
+
+export function suggestedRequestName(draft: RequestDraft): string {
+  // Do not cut a surrogate pair when a long path contains emoji.
+  const shorten = (name: string) => name.slice(0, 128).replace(/[\uD800-\uDBFF]$/, '');
+  try {
+    const url = new URL(draft.url);
+    return shorten(`${draft.method} ${url.host}${url.pathname === '/' ? '' : url.pathname}`);
+  } catch {
+    return shorten(`${draft.method} ${draft.url}`.trim());
+  }
+}
 export function resolveEnvironment(
   request: RequestDraft,
   variables: Record<string, string>,
@@ -111,6 +165,8 @@ export function parseLibrary(text: string, revision: number): Library {
     const r = item.draft;
     if (
       !data.collections.some((c: any) => c.id === item.collectionId) ||
+      (item.requestMode !== undefined && !['http', 'grpc', 'websocket'].includes(item.requestMode)) ||
+      (item.grpcDraft !== undefined && (!object(item.grpcDraft) || typeof item.grpcDraft.method !== 'string' || typeof item.grpcDraft.json !== 'string')) ||
       !object(r) ||
       typeof r.method !== "string" ||
       typeof r.url !== "string" ||

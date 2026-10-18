@@ -1,5 +1,7 @@
 import Plugins from './Plugins';
 import AppUpdater from './AppUpdater';
+import './settings-layout.css';
+import SettingsTabs, { type SettingsPageId } from './SettingsTabs';
 import {isGrpcContentType} from './grpc';
 import GrpcResponse from './GrpcResponse';
 import GrpcPanel from './GrpcPanel';
@@ -13,12 +15,15 @@ import { readClipboard, writeClipboard } from './clipboard';
 import RequestBodyEditor from './RequestBodyEditor';
 import { createFlowChanges, type FlowChanges } from './flowChanges';
 import RequestLibrary from './RequestLibrary';
-import { emptyLibrary, resolveEnvironment, type Library } from './library';
+import SaveRequestDialog from './SaveRequestDialog';
+import ExportCodeDialog from './ExportCodeDialog';
+import { emptyLibrary, resolveEnvironment, suggestedRequestName, withSavedRequest, type Library, type SaveRequestSelection, type SavedRequestContext } from './library';
 import { createFlowRefresh } from './flowRefresh';
 import { t, useLanguage } from './i18n';
 import LanguageSelector from './LanguageSelector';
 import TunSettings, { type TunStatus } from './TunSettings';
-import ListenerSettings from './ListenerSettings';
+import ListenerSettings, { type ListenerSettingsHandle } from './ListenerSettings';
+import { readListenerPreferences, saveListenerPreferences } from './listenerPreferences';
 import SystemSettings from './SystemSettings';
 import SystemProxyToggle from './SystemProxyToggle';
 import { applyRequestResult, RequestRuns } from './requestRuns';
@@ -27,7 +32,7 @@ import OrderedHeaders from './OrderedHeaders';
 import RequestBlocking, { type BlockConfig } from './RequestBlocking';
 import Interception, { type InterceptSnapshot } from './Interception';
 import { useEffect, useRef, useState } from 'react';
-import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, CircleHelp, Code2, Copy, FileJson, Globe2, Layers3, LockKeyhole, Play, Plus, Radio, RotateCw, Search, Send, Settings2, ShieldCheck, Square, Terminal, Trash2, X } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Ban, Check, ChevronDown, CircleHelp, Code2, Copy, FileJson, FolderOpen, Globe2, Layers3, LockKeyhole, Play, Plus, Puzzle, Radio, RotateCw, Save, Search, Send, Settings2, ShieldCheck, Square, Terminal, Trash2, X } from 'lucide-react';
 import { isTauri } from '@tauri-apps/api/core';
 import { invoke } from './api';
 import CaptureView from './CaptureView';
@@ -37,15 +42,19 @@ import { RequestOverview, TlsDetails } from './RequestDetails';
 import EngineSelector from './EngineSelector';
 import RequestProxySelector from './RequestProxySelector';
 import UpstreamSettings from './UpstreamSettings';
-import { useRequestWorkspace } from './useRequestWorkspace';
+import { useRequestWorkspace, type RequestEditor } from './useRequestWorkspace';
 import SplitPane from './SplitPane';
 import { emptyRequest, importCurl, looksLikeCurl } from './importCurl';
-import { applyTheme, readTheme, type Theme } from './theme';
+import { applyTheme, readTheme } from './theme';
+import ThemeSelector from './ThemeSelector';
+import { readUiZoom } from './uiZoom';
+import { useUiZoom } from './useUiZoom';
 import { decodeText, encodeText, type Flow, type ProxyStatus, type RequestDraft } from './types';
 
 const desktop = isTauri();
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 const blank: RequestDraft = emptyRequest();
+type RequestSaveTarget = SavedRequestContext & { editorId: string; draft: RequestDraft; name: string; collectionId?: string };
 
 export default function App() {
   useLanguage();
@@ -69,8 +78,8 @@ export default function App() {
     } catch (error) { notify(String(error)); }
   }
   const [tun, setTun] = useState<TunStatus>({available:false,running:false,helperPath:''});
-  const [zoom,setZoom]=useState(()=>{const value=Number(localStorage.getItem('http-capture.zoom'));return [75,90,100,110,125,150].includes(value)?value:100;});
-  useEffect(()=>{document.documentElement.style.setProperty('zoom',String(zoom/100));localStorage.setItem('http-capture.zoom',String(zoom));return()=>{document.documentElement.style.removeProperty('zoom');};},[zoom]);
+  const [zoom,setZoom]=useState(readUiZoom);
+  useUiZoom(zoom);
   const [theme, setTheme] = useState(readTheme);
   const flowRefreshEpoch = useRef(0);
   function replaceFlows(rows: Flow[]) { flowRefreshEpoch.current++; setFlows(rows); }
@@ -80,9 +89,37 @@ export default function App() {
   const [libraryMessage,setLibraryMessage]=useState('');
   const [environmentId,setEnvironmentId]=useState('');
   const librarySaved=useRef(JSON.stringify(emptyLibrary));
+  const libraryOperation = useRef(false);
+  const [requestSaveTarget, setRequestSaveTarget] = useState<RequestSaveTarget | null>(null);
+  const [requestSaveError, setRequestSaveError] = useState('');
+  const [codeExportRequest, setCodeExportRequest] = useState<RequestDraft | null>(null);
   useEffect(()=>{const leave=(e:BeforeUnloadEvent)=>{if(libraryReady&&JSON.stringify(library)!==librarySaved.current){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',leave);return()=>window.removeEventListener('beforeunload',leave);},[library,libraryReady]);
-  async function loadLibrary(){setLibraryBusy(true);try{const loaded=await invoke<Library>('request_library');setLibrary(loaded);librarySaved.current=JSON.stringify(loaded);setLibraryReady(true);setLibraryMessage('');}catch(e){setLibraryMessage(String(e));}finally{setLibraryBusy(false);}}
-  async function saveLibrary(){if(!libraryReady||libraryBusy)return;setLibraryBusy(true);try{const revision=await invoke<number>('save_request_library',{library});librarySaved.current=JSON.stringify({...library,revision});setLibrary(v=>({...v,revision}));setLibraryMessage(t('已保存'));}catch(e){setLibraryMessage(String(e));}finally{setLibraryBusy(false);}}
+  async function loadLibrary() {
+    if (libraryOperation.current) return;
+    libraryOperation.current = true; setLibraryBusy(true);
+    try {
+      const loaded = await invoke<Library>('request_library');
+      setLibrary(loaded); librarySaved.current = JSON.stringify(loaded);
+      setLibraryReady(true); setLibraryMessage('');
+      return loaded;
+    } catch (e) { setLibraryMessage(String(e)); }
+    finally { libraryOperation.current = false; setLibraryBusy(false); }
+  }
+  async function persistLibrary(next: Library) {
+    if (libraryOperation.current) throw new Error(t('正在保存，请稍后重试。'));
+    libraryOperation.current = true; setLibraryBusy(true);
+    try {
+      const submitted = structuredClone(next);
+      const revision = await invoke<number>('save_request_library', { library: submitted });
+      const saved = { ...submitted, revision };
+      librarySaved.current = JSON.stringify(saved); setLibrary(saved); setLibraryMessage(t('已保存'));
+    } catch (e) { setLibraryMessage(String(e)); throw e; }
+    finally { libraryOperation.current = false; setLibraryBusy(false); }
+  }
+  async function saveLibrary() {
+    if (!libraryReady || libraryOperation.current) return;
+    try { await persistLibrary(library); } catch { /* The collection page keeps the error and local edits. */ }
+  }
   const [flows, setFlows] = useState<Flow[]>([]);
   const { editors, setEditors, activeEditor, setActiveEditor, ready: workspaceReady, message: workspaceMessage, error: workspaceError, retry: saveWorkspace } = useRequestWorkspace();
   const updateInProgress = useRef(false);
@@ -96,6 +133,8 @@ export default function App() {
   }
   const editor = editors.find(item => item.id === activeEditor) ?? editors[0];
   const draft = editor?.draft ?? blank;
+  const savedRequest = library.requests.find(request => request.id === editor?.savedRequestId);
+  const savedCollection = library.collections.find(collection => collection.id === savedRequest?.collectionId);
   const closedEditors=useRef(new Set<string>());
   const [wsConnecting,setWsConnecting]=useState<Record<string,boolean>>({});
   const [wsDrafts,setWsDrafts]=useState<Record<string,{body:string;opcode:string}>>({});
@@ -103,10 +142,11 @@ export default function App() {
   const selected = editor?.selected ?? null;
   function setDraft(value: RequestDraft) { setEditors(items => items.map(item => item.id === editor?.id ? { ...item, draft: value } : item)); }
   function setSelected(value: string | null) { setEditors(items => items.map(item => item.id === editor?.id ? { ...item, selected: value } : item)); }
-  function openEditor(f?: Flow, mode: 'draft' | 'result' = 'draft', imported?: RequestDraft) {
+  function openEditor(f?: Flow, mode: 'draft' | 'result' = 'draft', imported?: RequestDraft, savedRequest?: Library['requests'][number]) {
     if (!workspaceReady) { notify(t("请求工作区尚未加载，请稍后再试。")); return; }
     const id = crypto.randomUUID();
-    setEditors(items => [...items, { id, draft: clone(imported ?? (f?.websocket?{...f.request,url:f.request.url.replace(/^http/, 'ws'),method:'GET',bodyBase64:'',engine:'auto',tls:{preset:'native'}}:f?.request) ?? blank), selected: mode === 'result' ? f?.id ?? null : null, parentId: f?.id ?? null }]);
+    setEditors(items => [...items, { id, draft: clone(imported ?? (f?.websocket?{...f.request,url:f.request.url.replace(/^http/, 'ws'),method:'GET',bodyBase64:'',engine:'auto',tls:{preset:'native'}}:f?.request) ?? blank), selected: mode === 'result' ? f?.id ?? null : null, parentId: f?.id ?? null, ...(savedRequest ? { savedRequestId: savedRequest.id, ...(savedRequest.grpcDraft ? { grpcDraft: structuredClone(savedRequest.grpcDraft) } : {}) } : {}) }]);
+    if (savedRequest?.requestMode) setRequestModes(values => ({ ...values, [id]: savedRequest.requestMode! }));
     setActiveEditor(id); setView('replay'); setTab('headers'); setResponseTab('body'); setResponseCollapsed(false);
     return id;
   }
@@ -122,6 +162,54 @@ export default function App() {
     if (activeEditor === id) setActiveEditor(remaining[remaining.length - 1].id);
   }
   function editorTitle(url: string) { try { return new URL(url).host; } catch { return t("未命名"); } }
+  function editorLabel(item: RequestEditor) {
+    return library.requests.find(request => request.id === item.savedRequestId)?.name ?? editorTitle(item.draft.url);
+  }
+  function requestSaveFailure(error: unknown) {
+    return /Library changed in another window/.test(String(error))
+      ? t('集合已在其他窗口修改，请先在集合页导出当前修改，再重新加载后重试。')
+      : t('保存失败：{v0}', { v0: String(error) });
+  }
+  async function commitRequest(target: RequestSaveTarget, selection: SaveRequestSelection, base: Library, requestId?: string) {
+    const next = withSavedRequest(base, target.draft, selection, requestId, { grpcDraft: target.grpcDraft, requestMode: target.requestMode });
+    await persistLibrary(next.library);
+    setEditors(items => items.map(item => item.id === target.editorId ? { ...item, savedRequestId: next.requestId } : item));
+    setRequestSaveError('');
+    notify(t('已保存到「{v0}」，可从左侧集合再次打开。', { v0: next.collectionName }));
+  }
+  async function saveRequest(asCopy = false) {
+    if (!editor || !connected || libraryOperation.current || requestSaveTarget) return;
+    const source = structuredClone(editor);
+    setRequestSaveError('');
+    try {
+      const base = libraryReady ? library : await loadLibrary();
+      if (!base) throw new Error(t('请求集合读取失败，请重试。'));
+      const existing = base.requests.find(request => request.id === source.savedRequestId);
+      const target: RequestSaveTarget = {
+        editorId: source.id, draft: source.draft, grpcDraft: source.grpcDraft, requestMode: currentRequestContext(source).requestMode,
+        name: existing ? (asCopy ? t('{v0}（副本）', { v0: existing.name }) : existing.name) : suggestedRequestName(source.draft),
+        collectionId: existing?.collectionId,
+      };
+      if (existing && !asCopy) {
+        await commitRequest(target, { name: existing.name, collectionId: existing.collectionId }, base, existing.id);
+      } else setRequestSaveTarget(target);
+    } catch (error) { const message = requestSaveFailure(error); setRequestSaveError(message); notify(message); }
+  }
+  async function confirmRequestSave(selection: SaveRequestSelection) {
+    if (!requestSaveTarget || libraryOperation.current) return;
+    try {
+      await commitRequest(requestSaveTarget, selection, library);
+      setRequestSaveTarget(null);
+    } catch (error) { setRequestSaveError(requestSaveFailure(error)); }
+  }
+  function openCodeExport() {
+    if (!editor || requestMode !== 'http') return;
+    try {
+      const environment = library.environments.find(item => item.id === environmentId);
+      if (environmentId && !environment) throw new Error(t('请选择环境'));
+      setCodeExportRequest(resolveEnvironment(draft, environment?.variables ?? {}));
+    } catch (error) { notify(String(error)); }
+  }
 
 
   const [tab, setTab] = useState('headers');
@@ -167,8 +255,33 @@ export default function App() {
   useEffect(()=>{if(connected&&!libraryReady)void loadLibrary();},[connected]);
   const [notice, setNotice] = useState('');
   const [modal, setModal] = useState<'settings' | 'help' | null>(null);
-  const [port, setPort] = useState(8080);
-  const [host, setHost] = useState('127.0.0.1');
+  const [settingsPage, setSettingsPage] = useState<SettingsPageId>('general');
+  const settingsDialog = useRef<HTMLDivElement>(null);
+  const [settingsValidationAttempt, setSettingsValidationAttempt] = useState(0);
+  function openSettings(page: SettingsPageId = 'general') {
+    setSettingsPage(page);
+    setModal('settings');
+  }
+  useEffect(() => {
+    if (settingsValidationAttempt) settingsDialog.current?.querySelector<HTMLInputElement>('.settings-listener-fields [aria-invalid="true"]')?.focus();
+  }, [settingsValidationAttempt]);
+  const [listenerPreferences, setListenerPreferences] = useState(readListenerPreferences);
+  const { port, host } = listenerPreferences;
+  const setPort = (port: number) => setListenerPreferences(value => ({ ...value, port }));
+  const setHost = (host: string) => setListenerPreferences(value => ({ ...value, host }));
+  useEffect(() => {
+    if (!saveListenerPreferences(listenerPreferences)) notify(t('监听设置仅在本次会话生效，无法保存到本地。'));
+  }, [listenerPreferences]);
+  const listenerSettings = useRef<ListenerSettingsHandle>(null);
+  async function finishModal() {
+    if (modal !== 'settings') { setModal(null); return; }
+    const current = listenerSettings.current;
+    if (!current) return;
+    const accepted = await current.commit();
+    if (listenerSettings.current !== current) return;
+    if (accepted) setModal(null);
+    else { setSettingsPage('general'); setSettingsValidationAttempt(value => value + 1); }
+  }
   const [useSystemProxy, setUseSystemProxy] = useState(false);
   const listenAddress = status.running && status.address ? status.address : `${host.includes(':') ? '[' + host + ']' : host}:${port}`;
   const wildcard = listenAddress.startsWith('0.0.0.0:') || listenAddress.startsWith('[::]:');
@@ -203,6 +316,11 @@ export default function App() {
   const requestMode=requestModes[editor?.id??'']??(/^wss?:/i.test(draft.url)?'websocket':draft.headers.some(h=>!h.disabled&&h.name.toLowerCase()==='content-type'&&isGrpcContentType(h.value))?'grpc':'http');
   const grpcRequest=requestMode==='grpc';
   const wsRequest=requestMode==='websocket';
+  function currentRequestContext(item?: RequestEditor): SavedRequestContext {
+    if (!item) return {};
+    const mode = requestModes[item.id] ?? (/^wss?:/i.test(item.draft.url) ? 'websocket' : item.draft.headers.some(h => !h.disabled && h.name.toLowerCase() === 'content-type' && isGrpcContentType(h.value)) ? 'grpc' : 'http');
+    return { grpcDraft: item.grpcDraft, requestMode: mode === 'grpc' || mode === 'websocket' ? mode : 'http' };
+  }
   useEffect(()=>{setTab(requestMode==='grpc'?'grpc':'headers')},[requestMode,editor?.id]);
   function changeRequestMode(mode:string){
     if(!editor)return;
@@ -326,42 +444,62 @@ export default function App() {
 
   const responseText = flow?.response ? decodeText(flow.response.bodyBase64) : '';
 
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's' || view !== 'replay' || !editor) return;
+      event.preventDefault();
+      if (!requestSaveTarget && !codeExportRequest && !modal && curlText === null) void saveRequest(event.shiftKey);
+    };
+    window.addEventListener('keydown', shortcut);
+    return () => window.removeEventListener('keydown', shortcut);
+  });
+
   return <div className="app-shell">
     {closing && <div className="modal-backdrop" style={{zIndex:10000}} role="alertdialog" aria-modal="true" aria-label={t("正在保存并关闭…")}><div className="modal">{t("正在保存并关闭…")}</div></div>}
+    <aside className="app-sidebar" aria-label={t('功能导航')}>
+      <div className="sidebar-brand" title="HTTP Capture"><Activity size={23} strokeWidth={2}/></div>
+      <nav>
+        <button className={view === 'capture' || view === 'replay' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'capture' || view === 'replay' ? 'page' : undefined} onClick={() => setView('capture')}><Radio size={21}/><span>{t('抓包')}</span></button>
+        <button className={view === 'interception' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'interception' ? 'page' : undefined} title={t('拦截') + (interception.config.request || interception.config.response ? ' · ' + t('已开启') : '')} onClick={() => setView('interception')}><Square size={20}/><span>{t('拦截')}</span>{interception.items.length > 0 ? <b className="sidebar-badge">{interception.items.length}</b> : (interception.config.request || interception.config.response) && <i className="sidebar-indicator is-enabled"/>}</button>
+        <button className={view === 'blocking' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'blocking' ? 'page' : undefined} onClick={() => setView('blocking')}><Ban size={21}/><span>{t('阻止请求')}</span>{blocking.enabled && <i className="sidebar-indicator"/>}</button>
+        <div className="sidebar-divider"/>
+        <button className={view === 'library' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'library' ? 'page' : undefined} title={t('集合与环境')} aria-label={t('集合与环境')} onClick={() => { setView('library'); if (!libraryReady) void loadLibrary(); }}><FolderOpen size={21}/><span>{t('集合')}</span></button>
+        <button className={view === 'plugins' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'plugins' ? 'page' : undefined} onClick={() => setView('plugins')}><Puzzle size={21}/><span>{t('插件')}</span></button>
+      </nav>
+      <button className="sidebar-item sidebar-help" onClick={() => setModal('help')}><CircleHelp size={21}/><span>{t('使用帮助')}</span></button>
+    </aside>
     <div className="workspace">
-      <header className="proxy-toolbar"><div className="proxy-address"><span className={status.running ? 'dot green' : 'dot'} />
-        <span>{!connected ? t("内核未连接") : status.running ? 'Proxying on' : t("代理已停止")} {connected && listenAddress}</span>
-        <button className="icon-button" title={wildcard ? t("所有网卡监听：客户端请填写本机局域网 IP 和端口") : t("复制代理地址")} disabled={wildcard} onClick={() => void copy(listenAddress)}><Copy size={17} /></button>
-        <button className="text-button" onClick={() => setView('interception')}>{t("拦截 ·")}{interception.items.length}{interception.config.request || interception.config.response ? t(" · 已开启") : ''}</button><button className={'text-button blocking-nav'+(blocking.enabled?' is-on':'')} aria-label={t('阻止请求')} onClick={()=>setView('blocking')}>{t('阻止请求')}{blocking.enabled&&<span> · {blocking.rules.filter(rule=>rule.enabled).length}</span>}</button><button className="text-button" title={t("上游代理设置")} onClick={() => setModal('settings')}>{status.upstream?.enabled ? t("上游：{v0}", { v0: status.upstream.profileName ?? status.upstream.url }) : t("上游：直连")}</button><button className="proxy-settings-button" aria-label={t("代理设置")} title={t("修改监听端口、配置上游代理")} onClick={() => setModal('settings')}><Settings2 size={18} /><span>{t("代理设置")}</span></button>
-        <button className="text-button" onClick={() => setModal('settings')}>TUN · {tun.running ? t("运行中") : t("未开启")}</button><span className="toolbar-spacer" /><AppUpdater beforeInstall={beforeUpdateInstall} onBusyChange={value => { updateInProgress.current = value; }} /><LanguageSelector /><label>{t("界面缩放")}<select aria-label={t("界面缩放")} value={zoom} onChange={e=>setZoom(Number(e.target.value))}>{[75,90,100,110,125,150].map(value=><option key={value} value={value}>{value}%</option>)}</select></label><label className="theme-picker">{t("主题")}<select aria-label={t("界面主题")} value={theme} onChange={e => { const value = e.target.value as Theme; setTheme(value); applyTheme(value); }}><option value="light">{t("浅色 · 琥珀")}</option><option value="dark">{t("深色 · 薄荷")}</option></select></label><span className="app-wordmark">HTTP CAPTURE</span>
-        <SystemProxyToggle running={status.running} connected={connected} locked={proxyBusy} preferred={useSystemProxy} onPreference={setUseSystemProxy} onError={notify} />
-        <button className="icon-button" title={t("导出 CA 证书")} disabled={!connected} onClick={() => void exportCa()}><ShieldCheck size={21} /></button>
-        <button className="icon-button" title={t("使用帮助")} onClick={() => setModal('help')}><CircleHelp size={19} /></button>
-      </div><button className="capture-switch" disabled={proxyBusy} onClick={() => void capture()}>{status.running ? <Square size={16} /> : <Play size={16} />}{proxyBusy ? t("处理中…") : status.running ? t("停止") : t("开始捕获")}</button></header>
+      <header className="proxy-toolbar">
+        <div className="workspace-heading"><span>HTTP CAPTURE</span><strong>{view === 'capture' ? t('流量捕获') : view === 'replay' ? t('请求重放') : view === 'interception' ? t('拦截') : view === 'blocking' ? t('阻止请求') : view === 'library' ? t('集合与环境') : t('插件')}</strong></div>
+        <div className="proxy-address"><span className={status.running ? 'dot green' : 'dot'}/><div><span>{!connected ? t('内核未连接') : status.running ? t('代理已就绪') : t('代理已停止')}</span><code>{listenAddress}</code></div><button className="icon-button" title={wildcard ? t('所有网卡监听：客户端请填写本机局域网 IP 和端口') : t('复制代理地址')} disabled={wildcard} onClick={() => void copy(listenAddress)}><Copy size={14}/></button></div>
+        <button className="upstream-chip" title={t('上游代理设置')} onClick={() => openSettings('upstream')}><Globe2 size={14}/><span>{status.upstream?.enabled ? t('上游：{v0}', {v0: status.upstream.profileName ?? status.upstream.url}) : t('上游：直连')}</span></button>
+        <div className="toolbar-actions"><AppUpdater beforeInstall={beforeUpdateInstall} onBusyChange={value => { updateInProgress.current = value; }}/><SystemProxyToggle running={status.running} connected={connected} locked={proxyBusy} preferred={useSystemProxy} onPreference={setUseSystemProxy} onError={notify}/><ThemeSelector value={theme} onChange={value => { setTheme(value); applyTheme(value); }}/><button className="proxy-settings-button" aria-label={t('代理设置')} title={t('修改监听端口、配置上游代理')} onClick={() => openSettings()}><Settings2 size={17}/><span>{t('代理设置')}</span></button><button className={'capture-switch' + (status.running ? ' is-running' : '')} disabled={proxyBusy} onClick={() => void capture()}>{status.running ? <Square size={15}/> : <Play size={15}/>}<span>{proxyBusy ? t('处理中…') : status.running ? t('停止') : t('开始捕获')}</span></button></div>
+      </header>
       <nav className="work-tabs" aria-label={t("工作区标签")}>
-        <button className={view==='plugins'?'work-tab active':'work-tab'} onClick={()=>setView('plugins')}>{t('插件')}</button>
-        <button className={view === 'library' ? 'work-tab active' : 'work-tab'} onClick={()=>{setView('library');if(!libraryReady)void loadLibrary();}}>{t('集合与环境')}</button>
+        <div className="work-tab-items">
         <button className={view === 'capture' ? 'work-tab active' : 'work-tab'} onClick={() => setView('capture')}><Radio size={17} />{t("调试")}<span className="tab-count">({flows.filter(f => f.source === 'capture').length})</span></button>
         {editors.map(item => <div key={item.id} className={view === 'replay' && activeEditor === item.id ? 'work-tab active' : 'work-tab'}>
-          <button onClick={() => { setActiveEditor(item.id); setView('replay'); }} title={item.draft.url}><Send size={16} />{editorTitle(item.draft.url)}{runs.state(item.id) ? <span>{runs.state(item.id)?.cancelling ? t("取消中…") : t("发送中…")}</span> : <span className="dot green" />}</button>
-          <button className="close-tab" aria-label={(t("关闭 ") + editorTitle(item.draft.url) + t(" 标签"))} onClick={() => closeEditor(item.id)}><X size={13} /></button>
+          <button onClick={() => { setActiveEditor(item.id); setView('replay'); }} title={item.draft.url}><Send size={16} />{editorLabel(item)}{runs.state(item.id) ? <span>{runs.state(item.id)?.cancelling ? t("取消中…") : t("发送中…")}</span> : <span className="dot green" />}</button>
+          <button className="close-tab" aria-label={(t("关闭 ") + editorLabel(item) + t(" 标签"))} onClick={() => closeEditor(item.id)}><X size={13} /></button>
         </div>)}
-        <button className="new-tab" title={t("新建请求")} aria-label={t("新建请求")} disabled={!workspaceReady} onClick={() => openEditor()}><Plus size={21} /></button>
-        <button className="curl-import-button" disabled={readingClipboard || !workspaceReady} onClick={() => void openCurlImport()}>{t("导入 cURL")}</button>
+        <button className="new-tab" title={t("新建请求")} aria-label={t("新建请求")} disabled={!workspaceReady} onClick={() => openEditor()}><Plus size={17} /><span>{t('新建请求')}</span></button>
+        <button className="curl-import-button" disabled={readingClipboard || !workspaceReady} onClick={() => void openCurlImport()}><Terminal size={15}/>{t("导入 cURL")}</button>
+        </div>
         <details className="request-history"><summary>{t("重放历史 (")}{flows.filter(f => f.source === 'replay').length})</summary><div>{flows.filter(f => f.source === 'replay').map(f => <button key={f.id} onClick={event => { openEditor(f, 'result'); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{f.request.method} {f.request.url} <span>{f.response?.status ?? 'ERR'}</span></button>)}</div></details>
       </nav>
-      <div className="workspace-save-status" role="status"><span>{t(workspaceMessage)}</span>{workspaceError && workspaceReady && <button onClick={() => void saveWorkspace()}>{t("重试保存")}</button>}</div>
-      {!connected && <div className="preview-strip"><span><Layers3 size={14} />{t("界面预览 · 尚未连接抓包内核")}</span><span>{t("仅显示实际捕获的请求")}</span></div>}
+      {workspaceError && <div className="workspace-save-status workspace-save-error" role="status"><CircleHelp size={14}/><span>{t(workspaceMessage)}</span>{workspaceReady && <button onClick={() => void saveWorkspace()}>{t('重试保存')}</button>}</div>}
+      {!connected && !workspaceError && <div className="preview-strip"><span><Layers3 size={14} />{t("界面预览 · 尚未连接抓包内核")}</span><span>{t("仅显示实际捕获的请求")}</span></div>}
 
       {interception.items.length > 0 && view !== 'interception' && <button className="preview-strip" onClick={() => setView('interception')}>{t("有")}{interception.items.length} {t("项等待拦截放行，点击处理")}</button>}
       {view === 'plugins' && <Plugins />}
       {view === 'interception' && <Interception snapshot={interception} onUpdate={setInterception} />}
       {view === 'blocking' && <RequestBlocking key={blockingEditorVersion} connected={connected} onSaved={loadBlocking} />}
-      {view==='library'&&<RequestLibrary value={library} onChange={v=>{setLibrary(v);setLibraryMessage(t('有未保存的修改'));}} onSave={()=>void saveLibrary()} onReload={()=>void loadLibrary()} onOpen={v=>openEditor(undefined,'draft',v)} draft={editor?.draft} message={libraryMessage} busy={libraryBusy||!libraryReady}/>}
+      {view==='library'&&<RequestLibrary value={library} onChange={v=>{if(!libraryOperation.current){setLibrary(v);setLibraryMessage(t('有未保存的修改'));}}} onSave={()=>void saveLibrary()} onReload={()=>void loadLibrary()} onOpen={v=>openEditor(undefined,'draft',v.draft,v)} draft={editor?.draft} draftContext={currentRequestContext(editor)} message={libraryMessage} busy={libraryBusy||!libraryReady}/>}
       <div className="capture-page" hidden={view !== 'capture'}><CaptureView onBlock={connected?(flow,kind)=>void blockRequest(flow,kind):undefined} onInterceptResponse={f => void interceptResponse(f)} onFlowsChanged={replaceFlows} active={view === 'capture'} busy={false} onReplayNow={f => void replayCaptured(f)} flows={flows} desktop={connected} running={status.running} address={clientAddress} onCopy={value => void copy(value)} onReplay={f => openEditor(f)} /></div>
       <div className="composer-page" hidden={view !== 'replay'}>
         <section className="detail-panel panel">
-          <div className="library-toolbar"><label>{t('发送环境')} <select value={environmentId} onChange={e=>setEnvironmentId(e.target.value)}><option value="">{t('无环境')}</option>{library.environments.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></label><select aria-label={t('应用脚本模板')} value="" onChange={e=>{const saved=library.scripts.find(v=>v.id===e.target.value);if(saved)setDraft({...draft,scripts:structuredClone(saved.scripts)});}}><option value="">{t('应用脚本模板')}</option>{library.scripts.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select><button onClick={()=>setView('library')}>{t('收藏当前请求')}</button></div>
+          <div className="library-toolbar composer-library-toolbar"><label>{t('发送环境')} <select value={environmentId} onChange={e=>setEnvironmentId(e.target.value)}><option value="">{t('无环境')}</option>{library.environments.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></label><select aria-label={t('应用脚本模板')} value="" onChange={e=>{const saved=library.scripts.find(v=>v.id===e.target.value);if(saved)setDraft({...draft,scripts:structuredClone(saved.scripts)});}}><option value="">{t('应用脚本模板')}</option>{library.scripts.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select>{savedRequest && <button disabled={libraryBusy||!connected} onClick={()=>void saveRequest(true)}>{t('另存为')}</button>}{savedCollection && <button className="request-save-location" onClick={()=>setView('library')} title={t('查看集合')}><FolderOpen size={14}/><span>{savedCollection.name} / {savedRequest?.name}</span></button>}<div className="composer-toolbar-actions"><button disabled={!editor||requestMode!=='http'} title={requestMode!=='http'?t('当前支持导出 HTTP 请求代码。'):undefined} onClick={openCodeExport}><Code2 size={15}/>{t('导出代码')}</button><button className="request-save-button" disabled={libraryBusy||!connected||!editor} aria-keyshortcuts="Control+s Meta+s" onClick={()=>void saveRequest()}><Save size={15}/>{libraryBusy?t('正在保存…'):t('保存请求')}</button></div></div>
+          {requestSaveError && !requestSaveTarget && <p className="request-save-inline-error" role="alert">{requestSaveError}</p>}
           <div className="request-bar"><select aria-label={t("请求类型")} value={requestMode} onChange={e=>changeRequestMode(e.target.value)}><option value="http">HTTP</option><option value="grpc">gRPC</option><option value="websocket">WebSocket</option></select><select aria-label={t("请求方法")} disabled={wsRequest||grpcRequest} value={wsRequest?'GET':draft.method} onChange={e => setDraft({ ...draft, method: e.target.value })}>{['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map(m => <option key={m}>{m}</option>)}</select><div className="url-field"><LockKeyhole size={14} /><input aria-label={t("请求 URL")} placeholder="https://example.com / wss://example.com/socket" value={draft.url} onChange={e => setDraft({ ...draft, url: e.target.value })} /></div><button className="request-tls" title={t("当前 TLS 预设，点击设置；实际握手版本见响应栏")} onClick={() => setTab('tls')}>TLS · {draft.tls.preset}</button>{!grpcRequest&&<button className="button primary replay" disabled={busy||(['sending','receiving'].includes(flow?.state??'')&&flow?.request.headers.some(h=>!h.disabled&&h.name.toLowerCase()==='content-type'&&isGrpcContentType(h.value)))||!!wsConnecting[editor?.id??'']||wsActive} onClick={() => void send()}><Send size={14} />{busy||wsConnecting[editor?.id??''] ? t("处理中…") : wsActive?(flow?.websocket?.state==='open'?t("WebSocket 已连接"):t("WebSocket 连接中…")):wsRequest?t("连接 WebSocket"):t("发送请求")}</button>}{busy && <button className="button" disabled={activeRun?.cancelling} onClick={() => editor && void runs.cancel(editor.id)}>{activeRun?.cancelling ? t("取消中…") : t("取消请求")}</button>}</div>
           <SplitPane collapsedSecond={responseCollapsed} storageKey="composer-columns" label={t("调整请求与响应宽度")} direction="row" initial={50} min={25} max={75}><div className="replay-request">          <div className="tabs">{[['overview', t("总览"), null], ['headers', t("请求头"), draft.headers.length], ['body', t("请求体"), null], ['grpc', 'gRPC', null], ['tls', 'TLS', null], ['order', 'Header Order', null], ['scripts', t("脚本"), null], ['settings', t("设置"), null]].filter(([key])=>key==='grpc'?grpcRequest:key==='body'?requestMode==='http':key==='scripts'?!grpcRequest:true).map(([key, label, count]) => <button className={tab === key ? 'tab active' : 'tab'} key={key} onClick={() => setTab(String(key))}>{label}{count !== null && <span>{count}</span>}{key === 'tls' && <span className="tiny-dot" />}</button>)}<div className="tabs-right"><ShieldCheck size={13} />{t("有序字段")}</div></div>
 
@@ -369,7 +507,7 @@ export default function App() {
           {editors.filter(item=>(requestModes[item.id]??(item.draft.headers.some(h=>!h.disabled&&h.name.toLowerCase()==='content-type'&&isGrpcContentType(h.value))?'grpc':'http'))==='grpc').map(item=><div key={item.id} hidden={item.id!==editor?.id||tab!=='grpc'}><GrpcPanel savedDraft={item.grpcDraft} onDraftChange={patch=>setEditors(items=>items.map(e=>e.id===item.id?{...e,grpcDraft:{method:'',json:'{}',...e.grpcDraft,...patch}}:e))} environment={library.environments.find(v=>v.id===environmentId)?.variables??{}} environmentValid={!environmentId||library.environments.some(v=>v.id===environmentId)} flows={flows} draft={item.draft} flow={flows.find(f=>f.id===item.selected)} onChange={value=>setEditors(items=>items.map(e=>e.id===item.id?{...e,draft:value}:e))} onStarted={id=>{setEditors(items=>items.map(e=>e.id===item.id?{...e,selected:id}:e));setResponseCollapsed(false);setResponseTab("body")}}/></div>)}
           {tab === 'overview' && <RequestOverview request={draft} flow={flow} />}
           {tab === 'scripts' && <ScriptsEditor key={editor?.id} value={draft.scripts ?? emptyScripts} onChange={scripts=>setDraft({...draft,scripts})} logs={[...(flow?.notes??[]),flow?.error??'']} />}
-          {tab === 'settings' && <div className="tls-editor"><EngineSelector draft={draft} engines={engines} onChange={setDraft} /><RequestProxySelector draft={draft} onChange={setDraft} onManage={() => setModal('settings')} /></div>}
+          {tab === 'settings' && <div className="tls-editor"><EngineSelector draft={draft} engines={engines} onChange={setDraft} /><RequestProxySelector draft={draft} onChange={setDraft} onManage={() => openSettings('upstream')} /></div>}
           {tab === 'headers' && <OrderedHeaders key={editor?.id} headers={draft.headers} onChange={headers => setDraft({...draft,headers})} />}
           {tab === 'order' && <HeaderOrder onCopy={value => void copy(value)} headers={[...(draft.pseudoHeaders ?? []), ...draft.headers]} sent={flow?.response?.sentRequestHeaders} />}
           {tab === 'body' && <RequestBodyEditor key={editor?.id} draft={draft} onChange={setDraft}/>}
@@ -383,10 +521,94 @@ export default function App() {
         </section>
       </div>
       {certificateBusy && <FileProgress message={t("正在导出证书…")} />}
-      <footer className="statusbar"><span><span className={status.running ? 'dot green' : 'dot'} />{connected ? status.running ? t("代理已就绪") : t("等待启动代理") : t("未连接内核")}<span className="footer-divider" />{flows.filter(f => f.source === 'capture').length} {t("个捕获请求")}</span><span><LockKeyhole size={11} />{t("本地工作空间")}</span></footer>
+      <footer className="statusbar"><span><span className={status.running ? 'dot green' : 'dot'} />{connected ? status.running ? t("代理已就绪") : t("等待启动代理") : t("未连接内核")}<span className="footer-divider" />{flows.filter(f => f.source === 'capture').length} {t("个捕获请求")}</span><span className="workspace-save-inline">{!workspaceError && t(workspaceMessage)}</span><span><LockKeyhole size={12}/>{t('本地工作空间')}</span></footer>
     </div>
+    {codeExportRequest && <ExportCodeDialog request={codeExportRequest} onClose={()=>setCodeExportRequest(null)}/>}
+    {requestSaveTarget && <SaveRequestDialog collections={library.collections} initialName={requestSaveTarget.name} initialCollectionId={requestSaveTarget.collectionId} defaultCollectionName={t('我的请求')} busy={libraryBusy} error={requestSaveError} onSave={selection=>void confirmRequestSave(selection)} onClose={()=>{if(!libraryOperation.current){setRequestSaveTarget(null);setRequestSaveError('');}}}/>}
     {notice && <div className="toast" role="status"><CircleHelp size={17} /><span>{notice}</span><button onClick={() => setNotice('')} aria-label={t("关闭提示")}><X size={15} /></button></div>}
     {curlText !== null && <div className="modal-backdrop" onKeyDown={e => { if (e.key === 'Escape') setCurlText(null); }}><div className="modal curl-import-modal" role="dialog" aria-modal="true" aria-label={t("导入 cURL")}><button className="modal-close icon-button" aria-label={t("关闭导入")} onClick={() => setCurlText(null)}><X size={19} /></button><h2>{t("导入 cURL")}</h2><p>{t("可从剪贴板导入请求，或粘贴命令。导入后可编辑，点击发送才会发出请求。")}</p><textarea autoFocus aria-label={t("cURL 命令")} placeholder="curl 'https://example.com' -H 'Accept: application/json'" value={curlText} onChange={e => { setCurlText(e.target.value); setCurlError(''); }} />{curlError && <p role="alert">{curlError}</p>}<div className="curl-import-actions"><button className="button" onClick={() => { setCurlText(null); openEditor(); }}>{t("创建空请求")}</button><button className="button primary" disabled={!curlText.trim()} onClick={confirmCurl}>{t("导入请求")}</button></div></div></div>}
-    {modal && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal" role="dialog" aria-modal="true" aria-label={modal === 'settings' ? t("代理设置") : t("使用帮助")} onClick={e => e.stopPropagation()}><button className="modal-close icon-button" aria-label={t("关闭")} onClick={() => setModal(null)}><X size={19} /></button><div className="modal-symbol">{modal === 'settings' ? <Settings2 /> : <Terminal />}</div><h2>{modal === 'settings' ? t("代理设置") : t("开始使用 HTTP Capture")}</h2>{modal === 'settings' ? <><p>{t("停止代理后可以修改监听地址和端口。局域网模式允许其他设备使用此抓包代理。")}</p><LanguageSelector /><label>{t("界面缩放")}<select aria-label={t("界面缩放")} value={zoom} onChange={e=>setZoom(Number(e.target.value))}>{[75,90,100,110,125,150].map(value=><option key={value} value={value}>{value}%</option>)}</select></label><ListenerSettings host={host} port={port} running={status.running} onHost={setHost} onPort={setPort} /><SystemSettings running={status.running} useSystemProxy={useSystemProxy} onUseSystemProxy={setUseSystemProxy} /><DecryptionSettings /><TunSettings status={tun} onUpdate={setTun} /><UpstreamSettings current={status.upstream} connected={connected} onSaved={async () => setStatus(await invoke<ProxyStatus>('proxy_status'))} /><div className="setting-card"><ShieldCheck size={18} /><div><strong>{t("本地 CA 证书")}</strong><p>{status.caPath || t("启动桌面端后生成，每台设备独立保存。")}</p></div></div><button className="button" disabled={!connected} onClick={() => void exportCa()}>{t("导出 CA 证书")}</button><p className="muted">{t("客户端 HTTP 和 HTTPS 代理地址：")}{clientAddress}{t("。HTTPS 解密需要在客户端设备上信任上方 CA。")}{wildcard && t("0.0.0.0 / :: 是监听地址，不要填入客户端代理设置。")}{host !== '127.0.0.1' && t("请在可信局域网使用，并按需允许防火墙入站；当前抓包入口不提供代理认证。")}{t("不会自动修改防火墙、系统代理或证书信任。")}</p></> : <><p>{desktop ? t("启动捕获后，将客户端 HTTP / HTTPS 代理设置为下方地址。") : t("主页面只列出实际捕获的请求。当前预览未连接内核，列表为空。")}</p><div className="command">{clientAddress}</div><ol><li>{t("点击请求，查看请求头和响应。")}</li><li>{t("点击“发送到重放”创建可编辑的请求副本。")}</li><li>{t("在重放页编辑请求头，配置 TLS 并发送。")}</li><li>{t("真实抓包需通过")}<code>npm run desktop</code> {t("启动。")}</li></ol></>}<button className="button primary modal-done" onClick={() => setModal(null)}>{t("完成")}</button></div></div>}
+    {modal && <div className="modal-backdrop settings-backdrop" onClick={() => setModal(null)}>
+      <div className={`modal settings-layout ${modal === 'settings' ? 'settings-modal' : 'help-modal'}`}
+        ref={settingsDialog}
+        role="dialog" aria-modal="true" aria-label={modal === 'settings' ? t("代理设置") : t("使用帮助")}
+        onClick={event => event.stopPropagation()}>
+        <header className="settings-dialog-header">
+          <div className="settings-dialog-symbol">{modal === 'settings' ? <Settings2 size={22}/> : <Terminal size={22}/>}</div>
+          <div className="settings-dialog-title">
+            <span>HTTP CAPTURE</span>
+            <h2>{modal === 'settings' ? t("代理设置") : t("开始使用 HTTP Capture")}</h2>
+          </div>
+          <button type="button" className="modal-close icon-button" aria-label={t("关闭")} onClick={() => setModal(null)}><X size={19}/></button>
+        </header>
+        {modal === 'settings' ? <SettingsTabs active={settingsPage} onChange={setSettingsPage} pages={[
+          { id: 'general', label: t('常规'), icon: <Settings2 size={16}/>, content: <>
+            <section className="settings-section settings-appearance" aria-labelledby="settings-appearance-title">
+              <div className="settings-section-heading"><Settings2 size={17}/><h3 id="settings-appearance-title">{t("外观偏好")}</h3></div>
+              <div className="settings-field-grid">
+                <LanguageSelector/>
+                <label className="setting-label">{t("界面缩放")}<select aria-label={t("界面缩放")} value={zoom} onChange={event => setZoom(Number(event.target.value))}>
+                  {[75,90,100,110,125,150].map(value => <option key={value} value={value}>{value}%</option>)}
+                </select></label>
+              </div>
+            </section>
+
+            <section className="settings-section settings-listener" aria-labelledby="settings-listener-title">
+              <div className="settings-section-heading"><Radio size={17}/><h3 id="settings-listener-title">{t("监听与连接")}</h3></div>
+              <p className="settings-section-description">{t("停止代理后可以修改监听地址和端口。局域网模式允许其他设备使用此抓包代理。")}</p>
+              <div className="settings-listener-fields">
+                <ListenerSettings ref={listenerSettings} host={host} port={port} running={status.running} onHost={setHost} onPort={setPort}/>
+              </div>
+              <div className="settings-address-card">
+                <span>{t("客户端 HTTP 和 HTTPS 代理地址：")}</span><code>{clientAddress}</code>
+              </div>
+              <p className="muted settings-connection-help">
+                {t("HTTPS 解密需要在客户端设备上信任本地 CA。")}
+                {wildcard && t("0.0.0.0 / :: 是监听地址，不要填入客户端代理设置。")}
+                {host !== '127.0.0.1' && t("请在可信局域网使用，并按需允许防火墙入站；当前抓包入口不提供代理认证。")}
+                {t("不会自动修改防火墙、系统代理或证书信任。")}
+              </p>
+            </section>
+
+          </> },
+          { id: 'upstream', label: t('上游代理'), icon: <Globe2 size={16}/>, content:
+            <section className="settings-section settings-upstream">
+              <UpstreamSettings current={status.upstream} connected={connected} onSaved={async () => setStatus(await invoke<ProxyStatus>('proxy_status'))}/>
+            </section>
+          },
+          { id: 'system', label: t('系统与证书'), icon: <ShieldCheck size={16}/>, content:
+            <section className="settings-section settings-system" aria-labelledby="settings-system-title">
+              <div className="settings-section-heading"><ShieldCheck size={17}/><h3 id="settings-system-title">{t("系统与证书")}</h3></div>
+              <SystemSettings running={status.running} useSystemProxy={useSystemProxy} onUseSystemProxy={setUseSystemProxy}/>
+              <div className="settings-certificate-export">
+                <div className="setting-card">
+                  <ShieldCheck size={18}/>
+                  <div><strong>{t("本地 CA 证书")}</strong><p>{status.caPath || t("启动桌面端后生成，每台设备独立保存。")}</p></div>
+                </div>
+                <button type="button" className="button" disabled={!connected} onClick={() => void exportCa()}>{t("导出 CA 证书")}</button>
+              </div>
+            </section>
+          },
+          { id: 'decryption', label: t('HTTPS 解密'), icon: <LockKeyhole size={16}/>, content:
+            <section className="settings-section settings-decryption"><DecryptionSettings/></section>
+          },
+          { id: 'tun', label: 'TUN', icon: <Layers3 size={16}/>, content:
+            <section className="settings-section settings-tun"><TunSettings status={tun} onUpdate={setTun}/></section>
+          },
+        ]}/> : <div className="settings-dialog-body"><div className="settings-help-content">
+            <p>{desktop ? t("启动捕获后，将客户端 HTTP / HTTPS 代理设置为下方地址。") : t("主页面只列出实际捕获的请求。当前预览未连接内核，列表为空。")}</p>
+            <div className="command">{clientAddress}</div>
+            <ol>
+              <li>{t("点击请求，查看请求头和响应。")}</li>
+              <li>{t("点击“发送到重放”创建可编辑的请求副本。")}</li>
+              <li>{t("在重放页编辑请求头，配置 TLS 并发送。")}</li>
+              <li>{t("真实抓包需通过")}<code>npm run desktop</code> {t("启动。")}</li>
+            </ol>
+          </div></div>}
+        <footer className="settings-dialog-footer">
+          {modal === 'settings' && <span className="settings-save-note">{t('上游代理与解密策略请在各页保存。')}</span>}
+          <button type="button" className="button primary modal-done" onClick={() => void finishModal()}>{t("完成")}</button>
+        </footer>
+      </div>
+    </div>}
   </div>;
 }

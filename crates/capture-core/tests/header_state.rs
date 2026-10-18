@@ -40,12 +40,12 @@ fn workspace_and_library_preserve_disabled_rows_across_restart() {
     {
         let engine = Engine::open(dir.path()).unwrap();
         engine.store.save_workspace(Workspace {
-            editors: vec![RequestEditor { id:"editor".into(), draft:request.clone(), selected:None, parent_id:None, grpc_draft:None }],
+            editors: vec![RequestEditor { id:"editor".into(), draft:request.clone(), selected:None, parent_id:None, grpc_draft:None, saved_request_id:None }],
             active_editor:"editor".into(), revision:0,
         }).unwrap();
         engine.store.save_library(Library {
             collections:vec![Collection { id:"collection".into(), name:"Saved".into() }],
-            requests:vec![SavedRequest { id:"saved".into(), name:"Request".into(), collection_id:"collection".into(), draft:request.clone() }],
+            requests:vec![SavedRequest { id:"saved".into(), name:"Request".into(), collection_id:"collection".into(), draft:request.clone(), grpc_draft:None, request_mode:None }],
             ..Default::default()
         }).unwrap();
     }

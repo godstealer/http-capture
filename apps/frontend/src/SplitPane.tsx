@@ -46,7 +46,8 @@ export default function SplitPane({ children, storageKey, label, direction = 'ro
       onPointerDown={event => {
         if (event.button !== 0) return;
         const rect = root.current!.getBoundingClientRect();
-        const size = (direction === 'row' ? rect.width : rect.height) - 8;
+        const handle = event.currentTarget.getBoundingClientRect();
+        const size = direction === 'row' ? rect.width - handle.width : rect.height - handle.height;
         if (size <= 0) return;
         event.preventDefault();
         event.currentTarget.focus();

@@ -1,0 +1,177 @@
+.app-shell .modal.settings-layout {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, calc(var(--ui-viewport-width, 100vw) - 40px));
+  max-width: none;
+  max-height: min(900px, calc(var(--ui-viewport-height, 100dvh) - 48px));
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-border, var(--field-border));
+  border-radius: 16px;
+  background: var(--ui-surface, var(--field-bg));
+  color: var(--ui-text, var(--field-text));
+  box-shadow: var(--ui-shadow, 0 24px 80px #10182829);
+  text-align: left;
+}
+.app-shell .modal.settings-layout.help-modal { width: min(560px, calc(var(--ui-viewport-width, 100vw) - 40px)); }
+.settings-dialog-header {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 13px;
+  padding: 22px 64px 22px 26px;
+  border-bottom: 1px solid var(--ui-border, var(--field-border));
+  background: var(--ui-surface, var(--field-bg));
+}
+.settings-dialog-symbol {
+  display: grid;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--ui-border, var(--field-border));
+  border-radius: 12px;
+  background: var(--ui-accent-soft, var(--field-disabled));
+  color: var(--ui-accent, var(--field-focus));
+}
+.settings-dialog-title { min-width: 0; }
+.settings-dialog-title > span { display: block; margin-bottom: 4px; color: var(--ui-muted, var(--field-placeholder)); font-size: 10px; font-weight: 650; letter-spacing: .12em; }
+.settings-layout .settings-dialog-title h2 { margin: 0; color: var(--ui-text, var(--field-text)); font-size: 20px; line-height: 1.3; font-weight: 650; }
+.settings-layout .settings-dialog-header > .modal-close {
+  position: absolute;
+  top: 24px;
+  right: 23px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ui-muted, var(--field-placeholder));
+}
+.settings-layout .settings-dialog-header > .modal-close:hover { border-color: var(--ui-border, var(--field-border)); background: var(--ui-surface-alt, var(--field-disabled)); color: var(--ui-text, var(--field-text)); }
+.app-shell .modal.settings-layout.settings-modal { height: min(900px, calc(var(--ui-viewport-height, 100dvh) - 48px)); }
+.settings-layout .settings-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 24px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 24px;
+  scrollbar-width: thin;
+  border-bottom: 1px solid var(--ui-border, var(--field-border));
+  background: var(--ui-surface-alt, var(--field-disabled));
+}
+.settings-layout .settings-tab {
+  display: inline-flex;
+  flex: 1 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: max-content;
+  min-height: 40px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ui-muted, var(--field-placeholder));
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.settings-layout .settings-tab > svg { flex: 0 0 auto; width: 16px; height: 16px; }
+.settings-layout .settings-tab:hover { background: var(--ui-surface, var(--field-bg)); color: var(--ui-text, var(--field-text)); }
+.settings-layout .settings-tab[aria-selected="true"] { border-color: var(--ui-border, var(--field-border)); background: var(--ui-surface, var(--field-bg)); color: var(--ui-accent, var(--field-focus)); box-shadow: inset 0 -2px var(--ui-accent, var(--field-focus)); font-weight: 650; }
+.settings-layout .settings-tab:focus-visible { outline: 2px solid var(--ui-accent, var(--field-focus)); outline-offset: 2px; }
+.settings-dialog-body { flex: 1 1 auto; min-height: 0; padding: 22px 24px 26px; overflow: auto; overscroll-behavior: contain; background: var(--ui-bg, var(--field-disabled)); scrollbar-gutter: stable; }
+.settings-layout .settings-tab-body { min-width: 0; min-height: 0; scroll-behavior: auto; }
+.settings-layout .settings-tab-panel { min-width: 0; outline: none; }
+.settings-layout .settings-tab-panel[hidden] { display: none !important; }
+.settings-layout .settings-tab-panel:focus-visible { outline: 2px solid var(--ui-accent, var(--field-focus)); outline-offset: 5px; border-radius: 8px; }
+.settings-section { min-width: 0; margin: 0 0 16px; padding: 20px; border: 1px solid var(--ui-border, var(--field-border)); border-radius: 11px; background: var(--ui-surface, var(--field-bg)); }
+.settings-section:last-child { margin-bottom: 0; }
+.settings-section-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; }
+.settings-section-heading > svg { flex-shrink: 0; color: var(--ui-accent, var(--field-focus)); }
+.settings-layout .settings-section .settings-section-heading h3 { margin: 0; color: var(--ui-text, var(--field-text)); font-size: 14px; font-weight: 650; }
+.settings-layout .settings-section-description { margin: -5px 0 18px; color: var(--ui-muted, var(--field-placeholder)); font-size: 12px; line-height: 1.7; }
+.settings-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.settings-layout .settings-field-grid > label { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; margin: 0; color: var(--ui-text, var(--field-text)); font-size: 12px; }
+.settings-field-grid select { width: 100%; margin: 0; }
+.settings-layout .settings-section :is(p, li) { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.settings-layout .settings-section p { margin: 10px 0; }
+.settings-layout .settings-section .muted { color: var(--ui-muted, var(--field-placeholder)) !important; }
+.settings-layout .settings-section :is(input:not([type="checkbox"]), textarea, select) { max-width: 100%; min-width: 0; min-height: 36px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--ui-border, var(--field-border)); border-radius: 7px; background: var(--ui-surface-alt, var(--field-disabled)); color: var(--ui-text, var(--field-text)); }
+.settings-layout .settings-section :is(input, textarea, select):focus-visible { border-color: var(--ui-accent, var(--field-focus)); outline: 2px solid var(--ui-accent-soft, var(--field-ring)); outline-offset: 1px; }
+.settings-layout .settings-section input[type="checkbox"] { accent-color: var(--ui-accent, var(--field-focus)); }
+.settings-layout .settings-section textarea { display: block; width: 100%; margin: 8px 0 12px; min-height: 92px; resize: vertical; }
+.settings-layout .settings-section .setting-label { margin: 0 0 13px; }
+.settings-layout .settings-section > fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-layout .settings-section > fieldset > legend { margin: 0 0 14px; padding: 0; color: var(--ui-text, var(--field-text)); font-size: 14px; font-weight: 650; }
+.settings-layout .settings-section h3 { margin: 18px 0 12px; color: var(--ui-text, var(--field-text)); font-size: 13px; font-weight: 650; }
+.settings-layout .settings-section h3:first-child { margin-top: 0; }
+.settings-layout .settings-section button:not(.primary):not(.icon-button) { min-height: 32px; padding: 6px 11px; border: 1px solid var(--ui-border, var(--field-border)); border-radius: 7px; background: var(--ui-surface, var(--field-bg)); color: var(--ui-text, var(--field-text)); font-size: 12px; }
+.settings-layout .settings-section button:not(.primary):not(.icon-button):hover:not(:disabled) { border-color: var(--ui-accent, var(--field-focus)); background: var(--ui-accent-soft, var(--field-disabled)); }
+.settings-layout .settings-section .text-button { color: var(--ui-accent, var(--field-focus)); }
+.settings-listener-fields > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; }
+.settings-listener-fields > div > .setting-label:first-child { grid-column: 1; }
+.settings-layout .settings-listener-fields .setting-label { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.settings-layout .settings-listener-fields .setting-label :is(input, select) { width: 100%; }
+.settings-listener-fields > div > .text-button { grid-column: 2; align-self: end; margin: 0 0 13px; white-space: nowrap; }
+.settings-listener-fields > div > :is(p, div) { grid-column: 1 / -1; }
+.settings-listener-fields > div > .setting-label:not(:first-child) { grid-column: 1 / -1; }
+.settings-listener-fields > div > .setting-label:last-of-type { width: 220px; max-width: 100%; }
+.settings-layout .settings-listener-fields #listener-port-status { margin: -4px 0 5px; font-size: 11px; }
+.settings-address-card { display: flex; flex-direction: column; align-items: start; gap: 8px; margin-top: 16px; padding: 13px 15px; border: 1px solid var(--ui-border, var(--field-border)); border-radius: 8px; background: var(--ui-surface-alt, var(--field-disabled)); }
+.settings-address-card > span { color: var(--ui-muted, var(--field-placeholder)); font-size: 11px; }
+.settings-address-card code { color: var(--ui-text, var(--field-text)); font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.settings-layout .settings-connection-help { margin-bottom: 0; }
+.settings-layout .system-settings > h3:not(:first-child) { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--ui-border, var(--field-border)); }
+.settings-layout .system-settings .setting-label { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
+.settings-layout .system-settings code { font-size: 11px; }
+.settings-certificate-export { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--ui-border, var(--field-border)); }
+.settings-layout .settings-certificate-export .setting-card { display: flex; flex: 1 1 320px; align-items: start; gap: 10px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ui-text, var(--field-text)); }
+.settings-certificate-export .setting-card > svg { flex: 0 0 auto; margin-top: 2px; color: var(--ui-accent, var(--field-focus)); }
+.settings-certificate-export .setting-card > div { min-width: 0; }
+.settings-certificate-export strong { font-size: 12px; }
+.settings-layout .settings-certificate-export .setting-card p { margin: 5px 0 0; color: var(--ui-muted, var(--field-placeholder)); font-size: 11px; overflow-wrap: anywhere; }
+.settings-layout .settings-upstream .upstream-profile { flex-wrap: wrap; gap: 8px; border-color: var(--ui-border, var(--field-border)); border-radius: 8px; }
+.settings-layout .settings-upstream .upstream-profile.is-current { border-color: var(--ui-accent, var(--field-focus)); background: var(--ui-accent-soft, var(--field-disabled)); }
+.settings-layout .settings-upstream .upstream-profile.is-current strong { color: var(--ui-accent-strong, var(--field-focus)); }
+.settings-upstream .upstream-profile > div { flex: 1 1 210px; min-width: 0; }
+.settings-upstream .upstream-profile small { overflow-wrap: anywhere; }
+.settings-layout .settings-upstream .upstream-profile-editor { padding: 14px; border: 1px solid var(--ui-border, var(--field-border)); border-radius: 8px; background: var(--ui-surface-alt, var(--field-disabled)); }
+.settings-layout .settings-tun .tun-settings > h3 { margin-top: 0; font-size: 14px; }
+.settings-layout .settings-tun .tun-settings > label:has(input[type="checkbox"]) { display: flex; align-items: start; gap: 8px; margin: 12px 0; font-size: 12px; line-height: 1.6; }
+.settings-layout .settings-tun input[type="checkbox"] { flex-shrink: 0; margin-top: 3px; }
+.settings-dialog-footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 12px; padding: 16px 24px; border-top: 1px solid var(--ui-border, var(--field-border)); background: var(--ui-surface, var(--field-bg)); }
+.settings-save-note { flex: 1 1 0; min-width: 0; color: var(--ui-muted, var(--field-placeholder)); font-size: 11px; line-height: 1.6; }
+.settings-layout .settings-dialog-footer .modal-done { width: auto; min-width: 102px; margin: 0; padding: 9px 22px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+.settings-help-content > p { margin: 0 0 18px; color: var(--ui-muted, var(--field-placeholder)); font-size: 13px; line-height: 1.7; }
+.settings-layout .settings-help-content .command { margin: 0; border: 1px solid var(--ui-border, var(--field-border)); border-radius: 9px; background: var(--ui-surface, var(--field-bg)); color: var(--ui-text, var(--field-text)); }
+.settings-help-content ol { display: grid; gap: 12px; margin: 22px 0 0; padding-left: 22px; color: var(--ui-text, var(--field-text)); font-size: 13px; line-height: 1.7; }
+.settings-layout [role="alert"] { color: var(--ui-danger, #c65252); }
+@media (max-width: 600px) {
+  .app-shell .modal.settings-layout { width: calc(var(--ui-viewport-width, 100vw) - 20px); max-height: calc(var(--ui-viewport-height, 100dvh) - 24px); border-radius: 12px; }
+  .app-shell .modal.settings-layout.help-modal { width: min(560px, calc(var(--ui-viewport-width, 100vw) - 20px)); }
+  .app-shell .modal.settings-layout.settings-modal { height: calc(var(--ui-viewport-height, 100dvh) - 24px); }
+  .settings-dialog-header { padding: 18px 58px 18px 18px; }
+  .settings-layout .settings-tabs { padding: 8px 14px; scroll-padding-inline: 14px; }
+  .settings-layout .settings-tab { flex-grow: 0; padding-inline: 9px; }
+  .settings-layout .settings-dialog-header > .modal-close { top: 20px; right: 16px; }
+  .settings-dialog-body { padding: 14px; }
+  .settings-section { padding: 16px; }
+  .settings-field-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .settings-listener-fields > div { grid-template-columns: minmax(0, 1fr); }
+  .settings-listener-fields > div > .text-button { grid-column: 1; justify-self: start; }
+  .settings-dialog-footer { padding: 14px 18px; }
+}

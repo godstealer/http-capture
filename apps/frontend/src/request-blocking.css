@@ -12,7 +12,7 @@
   background: var(--field-bg);
   color: var(--field-text);
 }
-[data-theme='dark'] .request-blocking-page {
+[data-color-scheme='dark'] .request-blocking-page {
   --blocking-accent: #65d5b0;
   --blocking-accent-text: #102a23;
   --blocking-soft: #20392f;

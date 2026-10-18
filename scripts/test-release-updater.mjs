@@ -136,7 +136,7 @@ test('delayed old builds and reruns cannot roll the preview channel back or repl
   assert.throws(() => shouldPromote(candidate, { ...candidate, notes: 'different bytes' }), /different/);
 });
 
-function publicationFixture(t, initial = {}) {
+function publicationFixture(t, initial = {}, initialLatestTag = null) {
   const f = buildFixture(t), manifest = f.generate();
   writeFileSync(path.join(f.outputDirectory, 'latest.json'), JSON.stringify(manifest));
   const configDirectory = path.join(f.directory, 'apps/desktop/src-tauri'); mkdirSync(configDirectory, { recursive: true });
@@ -145,37 +145,57 @@ function publicationFixture(t, initial = {}) {
   writeFileSync(path.join(f.directory, releaseNotesPath), readFileSync(path.join(projectRoot, releaseNotesPath)));
   const temporaryDirectory = path.join(f.directory, 'publish'); mkdirSync(temporaryDirectory);
   const releases = structuredClone(initial), calls = [];
+  let latestTag = initialLatestTag;
   const run = args => {
     calls.push(args);
     if (args[0] === 'api') {
-      const tag = args[1].split('/').at(-1);
-      if (releases[tag]) return JSON.stringify(releases[tag]);
+      const tag = args[1].endsWith('/latest') ? latestTag : args[1].split('/').at(-1);
+      if (releases[tag]) return JSON.stringify({ tag_name: tag, assets: releases[tag].manifest ? [{ name: 'latest.json' }] : [], ...releases[tag] });
       throw Object.assign(new Error('fixture not found'), { stderr: 'gh: Not Found (HTTP 404)' });
     }
     const [_, action, tag] = args;
     if (action === 'download') writeFileSync(args[args.indexOf('--output') + 1], JSON.stringify(releases[tag].manifest));
-    else if (action === 'create') releases[tag] = { draft: true };
+    else if (action === 'create') releases[tag] = { draft: true, name: args[args.indexOf('--title') + 1], prerelease: args.includes('--prerelease') };
     else if (action === 'upload') {
       const file = args.find(value => path.basename(value) === 'latest.json');
       releases[tag].manifest = JSON.parse(readFileSync(file, 'utf8'));
-    } else if (action === 'edit') releases[tag].draft = false;
+    } else if (action === 'edit') {
+      if (args.includes('--draft=false')) releases[tag].draft = false;
+      if (args.includes('--prerelease=false')) releases[tag].prerelease = false;
+      else if (args.includes('--prerelease')) releases[tag].prerelease = true;
+      if (args.includes('--title')) releases[tag].name = args[args.indexOf('--title') + 1];
+      if (args.includes('--latest=true')) latestTag = tag;
+    }
     else throw new Error(`Unexpected fixture gh action: ${action}`);
     return '';
   };
-  return { ...f, manifest, releases, calls, publish: (overrides = {}) => publishRelease({ env: { ...env, GITHUB_REPOSITORY: repository }, rootDirectory: f.directory, temporaryDirectory, run, ...overrides }) };
+  return { ...f, manifest, releases, calls, latestTag: () => latestTag,
+    publish: (overrides = {}) => publishRelease({ env: { ...env, GITHUB_REPOSITORY: repository }, rootDirectory: f.directory, temporaryDirectory, run, ...overrides }) };
 }
-test('publish uploads a complete immutable build before exposing the preview channel', t => {
+test('publish exposes a complete stable build, preserves the installed update URL, then advances Latest', t => {
   const f = publicationFixture(t); f.publish();
   const tag = `build-${sourceSha.slice(0, 12)}`;
   assert.equal(f.releases[tag].draft, false);
+  assert.equal(f.releases[tag].prerelease, false);
+  assert.equal(f.releases[tag].name, `HTTP Capture ${version}`);
+  assert.equal(f.latestTag(), tag);
+  assert.equal(f.releases['updater-preview'].prerelease, true);
   assert.deepEqual(f.releases['updater-preview'].manifest, f.manifest);
   const notes = readFileSync(path.join(f.directory, 'publish/notes.md'), 'utf8');
-  assert(notes.includes('新增请求阻止')); assert(notes.includes('尚需处理'));
+  assert(notes.includes(readReleaseNotes().summary));
+  assert(notes.includes(releaseNotesPath));
   assert(notes.includes(`https://github.com/${repository}/blob/${sourceSha}/docs/roadmap.md`));
-  assert(f.manifest.notes.includes('请求头编辑'));
-  assert(!f.manifest.notes.includes('尚需处理'));
+  assert.equal(f.manifest.notes, readReleaseNotes().summary);
   assert(f.calls.findIndex(args => args[1] === 'edit' && args[2] === tag) < f.calls.findIndex(args => args[1] === 'create' && args[2] === 'updater-preview'));
-  for (const args of f.calls.filter(args => args[1] === 'create' || args[1] === 'edit')) assert(args.includes('--latest=false'));
+  const mutations = f.calls.filter(args => args[1] === 'create' || args[1] === 'edit');
+  for (const args of mutations.filter(args => args[2] === 'updater-preview')) {
+    assert(args.includes('--latest=false')); assert(args.includes('--prerelease'));
+  }
+  for (const args of mutations.filter(args => args[2] === tag)) assert(args.includes('--prerelease=false'));
+  const latestEdit = f.calls.findIndex(args => args[1] === 'edit' && args.includes('--latest=true'));
+  const channelEdit = f.calls.findIndex(args => args[1] === 'edit' && args[2] === 'updater-preview');
+  assert(latestEdit > channelEdit);
+  assert.equal(mutations.filter(args => args.includes('--latest=true')).length, 1);
 });
 test('release requires actual change notes before any GitHub mutation', t => {
   const f = publicationFixture(t);
@@ -190,7 +210,10 @@ test('rerun publishes the original immutable manifest and never replaces build a
   const original = { ...f.manifest, notes: 'Original published build, independent of the rerun.' };
   f.releases[tag] = { draft: false, manifest: original }; f.publish();
   assert.deepEqual(f.releases['updater-preview'].manifest, original);
-  assert.equal(f.calls.filter(args => ['create', 'upload', 'edit'].includes(args[1]) && args[2] === tag).length, 0);
+  assert.equal(f.calls.filter(args => ['create', 'upload'].includes(args[1]) && args[2] === tag).length, 0);
+  const metadata = f.calls.filter(args => args[1] === 'edit' && args[2] === tag);
+  assert.equal(metadata.length, 1);
+  assert(metadata[0].includes('--latest=true')); assert(!metadata[0].includes('--notes-file'));
 });
 test('old successful builds cannot rewrite a newer channel and API errors are not treated as absence', t => {
   const f = publicationFixture(t), newer = structuredClone(f.manifest);
@@ -202,5 +225,43 @@ test('old successful builds cannot rewrite a newer channel and API errors are no
   f.releases['updater-preview'] = { draft: false, manifest: newer }; f.publish();
   assert.equal(f.calls.filter(args => ['create', 'upload', 'edit'].includes(args[1]) && args[2] === 'updater-preview').length, 0);
   assert.deepEqual(f.releases['updater-preview'].manifest, newer);
+  assert.equal(f.calls.filter(args => args.includes('--latest=true')).length, 0);
+  assert.equal(f.latestTag(), null);
   assert.throws(() => f.publish({ run: () => { throw Object.assign(new Error('API denied'), { stderr: 'gh: Bad credentials (HTTP 401)' }); } }), /API denied/);
+});
+
+test('a newer stable Latest cannot be overwritten when the compatibility channel lags behind', t => {
+  const newerTag = `build-${'b'.repeat(12)}`;
+  const f = publicationFixture(t, {}, newerTag), newer = structuredClone(f.manifest);
+  newer.version = '0.1.100'; newer.source_sha = 'b'.repeat(40);
+  for (const entry of Object.values(newer.platforms)) {
+    entry.signature = signature(newer.version);
+    entry.url = entry.url.replace(sourceSha.slice(0, 12), newer.source_sha.slice(0, 12));
+  }
+  f.releases[newerTag] = { draft: false, prerelease: false, manifest: newer };
+  f.publish();
+  assert.equal(f.latestTag(), newerTag);
+  assert.equal(f.calls.filter(args => args.includes('--latest=true')).length, 0);
+});
+
+test('an identical rerun repairs failed Latest promotion without touching public build assets or the channel', t => {
+  const tag = `build-${sourceSha.slice(0, 12)}`, legacyTag = 'legacy';
+  const f = publicationFixture(t, {
+    [legacyTag]: { draft: false, prerelease: false, name: 'HTTP Capture 0.1.0', target_commitish: 'c'.repeat(40) },
+  }, legacyTag);
+  f.releases[tag] = { draft: false, prerelease: false, manifest: f.manifest };
+  f.releases['updater-preview'] = { draft: false, prerelease: true, manifest: f.manifest };
+  f.publish();
+  assert.equal(f.latestTag(), tag);
+  const changes = f.calls.filter(args => ['create', 'upload', 'edit'].includes(args[1]));
+  assert.equal(changes.length, 1);
+  assert.deepEqual(changes[0], ['release', 'edit', tag, '--repo', repository, '--prerelease=false', '--latest=true']);
+});
+
+test('unknown legacy Latest identity fails before any public release mutation', t => {
+  const f = publicationFixture(t, {
+    legacy: { draft: false, prerelease: false, name: 'Unversioned package' },
+  }, 'legacy');
+  assert.throws(() => f.publish(), /Cannot determine/);
+  assert.equal(f.calls.filter(args => ['create', 'upload', 'edit'].includes(args[1])).length, 0);
 });

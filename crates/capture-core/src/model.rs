@@ -3,9 +3,29 @@ use serde::{Deserialize, Serialize};
 pub use transport_api::{Header, TlsProfile, CapturedResponse, TlsDetails, CertificateDetails};
 pub type RequestDraft = transport_api::RequestDraft<crate::scripts::Scripts>;
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub path: Option<String>,
+}
+
+/// Immediate capture ingress, observed locally; never inferred from HTTP headers.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficOrigin {
+    pub entry: String,
+    pub client_address: Option<String>,
+    pub process: Option<ProcessInfo>,
+    pub process_status: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Flow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traffic_origin: Option<TrafficOrigin>,
     /// Explicit lifecycle; old files deserialize to unknown rather than appearing pending.
     #[serde(default = "unknown_flow_state")]
     pub state: String,

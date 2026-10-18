@@ -10,6 +10,11 @@ import './workbench.css';
 import './theme.css';
 import './request-details.css';
 import './fields.css';
+import './secondary-workspaces.css';
+import './ui-refresh.css';
+import './cyberpunk.css';
+import './extra-themes.css';
+import './expressive-themes.css';
 import { applyTheme, readTheme } from './theme';
 
 applyTheme(readTheme());

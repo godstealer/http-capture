@@ -1,0 +1,142 @@
+/* Four expressive skins reuse extra-themes.css component rules and geometry. */
+:root[data-theme='sonar'] {
+  color-scheme: dark;
+  --ui-bg: #071a2a; --ui-surface: #0e2b3c; --ui-surface-alt: #123548;
+  --ui-border: #244f64; --ui-border-strong: #39798d; --ui-text: #d9f2fa; --ui-muted: #93bacb;
+  --ui-accent: #55dbe7; --ui-accent-soft: #153f50; --ui-accent-strong: #a6f4fa;
+  --ui-danger: #ff9da9; --ui-radius: 14px; --ui-shadow: 0 16px 46px #020e1b80;
+  --skin-sidebar: #081f30; --skin-header: linear-gradient(115deg, #0b263a, #123d4c);
+  --skin-brand: #123e50; --skin-primary-text: #082736;
+  --skin-card-radius: 14px; --skin-field-radius: 8px; --skin-icon-radius: 50%;
+  --skin-selected: #184958; --skin-selection: #23758b99; --skin-backdrop: #03111fe0;
+  --skin-get: #93dfc4; --skin-post: #f0d093; --skin-change: #8ed3ff; --skin-options: #b4befd;
+  --skin-success: #a1e1d1; --skin-success-bg: #193f40;
+  --skin-warning: #efd4a1; --skin-warning-bg: #443d2a;
+  --skin-danger-bg: #45283a; --skin-ws-in: #a4dbe9; --field-ring: #55dbe72b;
+  --syntax-404740: #cceaf4; --syntax-708: #b4c5ff; --syntax-219: #b2ceff;
+  --syntax-164: #99dec6; --syntax-a11: #eab9c8; --syntax-e40: #e8cf99;
+  --syntax-00f: #8ed3ff; --syntax-30a: #c6c2f8; --syntax-085: #75e2de;
+  --syntax-167: #85d9e9; --syntax-256: #b1d8e9; --syntax-00c: #9acdf3;
+  --syntax-940: #92b5c5; --syntax-f00: #ff9da9;
+}
+:root[data-theme='forge'] {
+  color-scheme: dark;
+  --ui-bg: #1b1b1c; --ui-surface: #252526; --ui-surface-alt: #2d2b2b;
+  --ui-border: #4b4140; --ui-border-strong: #735344; --ui-text: #f2e9e2; --ui-muted: #c0ada1;
+  --ui-accent: #ffa567; --ui-accent-soft: #463022; --ui-accent-strong: #ffc99a;
+  --ui-danger: #ff9f97; --ui-radius: 3px; --ui-shadow: 0 14px 44px #08060580;
+  --skin-sidebar: #211e1e; --skin-header: linear-gradient(110deg, #262323, #342820);
+  --skin-brand: linear-gradient(140deg, #523827, #2f2520); --skin-primary-text: #321b0b;
+  --skin-card-radius: 3px; --skin-field-radius: 3px; --skin-icon-radius: 3px;
+  --skin-selected: #503524; --skin-selection: #9a603c80; --skin-backdrop: #110d0be0;
+  --skin-get: #b5d1b7; --skin-post: #ffbe80; --skin-change: #b8c7f0; --skin-options: #cfb3d9;
+  --skin-success: #bfd4b1; --skin-success-bg: #343e30;
+  --skin-warning: #ffd1a3; --skin-warning-bg: #4d3926;
+  --skin-danger-bg: #4a2c29; --skin-ws-in: #b8c7f0; --field-ring: #ffa5672b;
+  --syntax-404740: #eadfd5; --syntax-708: #ddbbdd; --syntax-219: #d6b9e3;
+  --syntax-164: #b7d1ad; --syntax-a11: #f0ad9f; --syntax-e40: #ffca8e;
+  --syntax-00f: #b4c7ef; --syntax-30a: #d6bee5; --syntax-085: #a9d1c2;
+  --syntax-167: #a6cfdc; --syntax-256: #bfd0df; --syntax-00c: #b5c6e9;
+  --syntax-940: #b8a79b; --syntax-f00: #ff9f97;
+}
+:root[data-theme='matrix'] {
+  color-scheme: dark;
+  --ui-bg: #050c08; --ui-surface: #0b160f; --ui-surface-alt: #102116;
+  --ui-border: #24422d; --ui-border-strong: #376c46; --ui-text: #d6f3dc; --ui-muted: #94bd9f;
+  --ui-accent: #7be99b; --ui-accent-soft: #173722; --ui-accent-strong: #b0ffc6;
+  --ui-danger: #ffaaa2; --ui-radius: 1px; --ui-shadow: 0 0 0 1px #7be99b16, 0 16px 44px #000b;
+  --skin-sidebar: #07110b; --skin-header: #0a180f;
+  --skin-brand: #102c1b; --skin-primary-text: #092412;
+  --skin-card-radius: 1px; --skin-field-radius: 1px; --skin-icon-radius: 1px;
+  --skin-selected: #1c3c27; --skin-selection: #39764b99; --skin-backdrop: #010904e8;
+  --skin-get: #96e3ad; --skin-post: #d6d590; --skin-change: #9bcfc3; --skin-options: #bed49c;
+  --skin-success: #a4e4ad; --skin-success-bg: #1b3924;
+  --skin-warning: #e2dba2; --skin-warning-bg: #36371e;
+  --skin-danger-bg: #3e2925; --skin-ws-in: #bfdc91; --field-ring: #7be99b29;
+  --syntax-404740: #d0e8d5; --syntax-708: #9cdfa9; --syntax-219: #c2dfac;
+  --syntax-164: #b6d992; --syntax-a11: #e1c493; --syntax-e40: #d9dd98;
+  --syntax-00f: #a3d4bf; --syntax-30a: #c4dca8; --syntax-085: #8be6ae;
+  --syntax-167: #9dd5bc; --syntax-256: #bcdbb9; --syntax-00c: #b2d9b0;
+  --syntax-940: #89b095; --syntax-f00: #ffaaa2;
+  font-family: var(--skin-mono);
+}
+:root[data-theme='sakura'] {
+  color-scheme: light;
+  --ui-bg: #f6f4fb; --ui-surface: #fffdfd; --ui-surface-alt: #fbf3f7;
+  --ui-border: #eadce6; --ui-border-strong: #ceb7cb; --ui-text: #594454; --ui-muted: #826b7e;
+  --ui-accent: #9b4d77; --ui-accent-soft: #f7e3ee; --ui-accent-strong: #81385f;
+  --ui-danger: #b94e5c; --ui-radius: 16px; --ui-shadow: 0 14px 42px #9b688b1c;
+  --skin-sidebar: #f5edf6; --skin-header: linear-gradient(110deg, #fffdfd, #f8eaf2 58%, #eaf3ff);
+  --skin-brand: linear-gradient(145deg, #f9deea, #e1f1ff); --skin-primary-text: #fff;
+  --skin-card-radius: 16px; --skin-field-radius: 9px; --skin-icon-radius: 50%;
+  --skin-selected: #f5e1ef; --skin-selection: #eac2d8; --skin-backdrop: #51405d70;
+  --skin-get: #467968; --skin-post: #9c6a34; --skin-change: #4b72a3; --skin-options: #8a60a5;
+  --skin-success: #446f5b; --skin-success-bg: #e8f3ed;
+  --skin-warning: #886326; --skin-warning-bg: #f7ecd9;
+  --skin-danger-bg: #fae7e9; --skin-ws-in: #4c7c9b; --field-ring: #b4639126;
+  --syntax-404740: #594a5c; --syntax-708: #8a539b; --syntax-219: #885c99;
+  --syntax-164: #517753; --syntax-a11: #a04d6b; --syntax-e40: #966729;
+  --syntax-00f: #4b6ea0; --syntax-30a: #8857a0; --syntax-085: #47796c;
+  --syntax-167: #477b8b; --syntax-256: #5c728e; --syntax-00c: #5c6d9e;
+  --syntax-940: #7b6b7d; --syntax-f00: #b94e5c;
+}
+
+/* Radar rings live in chrome and workspace gutters, behind opaque content panels. */
+:root[data-theme='sonar'] .sidebar-brand {
+  background-image: radial-gradient(circle, transparent 34%, #55dbe755 35% 37%, transparent 38% 60%, #55dbe733 61% 63%, transparent 64%);
+  box-shadow: 0 0 0 4px #55dbe70a;
+}
+:root[data-theme='sonar'] .app-shell .app-sidebar {
+  background-image: radial-gradient(circle at 50% 92%, transparent 29px, #55dbe714 30px 31px, transparent 32px 48px, #55dbe70e 49px 50px, transparent 51px);
+}
+:root[data-theme='sonar'] .app-shell .proxy-toolbar {
+  background-image: radial-gradient(circle at 92% 160%, transparent 76px, #55dbe71c 77px 78px, transparent 79px 116px, #55dbe712 117px 118px, transparent 119px), linear-gradient(115deg, #0b263a, #123d4c);
+}
+:root[data-theme='sonar'] .app-shell :is(.capture-workbench, .composer-page > .detail-panel) { border-color: #34647b; box-shadow: 0 3px 20px #03142150; }
+:root[data-theme='sonar'] .app-sidebar .sidebar-item.active { background: linear-gradient(110deg, #194d5e, #10374b); box-shadow: inset 0 0 0 1px #55dbe74d; color: #a6f4fa; }
+:root[data-theme='sonar'] .settings-layout .settings-dialog-header { background-image: radial-gradient(circle at 92% 140%, transparent 42px, #55dbe72b 43px 44px, transparent 45px 65px, #55dbe718 66px 67px, transparent 68px), linear-gradient(115deg, #0b263a, #123d4c); }
+:root[data-theme='sonar'] .settings-layout .settings-tab[aria-selected='true'] { border-color: #39798d; box-shadow: inset 0 -2px #55dbe7; }
+
+/* Industrial markings stay on frame edges and never cover editor text. */
+:root[data-theme='forge'] .app-shell .proxy-toolbar {
+  background-image: repeating-linear-gradient(135deg, #ffa567 0 5px, #39261e 5px 10px), linear-gradient(110deg, #262323, #342820);
+  background-size: 72px 3px, 100% 100%;
+  background-position: right 18px bottom, center;
+  background-repeat: no-repeat;
+  border-bottom-color: #9e683e;
+}
+:root[data-theme='forge'] .sidebar-brand { border-color: #b57649; box-shadow: inset 2px 2px #ffa56740, inset -2px -2px #0e090680; }
+:root[data-theme='forge'] .app-sidebar .sidebar-item.active { background: #463022; color: #ffc99a; box-shadow: inset 2px 0 #ffa567; }
+:root[data-theme='forge'] .app-shell :is(.capture-workbench, .composer-page > .detail-panel) { border-color: #765840; box-shadow: inset 0 2px #ffa56728; }
+:root[data-theme='forge'] .settings-layout .settings-section { border-top-color: #9e683e; box-shadow: inset 2px 0 #ffa56724; }
+:root[data-theme='forge'] .settings-layout .settings-dialog-symbol { border-color: #b57649; box-shadow: inset 2px 0 #ffa56750; }
+:root[data-theme='forge'] :is(.request-context-menu, .capture-action-menu) { border-top-color: #ffa567; }
+
+/* Phosphor terminal typography is static; there are no scan lines or falling glyphs. */
+:root[data-theme='matrix'] .app-shell { font-family: var(--skin-mono); }
+:root[data-theme='matrix'] .workspace-heading > strong { font-size: 16px; letter-spacing: 0; }
+:root[data-theme='matrix'] .app-shell .app-sidebar {
+  background-image: linear-gradient(#7be99b06 1px, transparent 1px), linear-gradient(90deg, #7be99b06 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+:root[data-theme='matrix'] .sidebar-brand { border-color: #7be99b; box-shadow: inset 0 0 0 3px #07110b; }
+:root[data-theme='matrix'] .app-sidebar .sidebar-item.active { border-radius: 1px; background: #173722; box-shadow: inset 2px 0 #7be99b, inset 0 0 0 1px #376c46; }
+:root[data-theme='matrix'] .app-shell button { border-radius: 1px; }
+:root[data-theme='matrix'] .app-shell :is(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='hidden']), textarea, select) { border-radius: 1px; font-family: var(--skin-mono); }
+:root[data-theme='matrix'] .app-shell :is(.body-code-editor, .request-body-card, .request-body-row, .request-body-notice, .script-code, .script-example) { border-radius: 1px; }
+:root[data-theme='matrix'] .settings-layout .settings-dialog-header { border-bottom-color: #376c46; box-shadow: inset 0 2px #7be99b26; }
+:root[data-theme='matrix'] .settings-layout .settings-section { border-color: #376c46; box-shadow: inset 2px 0 #7be99b15; }
+:root[data-theme='matrix'] .settings-layout .settings-dialog-title > span { color: #7be99b; }
+:root[data-theme='matrix'] .request-context-menu button { font-family: var(--skin-mono); }
+
+:root:is([data-theme='forge'], [data-theme='matrix']) .settings-layout :is(.settings-address-card, .upstream-profile, .upstream-profile-editor, .settings-dialog-footer .modal-done) { border-radius: var(--skin-field-radius); }
+:root:is([data-theme='forge'], [data-theme='matrix']) .settings-layout .settings-section button:not(.primary):not(.icon-button) { border-radius: var(--skin-field-radius); }
+
+/* Pearl, rose and ice blue provide a soft light alternative with plain code surfaces. */
+:root[data-theme='sakura'] .app-shell .app-sidebar { background: linear-gradient(180deg, #f7edf4, #edf2fc); }
+:root[data-theme='sakura'] .sidebar-brand { border-color: #d9bdd2; box-shadow: 0 3px 12px #b281a61c; }
+:root[data-theme='sakura'] .app-sidebar .sidebar-item.active { background: linear-gradient(110deg, #f5dbea, #edf0ff); color: #81385f; box-shadow: inset 0 0 0 1px #d9bdd2; }
+:root[data-theme='sakura'] .app-shell :is(.capture-workbench, .composer-page > .detail-panel) { border-color: #dfd3e5; box-shadow: 0 4px 22px #9c81b714; }
+:root[data-theme='sakura'] .settings-layout .settings-dialog-symbol { border-color: #d5c5dc; box-shadow: inset 0 1px #fff; }
+:root[data-theme='sakura'] .settings-layout .settings-tab[aria-selected='true'] { background: linear-gradient(110deg, #fffdfd, #f8e7f1); border-color: #d9bdd2; }
+:root[data-theme='sakura'] :is(.request-library, .plugins-workspace, .request-blocking-page, .interception-page) { background: linear-gradient(145deg, #f8f3f8, #f0f3fc); }

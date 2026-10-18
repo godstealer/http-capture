@@ -56,7 +56,7 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
     let mut guard = Guard { engine, done: false, flow: Flow { state: "sending".into(),
         websocket: Some(Session { state: "connecting".into(), frames: vec![], messages:vec![] }), id: execution.id.clone(),
         started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64, duration_ms: 0, parent_id: None,
-        source: source.into(), request, response: None, error: None, client_protocol: Some("HTTP/1.1".into()), client_tls,
+        source: source.into(), request, response: None, error: None, client_protocol: Some("HTTP/1.1".into()), client_tls, traffic_origin:crate::traffic_origin::current(source),
         original_request: None, original_response: None, raw_request_head_base64: if raw_head.is_empty(){None}else{Some(STANDARD.encode(raw_head))},
         notes: vec!["WebSocket 帧原样转发；正文列表为去掩码帧载荷。消息视图重组并尝试解压；单连接最多 300 秒、8 MiB 载荷或 10000 帧。".into()],
     }};

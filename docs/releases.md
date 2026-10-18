@@ -1,8 +1,8 @@
-# 桌面预览版发布
+# 桌面正式版发布
 
-当前更新内容、验证记录和剩余工作见 [2026-10-16 更新说明](release-2026-10-16.md)。GitHub Release 正文直接读取该文档，应用内更新说明读取其中“更新内容”章节，避免发布后只显示通用安装说明。修改下一版时须同步 `scripts/release-updater.mjs` 中的说明文件路径和对应文档。
+当前更新内容、验证记录和剩余工作见 [2026-10-18 更新说明](release-2026-10-18.md)。GitHub Release 正文直接读取该文档，应用内更新说明读取其中“更新内容”章节，避免发布后只显示通用安装说明。修改下一版时须同步 `scripts/release-updater.mjs` 中的说明文件路径和对应文档。此前的预览版范围保留在 [2026-10-16 更新说明](release-2026-10-16.md)。
 
-`main` 的 push 对应 Check 全部通过后，Release 工作流检出同一提交，构建以下安装包。全部构建成功、签名更新包完整性检查通过后，创建 `build-<提交前12位>` 预发布版本并上传安装包、更新包与 SHA256 校验文件，再按版本顺序推进预览更新频道。PR 检查不会触发发布；已发布的 build 版本重跑时不覆盖。
+`main` 的 push 对应 Check 全部通过后，Release 工作流检出同一提交，构建以下安装包。全部构建成功、签名更新包完整性检查通过后，创建 `build-<提交前12位>` 正式版本并上传安装包、更新包与 SHA256 校验文件，按版本顺序推进应用更新清单及 GitHub Latest。PR 检查不会触发发布；已公开的 build 资产重跑时不覆盖。
 
 | 系统 | 架构 | 安装包 |
 | --- | --- | --- |
@@ -17,11 +17,11 @@
 
 桌面应用支持检查更新、下载安装和安装后重启。更新包使用 Tauri updater 签名；这与 Windows 代码签名、macOS 签名/公证分别配置，目前后两项仍未设置。CI 打包成功不等于实机安装、凭据库和网络功能均已验收。
 
-## 签名更新频道（2026-10-16）
+## 签名更新与正式版兼容频道（2026-10-18）
 
 安装包版本采用 `主版本.次版本.<源 Check run_number>`。主/次版本读取 `tauri.conf.json`，当前得到 `0.1.N`；`N` 来自成功的 **Check**，不使用 Release 的 run number 或重跑次数。同一次 Check 重跑、四个平台构建的版本完全相同。已公开的 `build-<sha12>` 版本和资产不覆盖；重跑时以已发布的 `latest.json` 为准，避免新生成的随机签名指向旧包。
 
-应用读取固定端点：[预览频道 latest.json](https://github.com/godstealer/http-capture/releases/download/updater-preview/latest.json)。`updater-preview` 是单独的预发布频道，只存放当前完整清单；清单下载地址固定指向对应 `build-<sha12>` 的资产。普通 build 版本仍保留手动下载安装包；两个频道均设置 `latest=false`，不占用 stable latest。
+应用继续读取固定端点：[兼容频道 latest.json](https://github.com/godstealer/http-capture/releases/download/updater-preview/latest.json)。旧安装包已写入此地址，因此保留 `updater-preview` 标签。该频道仅存放当前完整清单，仍为预发布且设置 `latest=false`；清单下载地址固定指向对应 `build-<sha12>` 的正式资产。正式 build 以 `prerelease=false` 公开，合格的新版本再设为 GitHub Latest，标题为 `HTTP Capture <版本>`。
 
 四个原生 runner 需要生成五个更新目标，Linux 根据安装格式选择对应资产，不能把 AppImage 当作 Debian 包安装：
 
@@ -41,9 +41,10 @@ CI 配置要求：
 - GitHub Actions Secrets 必须设置 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，使用对应公钥的加密私钥。缺失时 preflight 明确失败，不发布无签名更新。私钥和密码不写进仓库、清单或构建命令参数。
 - 锁定的 Tauri CLI 2.11.5 会自动给 NSIS、AppImage、Deb 和 macOS updater 归档签名，并把版本写进签名 trusted comment。`requireSignedVersion` 要求此版本与更新清单一致。CLI 仅警告密钥不匹配，因此收集脚本另外检查签名 key id 与公钥一致。
 - `collect-release.mjs` 检查每个平台的包和 `.sig`，保留各平台独立文件名，生成构建身份、SHA256 和元数据。`generate-updater.mjs` 在汇总后再次检查全部四个平台、五个更新目标、来源 SHA、版本、签名内容和包哈希；缺少任何一项都不生成清单。`signature` 存放 `.sig` 文件内容，不是它的路径或下载地址。
-- 发布任务跨提交串行，并比较数字 SemVer。旧构建晚完成也不能将频道退回低版本；同版本来源或清单不同则拒绝推进。发布 build 时使用 draft，完整资产上传成功后公开，再更新频道。
+- 发布任务跨提交串行，并比较数字 SemVer。旧构建晚完成也不能将频道或 GitHub Latest 退回低版本；同版本来源或清单不同则拒绝推进。发布 build 时使用 draft，完整资产上传成功后先以正式版但 `latest=false` 公开，兼容频道更新成功后才允许提升为 Latest。发布时独立读取当前 GitHub Latest 的版本，避免前次发布部分失败造成两个指针不一致。早期没有更新清单的正式版本仅接受明确的 `HTTP Capture <数字版本>` 标题，无法识别时拒绝覆盖。
+- 已公开 build 重跑时沿用其原有清单及资产；若兼容频道已更新而最后一次 Latest 元数据修改失败，同一版本重跑可以补完 Latest，不重新上传安装包或重写签名。较旧的候选即使四平台成功，也只保留其正式下载页，不抢占更新频道或 Latest。
 
-本地验证脚本：`node --test scripts/test-release-updater.mjs`（Node 22+）。fixtures 覆盖签名缺失、签名版本/key id、Deb 独立目标、四平台完整性、版本和来源混用、文件名路径穿越、包哈希、延迟发布和不可变版本。fixtures 不代替真实系统安装或客户端密码学签名验收。
+本地验证脚本：`node --test scripts/test-release-updater.mjs`（Node 22+）。fixtures 覆盖签名缺失、签名版本/key id、Deb 独立目标、四平台完整性、版本和来源混用、文件名路径穿越、包哈希、正式版与兼容频道标记、延迟发布、Latest 部分失败恢复和不可变版本。fixtures 不代替真实系统安装或客户端密码学签名验收。
 
 协议和打包依据：[Tauri updater](https://v2.tauri.app/plugin/updater/)、[CLI 2.11.5 自动签名类型](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.5/crates/tauri-cli/src/bundle.rs#L222-L286)、[签名版本绑定实现](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.5/crates/tauri-cli/src/helpers/updater_signature.rs)。
 

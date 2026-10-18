@@ -1,0 +1,45 @@
+.session-table .traffic-origin-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.session-table .traffic-origin-application {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.traffic-origin-file-badge {
+  display: inline-block;
+  flex: none;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--ui-muted);
+  background: var(--ui-surface-alt);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.request-details .traffic-origin-details > summary {
+  color: var(--ui-text);
+  background: var(--ui-surface-alt);
+}
+.traffic-origin-details > summary .traffic-origin-file-badge { margin-left: 8px; }
+.traffic-origin-details .property-table td:last-child {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.traffic-origin-provenance {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--ui-accent);
+  border-radius: 3px;
+  color: var(--ui-muted);
+  background: var(--ui-accent-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}

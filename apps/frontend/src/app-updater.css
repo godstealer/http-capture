@@ -30,7 +30,7 @@
 .app-update-dialog > footer > button:first-child { margin-right: auto; }
 .app-update-dialog .app-update-install { border-color: var(--update-accent); background: var(--update-accent); color: var(--update-accent-text); font-weight: 600; }
 .app-update-dialog .app-update-install:hover:not(:disabled) { border-color: var(--field-focus); background: var(--update-accent); }
-[data-theme='dark'] .app-update-trigger.has-update { border-color: #4a9b7f; background: #20392f; color: #a0eccf; }
-[data-theme='dark'] .app-update-backdrop { --update-accent: #65d5b0; --update-accent-text: #102a23; --update-soft: #20392f; --update-danger: #ff9b91; }
-[data-theme='dark'] .app-update-symbol { color: #a0eccf; }
+[data-color-scheme='dark'] .app-update-trigger.has-update { border-color: #4a9b7f; background: #20392f; color: #a0eccf; }
+[data-color-scheme='dark'] .app-update-backdrop { --update-accent: #65d5b0; --update-accent-text: #102a23; --update-soft: #20392f; --update-danger: #ff9b91; }
+[data-color-scheme='dark'] .app-update-symbol { color: #a0eccf; }
 @media (max-width: 560px) { .app-update-dialog { padding: 18px; }.app-update-dialog > footer > button:first-child { flex-basis: 100%; margin-right: 0; }.app-update-trigger span { display: none; } }

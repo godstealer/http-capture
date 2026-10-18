@@ -95,6 +95,20 @@ async fn save_session_file(content: String, format: Option<String>) -> Result<Op
 }
 
 #[tauri::command]
+async fn save_code_file(content:String,filename:String)->Result<Option<String>,String> {
+    // Suggested names are code-generator assets, never paths supplied to a write.
+    if filename.is_empty() || filename.len()>80 || !filename.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b,b'.'|b'-'|b'_')) {
+        return Err("Invalid code filename".into());
+    }
+    let extension=std::path::Path::new(&filename).extension().and_then(|v|v.to_str()).ok_or("Missing code extension")?;
+    if !["py","js","mjs","go","c","cs","java","kt","dart","php","sh","txt"].contains(&extension) {return Err("Unsupported code extension".into());}
+    let Some(file)=rfd::AsyncFileDialog::new().set_file_name(&filename).add_filter(extension,&[extension]).save_file().await else {return Ok(None)};
+    let path=file.path().to_path_buf();
+    tokio::fs::write(&path,content.as_bytes()).await.map_err(|e|e.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 async fn delete_flows(state: State<'_, AppState>, ids: Vec<String>) -> Result<(),String> { state.engine.store.delete_flows(ids).map_err(|e|e.to_string()) }
 #[tauri::command]
 async fn import_flows(state: State<'_, AppState>, flows: Vec<Flow>) -> Result<usize,String> { state.engine.store.import_flows(flows).map_err(|e|e.to_string()) }
@@ -282,7 +296,7 @@ fn main() {
             app.manage(AppState { engine, proxy: Mutex::new(None), network_lifecycle: Mutex::new(()), shutting_down: AtomicBool::new(false) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {

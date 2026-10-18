@@ -1,0 +1,309 @@
+/* Static console surfaces. Decorations stay on frame edges, away from body text. */
+:root[data-theme='cyberpunk'] {
+  color-scheme: dark;
+  --ui-bg: #080e14;
+  --ui-surface: #101b25;
+  --ui-surface-alt: #152431;
+  --ui-border: #29434e;
+  --ui-border-strong: #456571;
+  --ui-text: #dff3f2;
+  --ui-muted: #8eabb3;
+  --ui-accent: #43f4de;
+  --ui-accent-soft: #11373b;
+  --ui-accent-strong: #a0fff0;
+  --ui-danger: #ff9188;
+  --ui-radius: 4px;
+  --ui-shadow: 0 0 0 1px #43f4de16, 0 18px 48px #000b;
+  --cyber-warning: #ffa64d;
+  --cyber-warning-soft: #35271c;
+  --cyber-console: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Microsoft YaHei', monospace;
+  --field-bg: #0b1620;
+  --field-border: #385560;
+  --field-text: #dff3f2;
+  --field-placeholder: #86a0aa;
+  --field-focus: #43f4de;
+  --field-ring: #43f4de25;
+  --field-disabled: #111f2a;
+  --code-gutter: #0c1822;
+  --code-muted: #789ba5;
+  --code-border: #29434e;
+  --code-active: #123238;
+  --danger: #ff9188;
+  --syntax-404740: #d2eeeb;
+  --syntax-708: #c4a3ff;
+  --syntax-219: #b5acff;
+  --syntax-164: #8be5bc;
+  --syntax-a11: #ffc08c;
+  --syntax-e40: #ffaf68;
+  --syntax-00f: #7edcfa;
+  --syntax-30a: #c4a3ff;
+  --syntax-085: #43f4de;
+  --syntax-167: #91e7ee;
+  --syntax-256: #a3d1ed;
+  --syntax-00c: #8ed9ff;
+  --syntax-940: #87aaa2;
+  --syntax-f00: #ff9188;
+  font-family: var(--cyber-console);
+  color: var(--ui-text);
+  background: var(--ui-bg);
+}
+
+:root[data-theme='cyberpunk'] body,
+:root[data-theme='cyberpunk'] .app-shell { background: var(--ui-bg); color: var(--ui-text); font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-shell .workspace,
+:root[data-theme='cyberpunk'] :is(.request-library, .plugins-workspace, .request-blocking-page, .interception-page) {
+  background-color: var(--ui-bg);
+  background-image: linear-gradient(#43f4de05 1px, transparent 1px), linear-gradient(90deg, #43f4de05 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+:root[data-theme='cyberpunk'] .app-shell :is(.capture-page, .composer-page) { background: transparent; }
+:root[data-theme='cyberpunk'] .app-shell :is(.capture-workbench, .composer-page > .detail-panel) {
+  position: relative;
+  border-color: #365c67;
+  border-radius: 4px;
+  background: var(--ui-surface);
+  box-shadow: inset 0 1px #43f4de13;
+}
+:root[data-theme='cyberpunk'] .app-shell .capture-workbench::before,
+:root[data-theme='cyberpunk'] .app-shell .composer-page > .detail-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  width: 15px;
+  height: 15px;
+  border-top: 2px solid var(--cyber-warning);
+  border-right: 2px solid var(--cyber-warning);
+  pointer-events: none;
+}
+
+:root[data-theme='cyberpunk'] .app-shell .app-sidebar {
+  background: #0b141d;
+  border-right-color: #31515d;
+  box-shadow: inset -3px 0 #43f4de05;
+}
+:root[data-theme='cyberpunk'] .sidebar-brand {
+  border: 1px solid var(--ui-accent);
+  border-radius: 3px;
+  background: #0c252c;
+  color: var(--ui-accent);
+  box-shadow: inset 0 0 0 3px #080e14, 0 0 18px #43f4de0c;
+}
+:root[data-theme='cyberpunk'] .app-sidebar .sidebar-item { border: 1px solid transparent; border-radius: 3px; color: #8caab4; }
+:root[data-theme='cyberpunk'] .app-sidebar .sidebar-item > span { font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+:root[data-theme='cyberpunk'] .app-sidebar .sidebar-item:hover { border-color: #294c58; background: #102630; color: var(--ui-text); }
+:root[data-theme='cyberpunk'] .app-sidebar .sidebar-item.active {
+  border-color: #43f4de66;
+  background: linear-gradient(90deg, #153c40, #0d242e);
+  color: var(--ui-accent);
+  box-shadow: inset 2px 0 var(--ui-accent);
+}
+:root[data-theme='cyberpunk'] .sidebar-item.active::before { border-radius: 0; background: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .sidebar-badge { border: 1px solid #ffa64d80; border-radius: 2px; background: var(--cyber-warning-soft); color: var(--cyber-warning); font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .sidebar-indicator { background: var(--cyber-warning); }
+:root[data-theme='cyberpunk'] .sidebar-divider { background: #29434e; }
+
+:root[data-theme='cyberpunk'] .app-shell .proxy-toolbar {
+  position: relative;
+  border-bottom-color: #355864;
+  background: linear-gradient(105deg, #0c1823, #122731);
+  box-shadow: inset 0 1px #43f4de0c;
+}
+:root[data-theme='cyberpunk'] .app-shell .proxy-toolbar::after {
+  content: '';
+  position: absolute;
+  left: 22px;
+  bottom: -1px;
+  width: 84px;
+  border-bottom: 2px solid var(--ui-accent);
+  pointer-events: none;
+}
+:root[data-theme='cyberpunk'] .workspace-heading > span { color: var(--cyber-warning); font-family: var(--cyber-console); font-size: 9px; letter-spacing: 2px; }
+:root[data-theme='cyberpunk'] .workspace-heading > strong { color: #e3fffb; font-family: var(--cyber-console); font-size: 16px; letter-spacing: .02em; }
+:root[data-theme='cyberpunk'] .app-shell .proxy-address code { color: var(--ui-accent); font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-shell :is(.upstream-chip, .proxy-settings-button, .new-tab, .curl-import-button) { border-radius: 2px; border-color: #385560; background: #0b1822; color: #bfd6d9; }
+:root[data-theme='cyberpunk'] .app-shell :is(.upstream-chip, .proxy-settings-button, .new-tab, .curl-import-button):hover:not(:disabled) { border-color: var(--ui-accent); background: #123238; color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .capture-switch,
+:root[data-theme='cyberpunk'] .app-shell .button.primary { border-color: var(--ui-accent); border-radius: 2px; background: var(--ui-accent); color: #062522; box-shadow: inset 0 0 0 2px #0a2d2b33; font-family: var(--cyber-console); font-weight: 700; }
+:root[data-theme='cyberpunk'] .app-shell .capture-switch:hover:not(:disabled),
+:root[data-theme='cyberpunk'] .app-shell .button.primary:hover:not(:disabled) { border-color: #a0fff0; background: #a0fff0; color: #062522; }
+:root[data-theme='cyberpunk'] .app-shell .capture-switch.is-running { border-color: var(--cyber-warning); background: var(--cyber-warning-soft); color: #ffc58b; box-shadow: inset 3px 0 var(--cyber-warning); }
+:root[data-theme='cyberpunk'] .app-shell .dot.green { background: var(--ui-accent); box-shadow: 0 0 0 2px #43f4de15; }
+:root[data-theme='cyberpunk'] .app-shell .system-proxy-toggle .system-proxy-badge { background: #10232c; }
+:root[data-theme='cyberpunk'] .app-shell .system-proxy-toggle.is-active { background: #123b39; color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .system-proxy-toggle:is(.is-pending, .is-warning) { background: var(--cyber-warning-soft); color: var(--cyber-warning); }
+
+:root[data-theme='cyberpunk'] .app-shell .work-tabs { border-bottom-color: #29434e; background: #0a151f; }
+:root[data-theme='cyberpunk'] .app-shell .work-tab { color: #91acb4; font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-shell .work-tab.active { border-bottom-color: var(--ui-accent); background: #123039; color: #bafff5; box-shadow: inset 0 1px #43f4de20; }
+:root[data-theme='cyberpunk'] .app-shell .work-tab:hover { color: #cafff7; background: #112b34; }
+:root[data-theme='cyberpunk'] .app-shell .work-tab .tab-count { color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .request-history { color: var(--cyber-warning); font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-shell :is(.tabs, .capture-filter) { background: #101f2a; border-color: #31505c; }
+:root[data-theme='cyberpunk'] .app-shell .tab { font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-shell .tab.active { color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .tab.active::after { height: 2px; border-radius: 0; background: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .tab > span:not(.tiny-dot) { border-radius: 2px; background: #1a333d; color: #9dc5cc; }
+:root[data-theme='cyberpunk'] .app-shell .tiny-dot { background: var(--cyber-warning); }
+:root[data-theme='cyberpunk'] .app-shell .capture-filter .filter { border-radius: 2px; }
+:root[data-theme='cyberpunk'] .app-shell .capture-filter .filter.selected { background: #163b41; color: var(--ui-accent); box-shadow: inset 0 -1px var(--ui-accent); }
+:root[data-theme='cyberpunk'] .capture-actions-bar > button,
+:root[data-theme='cyberpunk'] .capture-actions-bar > details > summary { border-radius: 2px; border-color: #385560; background: #0d1a24; color: #c1d9dc; }
+
+/* Table metrics must match the virtualizer in every theme. */
+:root[data-theme='cyberpunk'] .app-shell .session-table th { height: 36px; min-height: 36px; border-color: #2b4a55; background: #10232d; color: #9cbfc7; font-family: var(--cyber-console); font-size: 11px; letter-spacing: .015em; }
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr:not(.virtual-spacer),
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr:not(.virtual-spacer) td { height: 32px; padding-top: 0; padding-bottom: 0; }
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr { background: #0c1821; }
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr:nth-child(even) { background: #10202a; }
+:root[data-theme='cyberpunk'] .app-shell .session-table td { border-bottom-color: #223a444d; color: #c6dddf; font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-shell .session-table td.cell-url { color: #d9eeed; }
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr:hover { background: #17333d; }
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr.selected { background: #123a40; box-shadow: inset 3px 0 var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr.selected td { color: #e2fffa; background: #123a40; }
+:root[data-theme='cyberpunk'] .app-shell .session-table tbody tr.selected td:first-child { box-shadow: inset 3px 0 var(--ui-accent); }
+:root[data-theme='cyberpunk'] .http-method { color: #43f4de; }
+:root[data-theme='cyberpunk'] .http-method.post { color: #ffc080; }
+:root[data-theme='cyberpunk'] .http-method:is(.put, .patch) { color: #8fdcff; }
+:root[data-theme='cyberpunk'] .http-method.delete { color: #ff9d90; }
+:root[data-theme='cyberpunk'] .http-method.options { color: #c4a3ff; }
+:root[data-theme='cyberpunk'] .http-status { border-radius: 2px; background: #153f3b; color: #93f7d8; }
+:root[data-theme='cyberpunk'] .http-status.redirect { background: #3b2a1b; color: #ffc586; }
+:root[data-theme='cyberpunk'] .http-status.error { background: #41262a; color: #ffb0a5; }
+:root[data-theme='cyberpunk'] .http-status.pending { background: #1c2d37; color: #adc6ca; }
+:root[data-theme='cyberpunk'] .app-shell .capture-empty-symbol { border-color: #3a6570; border-radius: 4px; background: #102831; color: var(--ui-accent); box-shadow: inset 3px 0 #43f4de33, inset 0 -3px #ffa64d26; }
+:root[data-theme='cyberpunk'] .app-shell .capture-empty h2 { color: #d5f5f0; font-family: var(--cyber-console); letter-spacing: .04em; }
+
+/* Inputs inherit the dark field tokens; only their geometry changes here. */
+:root[data-theme='cyberpunk'] .app-shell :is(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='hidden']), textarea, select) { border-radius: 2px; caret-color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell :is(button, input, select, textarea):focus-visible { outline-color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell button { border-radius: 2px; }
+:root[data-theme='cyberpunk'] .app-shell :is(.url-field, .request-tls, .preset, .body-code-editor, .script-code, .script-example, .request-body-card, .request-body-row, .request-body-notice) { border-radius: 3px; }
+:root[data-theme='cyberpunk'] .app-shell .url-field { background: #09151e; border-color: #456571; }
+:root[data-theme='cyberpunk'] .app-shell .url-field > svg { color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell :is(.response-heading, .inspector-heading, .table-head, .body-code-tools, .script-code-toolbar) { background: #132631; border-color: #31515c; }
+:root[data-theme='cyberpunk'] .app-shell :is(.replay-request, .replay-response, .request-content, .response-content, .capture-inspector) { background: var(--ui-surface); }
+:root[data-theme='cyberpunk'] .app-shell .response-protocol { border-radius: 2px; color: #9eced4; border-color: #3b6570; }
+:root[data-theme='cyberpunk'] .app-shell .response-meta .success { border-radius: 2px; background: #103c38; color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .preset { background: #0d1d28; border-color: #34515f; }
+:root[data-theme='cyberpunk'] .app-shell .preset.active { background: #10333a; border-color: var(--ui-accent); box-shadow: inset 2px 0 var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-shell .preset.active strong { color: #b6fff3; }
+:root[data-theme='cyberpunk'] .app-shell .preset.active > svg:last-child { color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] :is(.cm-editor, .response-code-editor) { color: #d7eeed; }
+:root[data-theme='cyberpunk'] .cm-scroller { font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .cm-content { caret-color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .cm-cursor { border-left-color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .cm-selectionBackground { background: #236b7370; }
+:root[data-theme='cyberpunk'] .cm-focused .cm-selectionBackground { background: #236b7399; }
+:root[data-theme='cyberpunk'] .cm-foldPlaceholder { border-color: #3d6974; border-radius: 2px; background: #18313c; color: #b5d9de; }
+:root[data-theme='cyberpunk'] .cm-tooltip { border-color: #43f4de66; border-radius: 2px; background: #10232e; color: #dff3f2; box-shadow: 0 8px 24px #0008; }
+:root[data-theme='cyberpunk'] .cm-tooltip-autocomplete > ul > li[aria-selected] { background: #15404a; color: #bffff5; }
+
+/* Menus and dialogs retain their positioning and overflow behavior. */
+:root[data-theme='cyberpunk'] :is(.request-context-menu, .capture-action-menu, .request-history > div) { border: 1px solid #3a6773; border-radius: 3px; background: #0e1e29; color: #d7eeee; box-shadow: var(--ui-shadow); }
+:root[data-theme='cyberpunk'] .request-context-menu button,
+:root[data-theme='cyberpunk'] .capture-action-menu > button { border-radius: 2px; color: #c4dcdf; font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .request-context-menu button:hover:not(:disabled),
+:root[data-theme='cyberpunk'] .request-context-menu button:focus-visible,
+:root[data-theme='cyberpunk'] .capture-action-menu > button:hover:not(:disabled) { background: #143c43; color: var(--ui-accent); box-shadow: inset 2px 0 var(--ui-accent); }
+:root[data-theme='cyberpunk'] .request-context-menu button > span { color: #88abb5; }
+:root[data-theme='cyberpunk'] .request-context-menu [role='separator'] { background: #34535d; }
+:root[data-theme='cyberpunk'] :is(.modal-backdrop, .app-update-backdrop) { background-color: #03090edb; }
+:root[data-theme='cyberpunk'] :is(.modal, .app-update-dialog, .file-progress) { border: 1px solid #4a6d77; border-radius: 4px; background: #101b25; color: #dff3f2; box-shadow: 0 0 0 1px #43f4de0c, 0 24px 80px #000b; }
+:root[data-theme='cyberpunk'] :is(.modal, .app-update-dialog) { position: relative; }
+:root[data-theme='cyberpunk'] :is(.modal, .app-update-dialog)::before { content: ''; position: absolute; left: -1px; top: -1px; width: 22px; height: 14px; border-left: 2px solid #43f4de; border-top: 2px solid #43f4de; pointer-events: none; }
+:root[data-theme='cyberpunk'] :is(.modal, .app-update-dialog)::after { content: ''; position: absolute; right: -1px; bottom: -1px; width: 22px; height: 14px; border-right: 2px solid #ffa64d; border-bottom: 2px solid #ffa64d; pointer-events: none; }
+:root[data-theme='cyberpunk'] .modal h2 { color: #d6fff6; font-family: var(--cyber-console); letter-spacing: .025em; }
+:root[data-theme='cyberpunk'] .modal :is(p, li) { color: #9fb9c1; }
+:root[data-theme='cyberpunk'] .modal-symbol { border: 1px solid #43f4de66; border-radius: 3px; background: #10373b; color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .modal :is(.setting-card, .upstream-settings, .command, .upstream-profile-editor) { border-color: #31525f; border-radius: 3px; background: #0c1822; color: #b9d7da; }
+:root[data-theme='cyberpunk'] .modal .setting-card strong { color: #c8eee9; }
+:root[data-theme='cyberpunk'] .modal .upstream-profile.is-current { border-color: #3d7c7b; border-left-color: var(--ui-accent); background: #12343b; }
+:root[data-theme='cyberpunk'] .modal .upstream-profile.is-current strong { color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .upstream-current-badge { border-radius: 2px; background: #1a4c4e; color: #a1fff0; }
+:root[data-theme='cyberpunk'] .command { color: var(--ui-accent); font-family: var(--cyber-console); }
+
+/* Settings keep their independent scroll area and use the same machined edges. */
+:root[data-theme='cyberpunk'] .app-shell .modal.settings-layout { border-color: #46727d; border-radius: 4px; background: #0c1822; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-header { border-bottom-color: #36797a; background: linear-gradient(110deg, #102933, #0d1b26 72%); box-shadow: inset 0 2px #43f4de45; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-symbol { border-color: #b37644; border-radius: 3px; background: #30271e; color: var(--cyber-warning); box-shadow: inset 2px 0 #ffa64d65, inset -2px 0 #ffa64d20; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-title > span { color: var(--cyber-warning); font-family: var(--cyber-console); letter-spacing: .16em; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-title h2 { color: #d6fff6; font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-header > .modal-close { border-radius: 2px; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-tabs { border-bottom-color: #315561; background: #0b1822; box-shadow: inset 0 1px #ffa64d1a; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-tab { border-radius: 2px; color: #91aeb8; font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .settings-layout .settings-tab:hover { border-color: #365965; background: #112b34; color: #caf8ee; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-tab[aria-selected='true'] { border-color: #367b7f; background: #15383d; color: var(--ui-accent); box-shadow: inset 0 -2px var(--ui-accent); }
+:root[data-theme='cyberpunk'] .settings-layout .settings-tab:focus-visible { outline-color: var(--cyber-warning); box-shadow: inset 0 -2px var(--ui-accent), 0 0 0 2px #ffa64d20; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-tab-panel:focus-visible { border-radius: 2px; outline-color: var(--cyber-warning); }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-body { background: #080f17; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-section { position: relative; border-color: #315561; border-radius: 3px; background: #101f2a; box-shadow: inset 3px 0 #43f4de0d; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-section::before { content: ''; position: absolute; left: -1px; top: -1px; width: 15px; height: 9px; border-left: 2px solid #43f4de; border-top: 2px solid #43f4de; pointer-events: none; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-section::after { content: ''; position: absolute; right: -1px; bottom: -1px; width: 15px; height: 9px; border-right: 2px solid #ffa64d99; border-bottom: 2px solid #ffa64d99; pointer-events: none; }
+:root[data-theme='cyberpunk'] .settings-layout :is(.settings-system, .settings-tun)::before { border-color: var(--cyber-warning); }
+:root[data-theme='cyberpunk'] .settings-layout :is(.settings-system, .settings-tun) > .settings-section-heading > svg { color: var(--cyber-warning); }
+:root[data-theme='cyberpunk'] .settings-layout .settings-section .settings-section-heading h3,
+:root[data-theme='cyberpunk'] .settings-layout .settings-section > fieldset > legend { color: #bcebe5; font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .settings-layout .settings-section :is(input:not([type='checkbox']), textarea, select) { border-color: #385560; border-radius: 2px; background: #0b1620; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-section button:not(.primary):not(.icon-button) { border-color: #385560; border-radius: 2px; background: #122631; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-section .text-button { color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .settings-layout .settings-address-card { border-color: #367075; border-radius: 3px; background: #0c242c; box-shadow: inset 2px 0 #43f4de70; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-address-card code { color: #a6ffed; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-upstream .upstream-profile { border-color: #385560; border-radius: 3px; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-upstream .upstream-profile.is-current { border-color: #43f4de88; background: #12373b; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-upstream .upstream-profile-editor { border-color: #385560; border-radius: 3px; background: #0b1620; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-certificate-export .setting-card { border: 0; background: transparent; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-footer { border-top-color: #345762; background: #0c1c26; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-dialog-footer .modal-done { border-radius: 2px; }
+:root[data-theme='cyberpunk'] .settings-layout .settings-help-content .command { border-color: #38616d; border-radius: 3px; background: #0b1923; color: #a6ffed; }
+
+/* Configuration pages use machine-panel edges rather than rounded white cards. */
+:root[data-theme='cyberpunk'] :is(.request-library, .plugins-workspace, .request-blocking-page, .interception-page) :is(h1, h2) { font-family: var(--cyber-console); letter-spacing: .025em; }
+:root[data-theme='cyberpunk'] :is(.library-page-heading h1, .plugins-heading h1, .blocking-title h1) { border-left: 2px solid var(--cyber-warning); padding-left: 12px; }
+:root[data-theme='cyberpunk'] :is(.library-create, .library-grid > div, .library-templates, .plugins-toolbar, .plugins-workspace .setting-card, .plugins-logs, .blocking-settings, .blocking-rule, .blocking-empty, .interception-rules, .capture-scripts, .interception-workspace > aside, .interception-editor, .interception-page > .interception-controls) { border-radius: 4px; border-color: #2f515d; }
+:root[data-theme='cyberpunk'] :is(.request-library, .plugins-workspace) .secondary-empty { border-radius: 3px; border-color: #345965; background: #0d1d27; }
+:root[data-theme='cyberpunk'] :is(.request-library, .plugins-workspace) .secondary-empty > svg,
+:root[data-theme='cyberpunk'] .blocking-empty > svg { border: 1px solid #3d7b7a; border-radius: 3px; background: #123038; color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .request-library details { border-radius: 3px; }
+:root[data-theme='cyberpunk'] .request-library details > summary { background: #122530; }
+:root[data-theme='cyberpunk'] .request-library .library-create,
+:root[data-theme='cyberpunk'] .plugins-workspace .plugins-toolbar { border-top-color: #43f4de73; }
+:root[data-theme='cyberpunk'] .plugins-workspace .setting-card h3 small { border: 1px solid #385867; border-radius: 2px; background: #102630; color: #a0ccd2; }
+:root[data-theme='cyberpunk'] .request-blocking-page .blocking-status { border-radius: 2px; }
+:root[data-theme='cyberpunk'] .request-blocking-page .blocking-status.is-enabled { border-color: var(--cyber-warning); background: #32261c; color: #ffc28b; }
+:root[data-theme='cyberpunk'] .interception-page .interception-rule { border-radius: 3px; background: #10212d; }
+:root[data-theme='cyberpunk'] .interception-page .interception-workspace > aside button.active { background: #12373e; color: var(--ui-accent); box-shadow: inset 3px 0 var(--ui-accent); }
+:root[data-theme='cyberpunk'] .interception-page .interception-original { border-radius: 3px; background: #0b1822; }
+
+/* WebSocket directions and update states have their own component tokens. */
+:root[data-theme='cyberpunk'] .ws-panel { --ws-bg: #101b25; --ws-surface: #132834; --ws-border: #31535f; --ws-text: #d2e9e9; --ws-muted: #8eabb3; --ws-accent: #ffa64d; --ws-accent-bg: #33271d; --ws-in: #43f4de; }
+:root[data-theme='cyberpunk'] .ws-panel :is(button, select, textarea, .ws-message) { border-radius: 2px; }
+:root[data-theme='cyberpunk'] .ws-panel .ws-message.ws-client { border-color: #715039; }
+:root[data-theme='cyberpunk'] .ws-panel .ws-message.ws-client summary { background: #2c231d; color: #ffca9a; box-shadow: inset 2px 0 var(--cyber-warning); }
+:root[data-theme='cyberpunk'] .ws-panel .ws-message.ws-server { border-color: #2e6470; }
+:root[data-theme='cyberpunk'] .ws-panel .ws-message.ws-server summary { background: #112b34; color: #b3e4e5; box-shadow: inset 2px 0 var(--ui-accent); }
+:root[data-theme='cyberpunk'] .ws-panel .ws-message summary { font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-update-backdrop { --update-accent: #43f4de; --update-accent-text: #062522; --update-soft: #12373b; --update-danger: #ff9188; }
+:root[data-theme='cyberpunk'] .app-update-dialog { font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .app-update-dialog :is(button, .app-update-notes, .app-update-progress, .app-update-error) { border-radius: 3px; }
+:root[data-theme='cyberpunk'] .app-update-dialog h2 { color: #d6fff6; }
+:root[data-theme='cyberpunk'] .app-update-symbol { border: 1px solid #43f4de66; border-radius: 3px; background: #12373b; color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-update-trigger.has-update { border-color: #ffa64d80; background: #34271c; color: #ffc28b; }
+:root[data-theme='cyberpunk'] .app-update-dialog .app-update-restart-note { color: #e5b789; }
+:root[data-theme='cyberpunk'] .app-update-progress progress { height: 8px; border-radius: 1px; accent-color: var(--ui-accent); }
+:root[data-theme='cyberpunk'] .app-update-progress progress::-webkit-progress-bar { background: #0a1c25; }
+:root[data-theme='cyberpunk'] .app-update-progress progress::-webkit-progress-value { background: var(--ui-accent); }
+
+:root[data-theme='cyberpunk'] :is(.error-box, .blocked-banner, .workspace-save-error) { border-color: #785244; border-radius: 3px; background: #30211e; color: #ffc098; }
+:root[data-theme='cyberpunk'] :is(.request-body-error, .blocking-error, .body-code-status.error, .script-code [role='alert'], .interception-editor [role='alert'], .app-update-error) { color: var(--ui-danger); }
+:root[data-theme='cyberpunk'] .app-shell .session-table td.blocked-status { color: #ffc08c; }
+:root[data-theme='cyberpunk'] .app-shell .bad { color: var(--ui-danger) !important; }
+:root[data-theme='cyberpunk'] .muted { color: var(--ui-muted) !important; }
+:root[data-theme='cyberpunk'] :is(.format-note, .preview-strip) { border-color: #745637; border-radius: 2px; background: #2c241c; color: #ffca91; }
+:root[data-theme='cyberpunk'] .app-shell .toast { border-color: #3a6773; border-radius: 3px; background: #10232d; color: #d7f3ed; box-shadow: var(--ui-shadow); }
+:root[data-theme='cyberpunk'] .app-shell .statusbar { border-top-color: #345762; background: #0b161f; color: #95b4bc; font-family: var(--cyber-console); }
+:root[data-theme='cyberpunk'] .statusbar .dot { border-radius: 1px; }
+:root[data-theme='cyberpunk'] ::selection { background: #236b73; color: #e3fffb; }
+:root[data-theme='cyberpunk'] ::-webkit-scrollbar-thumb { border: 1px solid #54727c; border-radius: 1px; background: #335560; }
+:root[data-theme='cyberpunk'] ::-webkit-scrollbar-track { background: #0b1720; }

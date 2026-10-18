@@ -49,10 +49,15 @@ async fn start_mode(engine: Arc<Engine>, requested: SocketAddr, transparent: boo
                 Some(_) = connections.join_next(), if !connections.is_empty() => {},
                 result = listener.accept(), if connections.len() < 64 => {
                     match result {
-                        Ok((stream, _)) => {
+                        Ok((stream, peer)) => {
                             let engine = engine.clone();
+                            let local = stream.local_addr().unwrap_or(address);
                             connections.spawn(async move {
-                                match tokio::time::timeout(Duration::from_secs(360), handle(stream, engine, address, transparent)).await {
+                                let work = async {
+                                    let origin = crate::traffic_origin::tcp(peer, local, transparent).await;
+                                    crate::traffic_origin::scope(Some(origin), handle(stream, engine, address, transparent)).await
+                                };
+                                match tokio::time::timeout(Duration::from_secs(360), work).await {
                                     Ok(Err(error)) => tracing::warn!(%error, "Proxy connection failed"),
                                     Err(_) => tracing::warn!("Proxy connection timed out"),
                                     _ => {},
@@ -96,7 +101,7 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
         if !transparent && crate::decryption::matches(&hostname(&url),&bypass) {
             if let Some(hit) = engine.blocking.host_match_before_tls(&url, "capture") {
                 let request=RequestDraft { method:"CONNECT".into(), url:url.to_string(), headers:parse_request(&head)?.2, body_base64:String::new(), upstream_profile_id:None, scripts:Default::default(), pseudo_headers:vec![], engine:"native".into(), tls:Default::default() };
-                let mut flow=Flow { state:"blocked".into(), id:uuid::Uuid::new_v4().to_string(), parent_id:None, started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64, duration_ms:0, source:"capture".into(), request, response:None, error:None, notes:vec!["解密例外隧道命中域名阻止规则；未建立上游连接。".into()], client_protocol:Some("HTTP/1.1".into()), client_tls:None, raw_request_head_base64:Some(STANDARD.encode(&head)), original_request:None, original_response:None, websocket:None };
+                let mut flow=Flow { state:"blocked".into(), id:uuid::Uuid::new_v4().to_string(), parent_id:None, started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64, duration_ms:0, source:"capture".into(), request, response:None, error:None, notes:vec!["解密例外隧道命中域名阻止规则；未建立上游连接。".into()], client_protocol:Some("HTTP/1.1".into()), client_tls:None, raw_request_head_base64:Some(STANDARD.encode(&head)), original_request:None, original_response:None, websocket:None, traffic_origin:crate::traffic_origin::current("capture") };
                 hit.apply(&mut flow);
                 engine.store.insert(&flow)?;
                 let _=engine.events.send(flow.clone());
@@ -107,7 +112,7 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
             stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;stream.flush().await?;
             let started=std::time::Instant::now();
             let request=RequestDraft{method:"CONNECT".into(),url:url.to_string(),headers:parse_request(&head)?.2,body_base64:String::new(),upstream_profile_id:None,scripts:Default::default(),pseudo_headers:vec![],engine:"native".into(),tls:Default::default()};
-            let flow=Flow{state:"receiving".into(),id:uuid::Uuid::new_v4().to_string(),parent_id:None,started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64,duration_ms:0,source:"capture".into(),request,response:None,error:None,notes:vec!["HTTPS 直通：TLS 未解密，无法查看内部请求/响应。".into()],client_protocol:Some("HTTP/1.1".into()),client_tls:None,raw_request_head_base64:Some(STANDARD.encode(&head)),original_request:None,original_response:None,websocket:None};
+            let flow=Flow{state:"receiving".into(),id:uuid::Uuid::new_v4().to_string(),parent_id:None,started_at:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64,duration_ms:0,source:"capture".into(),request,response:None,error:None,notes:vec!["HTTPS 直通：TLS 未解密，无法查看内部请求/响应。".into()],client_protocol:Some("HTTP/1.1".into()),client_tls:None,raw_request_head_base64:Some(STANDARD.encode(&head)),original_request:None,original_response:None,websocket:None,traffic_origin:crate::traffic_origin::current("capture")};
             engine.store.insert(&flow)?;
             let mut guard=crate::PendingFlow{engine:&engine,id:Some(flow.id.clone())};
             let result=tokio::io::copy_bidirectional(&mut stream,&mut upstream).await;

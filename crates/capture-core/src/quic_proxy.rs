@@ -64,6 +64,7 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                             .map_err(|_| anyhow::anyhow!("H3 client handshake timed out after 10 seconds"))??;
                         let client_tls = crate::tls_details::quic(&connection);
                         let redirected = target.is_none();
+                        let traffic_origin = crate::traffic_origin::quic(connection.remote_address(), redirected);
 
                         let target = match target {
                             Some(target) => target,
@@ -82,6 +83,7 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                 next = server.accept(), if streams.len() < 32 => {
                                     let Some(resolver) = next? else { break };
                                     let engine = engine.clone(); let target = target.clone(); let client_tls = client_tls.clone();
+                                    let traffic_origin = traffic_origin.clone();
                                     streams.spawn(async move {
                                         let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
                                         let (request, mut stream) = match tokio::time::timeout_at(deadline, resolver.resolve_request()).await {
@@ -118,7 +120,7 @@ async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::E
                                             let draft = RequestDraft { upstream_profile_id: None, scripts: Default::default(), pseudo_headers: vec![], engine: "h3".into(), method: request.method().to_string(),
                                                 url: format!("https://{}{path}", authority(&target)), headers: multiplex::headers(request.headers()),
                                                 body_base64: body.into_base64().await?, tls: TlsProfile::default() };
-                                            let flow = engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/3".into()), Some(client_tls)).await?;
+                                            let flow = crate::traffic_origin::scope(Some(traffic_origin), engine.execute_with_tls(draft, None, "capture", None, Some("HTTP/3".into()), Some(client_tls))).await?;
                                             let (response, mut body) = multiplex::response_head_for_flow(flow).await?;
                                             let (parts, ()) = response.into_parts();
                                             stream.send_response(http::Response::from_parts(parts, ())).await?;

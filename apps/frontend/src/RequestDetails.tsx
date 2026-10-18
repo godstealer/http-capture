@@ -1,10 +1,33 @@
 import { t, currentLanguage } from './i18n';
-import type { Flow, RequestDraft, TlsDetailsData } from './types';
+import type { Flow, Header, RequestDraft, TlsDetailsData } from './types';
+import { Copy } from 'lucide-react';
+import { headerLines } from './messageText';
+import { describeTrafficOrigin } from './trafficOrigin';
+
+export function MessageHeaders({ headers, onCopy }: { headers: Header[]; onCopy: (text: string) => void }) {
+  return <div className="message-headers">
+    <div className="message-copy-toolbar"><button type="button" disabled={!headers.length} onClick={() => onCopy(headerLines(headers))}><Copy size={13} />{t('复制全部头部')}</button></div>
+    <div className="inspector-headers">{headers.map((header, index) => <div key={index}>
+      <span>{index + 1}</span><strong>{header.name}</strong><code>{header.value}</code>
+      <button type="button" className="icon-button" title={t('复制头部 {v0}', {v0:index + 1})} aria-label={t('复制头部 {v0}', {v0:index + 1})} onClick={() => onCopy(headerLines([header]))}><Copy size={13} /></button>
+    </div>)}</div>
+  </div>;
+}
 
 export function PropertyTable({ rows }: { rows: Array<[string, string | number]> }) {
   return <table className="property-table"><thead><tr><th>{t("名称")}</th><th>{t("值")}</th></tr></thead><tbody>{rows.map(([name, value]) => <tr key={name}><td>{name}</td><td>{value}</td></tr>)}</tbody></table>;
 }
 function size(body: string) { return `${body.length * 3 / 4 - (body.endsWith('==') ? 2 : body.endsWith('=') ? 1 : 0)} B`; }
+export function TrafficOriginDetails({ flow }: { flow: Flow }) {
+  const origin = describeTrafficOrigin(flow);
+  return <details open className="traffic-origin-details"><summary>{t('流量来源')}{origin.imported && <span className="traffic-origin-file-badge">{t('文件记录')}</span>}</summary>
+    <PropertyTable rows={[
+      [t('来源应用'), origin.application], ['PID', origin.pid], [t('进程路径'), origin.path],
+      [t('客户端地址'), origin.clientAddress], [t('流量入口'), origin.entry], [t('识别说明'), origin.reason],
+    ]} />
+    {origin.provenance && <p className="traffic-origin-provenance">{origin.provenance}</p>}
+  </details>;
+}
 export function RequestOverview({ request, flow }: { request: RequestDraft; flow?: Flow }) {
   return <div className="request-details">
     <PropertyTable rows={[
@@ -13,6 +36,7 @@ export function RequestOverview({ request, flow }: { request: RequestDraft; flow
       [t("上游协议"), flow?.state === 'blocked' ? t('本地阻止') : flow?.response?.version ?? t("未记录")], [t("响应状态码"), flow?.response?.status ?? '—'],
       [t("发送引擎"), request.engine ?? 'auto'],
     ]} />
+    {flow && <TrafficOriginDetails flow={flow} />}
     <details open><summary>{t("时间")}</summary><PropertyTable rows={[
       [t("开始时间"), flow ? new Date(flow.startedAt).toLocaleString(currentLanguage()) : t("未发送")], [t("总时长"), flow ? `${flow.durationMs} ms` : '—'],
     ]} /></details>

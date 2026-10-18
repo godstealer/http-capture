@@ -1,4 +1,4 @@
-use capture_core::{Engine, intercept::{Config, Rule}, scripts::Scripts, store::{Workspace,RequestEditor}};
+use capture_core::{Engine, intercept::{Config, Rule}, scripts::Scripts, store::{Library,Workspace,RequestEditor}};
 use std::collections::BTreeMap;
 
 #[test]
@@ -12,7 +12,7 @@ fn restart_restores_drafts_rules_scripts_and_committed_variables() {
  let revision=engine.scripts.snapshot().1;
  engine.scripts.commit_variables(revision,&scripts.variables,&BTreeMap::from([("counter".into(),"2".into())])).unwrap();
  let request=serde_json::from_str(r#"{"method":"POST","url":"","engine":"h2","headers":[{"name":"X-A","value":"1"},{"name":"X-B","value":"2"},{"name":"X-A","value":"3"}],"bodyBase64":"AAEC/w=="}"#).unwrap();
- engine.store.save_workspace(Workspace{editors:vec![RequestEditor{id:"draft-1".into(),draft:request,selected:None,parent_id:None,grpc_draft:Some(capture_core::store::GrpcDraft{method:"/demo.Echo/Bidi".into(),json:r#"{"text":"{{message}}""#.into()})}],active_editor:"draft-1".into(),revision:0}).unwrap();
+ engine.store.save_workspace(Workspace{editors:vec![RequestEditor{id:"draft-1".into(),draft:request,selected:None,parent_id:None,grpc_draft:Some(capture_core::store::GrpcDraft{method:"/demo.Echo/Bidi".into(),json:r#"{"text":"{{message}}""#.into()}),saved_request_id:None}],active_editor:"draft-1".into(),revision:0}).unwrap();
  drop(engine);
  let engine=Engine::open(dir.path()).unwrap();
  let config=engine.intercept.snapshot();assert!(config.config.request);assert!(config.items.is_empty());assert!(config.config.rules[0].compiled_url.as_ref().unwrap().is_match("https://example.test/path"));
@@ -41,4 +41,81 @@ fn stale_windows_and_invalid_settings_cannot_overwrite_saved_data() {
 fn legacy_workspace_without_grpc_draft_loads() {
  let value:RequestEditor=serde_json::from_value(serde_json::json!({"id":"old","draft":{"method":"GET","url":"","headers":[],"bodyBase64":""},"selected":null,"parentId":null})).unwrap();
  assert!(value.grpc_draft.is_none());
+}
+
+#[test]
+fn legacy_workspace_without_saved_request_id_loads_and_omits_it() {
+ let value:Workspace=serde_json::from_value(serde_json::json!({
+  "editors":[{"id":"old","draft":{"method":"GET","url":"","headers":[],"bodyBase64":""},"selected":null,"parentId":null}],
+  "activeEditor":"old","revision":3
+ })).unwrap();
+ assert!(value.editors[0].saved_request_id.is_none());
+ let serialized=serde_json::to_value(value).unwrap();
+ assert!(serialized["editors"][0].get("savedRequestId").is_none());
+ assert!(serialized["editors"][0].get("saved_request_id").is_none());
+}
+
+#[test]
+fn saved_request_association_roundtrips_without_library_entry() {
+ let dir=tempfile::tempdir().unwrap();
+ let value:Workspace=serde_json::from_value(serde_json::json!({
+  "editors":[{"id":"linked","draft":{"method":"GET","url":"https://example.invalid/","headers":[],"bodyBase64":""},"selected":null,"parentId":null,"savedRequestId":"saved-request-1"}],
+  "activeEditor":"linked","revision":0
+ })).unwrap();
+ assert_eq!(value.editors[0].saved_request_id.as_deref(),Some("saved-request-1"));
+ let serialized=serde_json::to_value(&value).unwrap();
+ assert_eq!(serialized["editors"][0]["savedRequestId"],"saved-request-1");
+ assert!(serialized["editors"][0].get("saved_request_id").is_none());
+ let roundtrip:Workspace=serde_json::from_value(serialized).unwrap();
+ {
+  let engine=Engine::open(dir.path()).unwrap();
+  assert!(engine.store.library().unwrap().requests.is_empty());
+  engine.store.save_workspace(roundtrip).unwrap();
+ }
+ let restored=Engine::open(dir.path()).unwrap().store.workspace().unwrap();
+ assert_eq!(restored.editors[0].saved_request_id.as_deref(),Some("saved-request-1"));
+}
+
+#[test]
+fn legacy_library_without_request_editor_metadata_loads_and_omits_it() {
+ let value:Library=serde_json::from_value(serde_json::json!({
+  "revision":4,"collections":[{"id":"c","name":"Saved"}],"environments":[],"scripts":[],
+  "requests":[{"id":"old","name":"Old request","collectionId":"c","draft":{"method":"GET","url":"","headers":[],"bodyBase64":""}}]
+ })).unwrap();
+ assert!(value.requests[0].grpc_draft.is_none());
+ assert!(value.requests[0].request_mode.is_none());
+ let serialized=serde_json::to_value(value).unwrap();
+ assert!(serialized["requests"][0].get("grpcDraft").is_none());
+ assert!(serialized["requests"][0].get("requestMode").is_none());
+}
+
+#[test]
+fn library_preserves_grpc_message_and_request_modes_across_restart() {
+ let dir=tempfile::tempdir().unwrap();
+ let value:Library=serde_json::from_value(serde_json::json!({
+  "revision":0,"collections":[{"id":"c","name":"Saved"}],"environments":[],"scripts":[],
+  "requests":[
+   {"id":"g","name":"gRPC request","collectionId":"c","requestMode":"grpc","grpcDraft":{"method":"/demo.Echo/Call","json":"{\"text\":\"{{message}}\"}"},"draft":{"method":"POST","url":"https://example.invalid/","headers":[],"bodyBase64":""}},
+   {"id":"w","name":"WebSocket request","collectionId":"c","requestMode":"websocket","draft":{"method":"GET","url":"wss://example.invalid/socket","headers":[],"bodyBase64":""}},
+   {"id":"h","name":"HTTP request","collectionId":"c","requestMode":"http","draft":{"method":"GET","url":"https://example.invalid/","headers":[],"bodyBase64":""}}
+  ]
+ })).unwrap();
+ let serialized=serde_json::to_value(&value).unwrap();
+ assert_eq!(serialized["requests"][0]["requestMode"],"grpc");
+ assert_eq!(serialized["requests"][0]["grpcDraft"]["method"],"/demo.Echo/Call");
+ assert_eq!(serialized["requests"][0]["grpcDraft"]["json"],r#"{"text":"{{message}}"}"#);
+ assert!(serialized["requests"][0].get("grpc_draft").is_none());
+ assert!(serialized["requests"][0].get("request_mode").is_none());
+ let roundtrip:Library=serde_json::from_value(serialized).unwrap();
+ {
+  let engine=Engine::open(dir.path()).unwrap();
+  engine.store.save_library(roundtrip).unwrap();
+ }
+ let restored=Engine::open(dir.path()).unwrap().store.library().unwrap();
+ assert_eq!(restored.requests.iter().map(|request|request.request_mode.as_deref()).collect::<Vec<_>>(),vec![Some("grpc"),Some("websocket"),Some("http")]);
+ let grpc=restored.requests[0].grpc_draft.as_ref().unwrap();
+ assert_eq!(grpc.method,"/demo.Echo/Call");
+ assert_eq!(grpc.json,r#"{"text":"{{message}}"}"#);
+ assert!(restored.requests[1].grpc_draft.is_none());
+ assert!(restored.requests[2].grpc_draft.is_none());
 }

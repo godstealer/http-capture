@@ -1,8 +1,9 @@
 import { lazy, Suspense, useRef, useState } from "react";
 import { t } from "./i18n";
-import { parseLibrary, type Library } from "./library";
+import { parseLibrary, type Library, type SavedRequestContext } from "./library";
 import type { RequestDraft } from "./types";
 import { emptyScripts } from "./ScriptsEditor";
+import { Braces, FileCode2, FolderOpen } from 'lucide-react';
 const ScriptCodeEditor = lazy(() => import("./ScriptCodeEditor"));
 
 export default function RequestLibrary({
@@ -12,6 +13,7 @@ export default function RequestLibrary({
   onReload,
   onOpen,
   draft,
+  draftContext,
   message,
   busy,
 }: {
@@ -19,8 +21,9 @@ export default function RequestLibrary({
   onChange: (value: Library) => void;
   onSave: () => void;
   onReload: () => void;
-  onOpen: (draft: RequestDraft) => void;
+  onOpen: (request: Library['requests'][number]) => void;
   draft?: RequestDraft;
+  draftContext?: SavedRequestContext;
   message: string;
   busy: boolean;
 }) {
@@ -61,6 +64,7 @@ export default function RequestLibrary({
             name: name.trim(),
             collectionId: collection,
             draft: structuredClone(draft),
+            ...structuredClone(draftContext ?? {}),
           },
         ],
       });
@@ -115,8 +119,8 @@ export default function RequestLibrary({
         disabled={busy}
         style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
       >
-        <div className="library-toolbar">
-          <strong>{t("请求集合与环境")}</strong>
+        <div className="library-toolbar library-page-heading">
+          <h1>{t("请求集合与环境")}</h1>
           <button disabled={busy} onClick={onSave}>
             {t("保存集合与环境")}
           </button>
@@ -156,7 +160,7 @@ export default function RequestLibrary({
             "导入只替换当前编辑内容；点击保存才落盘。请求与环境可能包含凭据，请妥善保存导出文件。",
           )}
         </p>
-        <div className="library-toolbar">
+        <div className="library-toolbar library-create">
           <input
             aria-label={t("名称")}
             placeholder={t("名称")}
@@ -185,7 +189,9 @@ export default function RequestLibrary({
           </button>
         </div>
         <div className="library-grid">
-          <div>
+          <div className="library-collections">
+            <h2>{t('集合')}</h2>
+            {!value.collections.length && <div className="secondary-empty"><FolderOpen size={28} aria-hidden="true"/><strong>{t('暂无请求集合')}</strong><p>{t('输入名称并新建集合，按项目整理常用请求。')}</p></div>}
             {value.collections.map((c) => (
               <details key={c.id} open>
                 <summary>
@@ -236,7 +242,7 @@ export default function RequestLibrary({
                         }
                       />
                       <span>{r.draft.method}</span>
-                      <button onClick={() => onOpen(structuredClone(r.draft))}>
+                      <button onClick={() => onOpen(structuredClone(r))}>
                         {t("打开请求")}
                       </button>
                       <button
@@ -256,7 +262,8 @@ export default function RequestLibrary({
               </details>
             ))}
           </div>
-          <div>
+          <div className="library-environments">
+            <h2>{t('编辑环境')}</h2>
             <select
               aria-label={t("编辑环境")}
               value={environment}
@@ -279,6 +286,7 @@ export default function RequestLibrary({
                 </option>
               ))}
             </select>
+            {!value.environments.length && <div className="secondary-empty"><Braces size={28} aria-hidden="true"/><strong>{t('暂无环境')}</strong><p>{t('新建环境后，可在这里维护请求变量。')}</p></div>}
             {value.environments.some((v) => v.id === environment) && (
               <>
                 <input
@@ -353,8 +361,9 @@ export default function RequestLibrary({
             </p>
           </div>
         </div>
-        <details>
+        <details className="library-templates">
           <summary>{t("脚本模板")}</summary>
+          {!value.scripts.length && <div className="secondary-empty"><FileCode2 size={28} aria-hidden="true"/><strong>{t('尚未保存脚本模板')}</strong><p>{t('打开请求后，可将脚本保存为模板。')}</p></div>}
           {value.scripts.map((v) => (
             <div className="library-toolbar" key={v.id}>
               <input

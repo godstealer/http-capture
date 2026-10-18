@@ -2,6 +2,8 @@ pub mod grpc_client;
 pub mod body_export;
 mod body_spool;
 mod capture_tls;
+mod traffic_origin;
+mod traffic_process;
 pub mod browser_profiles;
 pub mod tls_config;
 pub mod tun;
@@ -119,7 +121,7 @@ impl Engine {
         let original_request = request.has_disabled_headers().then(|| request.clone());
         request.retain_enabled_headers();
         let mut flow = Flow { state: "sending".into(), websocket: None, original_request, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
-            source: source.into(), request, response: None, error: None, raw_request_head_base64, notes: vec![], client_protocol };
+            source: source.into(), request, response: None, error: None, raw_request_head_base64, notes: vec![], client_protocol, traffic_origin: crate::traffic_origin::current(source) };
         self.store.insert(&flow)?;
         if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }
         let mut pending = PendingFlow { engine: self, id: Some(flow.id.clone()) };
@@ -223,7 +225,7 @@ impl Engine {
         let flow = Flow { state: "failed".into(), websocket: None, original_request: None, original_response: None, client_tls: None, id: uuid::Uuid::new_v4().to_string(), parent_id: None,
             started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
             duration_ms: 0, source: "capture".into(), request, response: None, error: Some(error),
-            raw_request_head_base64: Some(raw_head), notes: vec!["请求未转发；正文可能未完整接收。".into()], client_protocol: None };
+            raw_request_head_base64: Some(raw_head), notes: vec!["请求未转发；正文可能未完整接收。".into()], client_protocol: None, traffic_origin: crate::traffic_origin::current("capture") };
         self.store.insert(&flow)?;
         let _ = self.events.send(flow);
         Ok(())

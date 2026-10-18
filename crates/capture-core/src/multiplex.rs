@@ -24,7 +24,8 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
             item = connection.accept() => match item {
                 Some(Ok((request, mut respond))) => {
                     let engine = engine.clone(); let origin = origin.clone(); let client_tls = client_tls.clone(); let upstream_tls = upstream_tls.clone();
-                    tasks.spawn(async move {
+                    let traffic_origin = crate::traffic_origin::current("capture");
+                    tasks.spawn(crate::traffic_origin::scope(traffic_origin, async move {
                         let result: Result<()> = async {
                             let (parts, mut recv) = request.into_parts();
                             ensure!(parts.method != http::Method::CONNECT, "Extended CONNECT is unsupported");
@@ -80,7 +81,7 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin {
                             Ok(())
                         }.await;
                         if let Err(error) = result { tracing::warn!(%error, "h2 stream failed"); respond.send_reset(h2::Reason::INTERNAL_ERROR); }
-                    });
+                    }));
                 }
                 Some(Err(error)) => return Err(error.into()),
                 None => break,

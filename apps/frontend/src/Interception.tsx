@@ -1,11 +1,13 @@
 import { writeClipboard } from './clipboard';
 import { t } from './i18n';
 import { CaptureScripts } from './ScriptsEditor';
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from './api';
-import { decodeText, encodeText, type Flow } from './types';
+import { encodeText, type Flow } from './types';
 import OrderedHeaders from './OrderedHeaders';
 import ResponseBody from './ResponseBody';
+import BodyCodeEditor from './BodyCodeEditor';
+import { utf8ContentType } from './requestBody';
 import './interception.css';
 type Rule = {disabled?:boolean;exclude?:boolean;group?:string;urlRegex?:boolean;urlContains:string;host:string;method:string;status:number|null;headerName:string;headerContains:string};
 type Config = {request:boolean;response:boolean;scope:string;rules?:Rule[]};
@@ -15,7 +17,7 @@ export default function Interception({snapshot,onUpdate}:{snapshot:InterceptSnap
  const [selected,setSelected]=useState(''); const [error,setError]=useState(''); const [saving,setSaving]=useState(false);
  const item=snapshot.items.find(i=>i.id===selected)??snapshot.items[0];
  async function configure(config:Config) { setSaving(true); try {await invoke('configure_interception',{config:{...config,scope:config.scope||'all'}});onUpdate(await invoke<InterceptSnapshot>('interception'));setError('');return true;} catch(e){setError(String(e));return false;} finally {setSaving(false);} }
- return <section className="interception-page"><div className="interception-controls"><strong>{t("拦截")}</strong>{(['request','response'] as const).map(stage=><label key={stage}><input disabled={saving} type="checkbox" checked={snapshot.config[stage]} onChange={e=>void configure({...snapshot.config,[stage]:e.target.checked})}/>{stage==='request'?t("请求发送前"):t("响应返回后")}</label>)}<select aria-label={t("拦截来源")} disabled={saving} value={snapshot.config.scope||'all'} onChange={e=>void configure({...snapshot.config,scope:e.target.value})}><option value="all">{t("全部来源")}</option><option value="capture">{t("抓包流量")}</option><option value="replay">{t("手动发送")}</option></select><span>{t("每阶段最多等待 120 秒；关闭开关将原样放行。")}</span></div>{error&&<p role="alert">{error}</p>}<Rules hits={snapshot.hits??[]} config={snapshot.config} save={configure} saving={saving}/><CaptureScripts/><div className="interception-workspace"><aside>{snapshot.items.map(i=><button key={i.id} className={item?.id===i.id?'active':''} onClick={()=>setSelected(i.id)}><strong>{i.stage==='request'?t("等待请求放行"):t("等待响应放行")} · {i.flow.source==='capture'?t("抓包"):t("手动")}</strong><span>{i.flow.request.method} {i.flow.request.url}</span></button>)}{!snapshot.items.length&&<p>{t("暂无等待项。开启拦截后，新的流量会在这里暂停。")}</p>}</aside>{item&&<Editor key={item.id} item={item} onDone={async()=>onUpdate(await invoke<InterceptSnapshot>('interception'))}/>}</div></section>;
+ return <section className="interception-page"><div className="interception-controls"><strong>{t("拦截")}</strong>{(['request','response'] as const).map(stage=><label key={stage}><input disabled={saving} type="checkbox" checked={snapshot.config[stage]} onChange={e=>void configure({...snapshot.config,[stage]:e.target.checked})}/>{stage==='request'?t("请求发送前"):t("响应返回后")}</label>)}<select aria-label={t("拦截来源")} disabled={saving} value={snapshot.config.scope||'all'} onChange={e=>void configure({...snapshot.config,scope:e.target.value})}><option value="all">{t("全部来源")}</option><option value="capture">{t("抓包流量")}</option><option value="replay">{t("手动发送")}</option></select><span>{t("每阶段最多等待 120 秒；关闭开关将原样放行。")}</span></div>{error&&<p role="alert">{error}</p>}<Rules hits={snapshot.hits??[]} config={snapshot.config} save={configure} saving={saving}/><CaptureScripts/><div className="interception-workspace"><aside>{snapshot.items.map(i=><button key={i.id} className={item?.id===i.id?'active':''} onClick={()=>setSelected(i.id)}><strong>{i.stage==='request'?t("等待请求放行"):t("等待响应放行")} · {i.flow.source==='capture'?t("抓包"):t("手动")}</strong><span>{i.flow.request.method} {i.flow.request.url}</span></button>)}{!snapshot.items.length&&<p>{t("暂无等待项。开启拦截后，新的流量会在这里暂停。")}</p>}</aside>{item&&<InterceptionEditor key={item.id} item={item} onDone={async()=>onUpdate(await invoke<InterceptSnapshot>('interception'))}/>}</div></section>;
 }
 function Rules({config,save,saving,hits}:{hits:number[];config:Config;save:(c:Config)=>Promise<boolean>;saving:boolean}) {
  const fileInput=useRef<HTMLInputElement>(null);const [fileError,setFileError]=useState('');
@@ -34,15 +36,105 @@ function Rules({config,save,saving,hits}:{hits:number[];config:Config;save:(c:Co
  <button onClick={()=>setDraft(rules.filter((_,n)=>n!==i))}>{t("删除规则")}{i+1}</button></div>)}
  <div className="interception-controls"><button onClick={exportRules}>{t('导出规则')}</button><button disabled={saving} onClick={()=>fileInput.current?.click()}>{t('导入规则')}</button><input hidden type="file" accept=".json" ref={fileInput} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void importRules(file);}}/>{fileError&&<span role="alert">{fileError}</span>}</div><p>{t('排除规则优先；分组仅用于标记。命中次数为本次配置的断点暂停次数，修改配置后归零。')}</p><div className="interception-controls"><button disabled={rules.length>=32} onClick={()=>setDraft([...rules,{urlContains:'',host:'',method:'',status:null,headerName:'',headerContains:''}])}>{t("添加规则")}</button><button disabled={saving||draft===null} onClick={()=>void save({...config,rules}).then(ok=>{if(ok)setDraft(null);})}>{t("应用规则")}</button><button disabled={draft===null} onClick={()=>setDraft(null)}>{t("取消修改")}</button>{draft!==null&&<span>{t("有未应用的修改")}</span>}</div></details>;
 }
-function Editor({item,onDone}:{item:Item;onDone:()=>Promise<void>}) {
- const [request,setRequest]=useState(item.flow.request);
- const [response,setResponse]=useState<NonNullable<Flow['response']>>(item.flow.response??{status:200,version:'HTTP/1.1',headers:[{name:'Content-Type',value:'text/plain; charset=utf-8'}],bodyBase64:''});
- const [replace,setReplace]=useState(false); const [base64,setBase64]=useState(false); const [preview,setPreview]=useState(false); const [error,setError]=useState(''); const [busy,setBusy]=useState(false);
- const fileInput=useRef<HTMLInputElement>(null);
- async function replaceFile(file:File) {setBusy(true);try {if(file.size>8*1024*1024)throw new Error("正文超过 8 MiB");const bodyBase64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",",2)[1]);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file);});setResponse({...response,bodyBase64,headers:[...response.headers.filter(h=>!["content-type","content-encoding","content-length","transfer-encoding"].includes(h.name.toLowerCase())),{name:"Content-Type",value:file.type||"application/octet-stream"}]});setPreview(true);setError("");}catch(e){setError(String(e));}finally{setBusy(false);}}
- const editingResponse=item.stage==='response'||replace; const message=editingResponse?response:request;
- const setHeaders=(headers:typeof request.headers)=>editingResponse?setResponse({...response,headers}):setRequest({...request,headers});
- function setBody(value:string) {const bodyBase64=base64?value:encodeText(value); if(editingResponse){setResponse({...response,bodyBase64,headers:response.headers.filter(h=>!['content-encoding','content-length','transfer-encoding'].includes(h.name.toLowerCase()))});}else setRequest({...request,bodyBase64});}
- async function resolve(action:string) {setBusy(true);try {await invoke('resolve_interception',{decision:{id:item.id,action,request:action==='modify'&&!editingResponse?request:null,response:action==='replace'||action==='modify'&&editingResponse?response:null}});await onDone();}catch(e){setError(String(e));}finally{setBusy(false);}}
- return <div className="interception-editor"><div className="interception-controls"><strong>{editingResponse?t("响应编辑"):t("请求编辑")}</strong>{item.stage==='request'&&<label><input type="checkbox" checked={replace} onChange={e=>setReplace(e.target.checked)}/>{t("直接替换响应（不发送请求）")}</label>}<button onClick={()=>{setRequest(item.flow.request);setResponse(item.flow.response??{status:200,version:'HTTP/1.1',headers:[],bodyBase64:''});}}>{t("恢复原始内容")}</button></div>{editingResponse?<label>{t("状态码")}<input aria-label={t("拦截响应状态码")} type="number" value={response.status} onChange={e=>setResponse({...response,status:Number(e.target.value)})}/></label>:<div className="request-bar"><input aria-label={t("拦截请求方法")} value={request.method} onChange={e=>setRequest({...request,method:e.target.value})}/><input aria-label={t("拦截请求 URL")} value={request.url} onChange={e=>setRequest({...request,url:e.target.value})}/></div>}<OrderedHeaders key={editingResponse ? 'response' : 'request'} headers={message.headers} onChange={setHeaders}/><div className="interception-controls"><span>{t("正文")}</span><select aria-label={t("拦截正文编码")} value={base64?'base64':'text'} onChange={e=>setBase64(e.target.value==='base64')}><option value="base64">{t("Base64（原始字节）")}</option><option value="text">UTF-8</option></select>{editingResponse&&<><button disabled={busy} onClick={()=>fileInput.current?.click()}>{t("从文件替换响应正文")}</button><input hidden type="file" ref={fileInput} onChange={e=>{const file=e.target.files?.[0];e.target.value="";if(file)void replaceFile(file);}} /></>}<button onClick={()=>setPreview(!preview)}>{preview?t("编辑"):t("格式化 / 预览")}</button></div>{editingResponse&&<small>{t("压缩响应请先替换为解压后的正文；修改正文会移除原压缩及长度头。")}</small>}{preview?<ResponseBody body={message.bodyBase64} headers={message.headers} onCopy={v=>void writeClipboard(v).catch(e=>setError(String(e)))}/>:<textarea aria-label={t("拦截正文")} value={base64?message.bodyBase64:decodeText(message.bodyBase64)} onChange={e=>setBody(e.target.value)}/>}<details><summary>{t("原始内容（保留备查）")}</summary><pre>{JSON.stringify(item.stage==='request'?item.flow.request:item.flow.response,null,2)}</pre></details>{error&&<p role="alert">{error}</p>}<div className="interception-controls"><button disabled={busy} onClick={()=>void resolve('continue')}>{t("原样放行")}</button><button disabled={busy} onClick={()=>void resolve(replace?'replace':'modify')}>{replace?t("返回自定义响应"):t("修改后放行")}</button><button disabled={busy} onClick={()=>void resolve('abort')}>{t("终止")}</button></div></div>;
+const defaultResponse = (item: Item): NonNullable<Flow['response']> => item.flow.response ?? {
+  status: 200, version: 'HTTP/1.1', headers: [{name: 'Content-Type', value: 'text/plain; charset=utf-8'}], bodyBase64: '',
+};
+function bodyLanguage(headers: Flow['request']['headers']) {
+  const mime = headers.find(h => !h.disabled && h.name.toLowerCase() === 'content-type')?.value.split(';')[0].trim().toLowerCase() ?? '';
+  if (mime === 'application/json' || mime.endsWith('+json')) return 'json';
+  if (['text/html', 'application/xhtml+xml', 'image/svg+xml'].includes(mime)) return 'html';
+  if (/(?:java|ecma)script$/.test(mime)) return 'babel';
+  return mime === 'text/css' ? 'css' : 'text';
+}
+export function InterceptionEditor({item, onDone}: {item: Item; onDone: () => Promise<void>}) {
+  const [request, setRequest] = useState(item.flow.request);
+  const [response, setResponse] = useState(() => defaultResponse(item));
+  const [replace, setReplace] = useState(false), [base64, setBase64] = useState(false), [preview, setPreview] = useState(false);
+  const [parser, setParser] = useState('auto'), [editorEpoch, setEditorEpoch] = useState(0);
+  const [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null), fileReader = useRef<FileReader>(), fileRevision = useRef(0), alive = useRef(true);
+  useLayoutEffect(() => { alive.current = true; return () => { alive.current = false; fileRevision.current++; fileReader.current?.abort(); }; }, []);
+  const editingResponse = item.stage === 'response' || replace, message = editingResponse ? response : request;
+  const language = parser === 'auto' ? bodyLanguage(message.headers) : parser;
+  const context = `${editingResponse}-${base64}-${preview}-${editorEpoch}-${busy}`;
+  const bodyContext = useRef(context);
+  bodyContext.current = context;
+  let text: string | null;
+  try { text = new TextDecoder('utf-8', {fatal: true}).decode(Uint8Array.from(atob(message.bodyBase64), c => c.charCodeAt(0))); }
+  catch { text = null; }
+  async function replaceFile(file: File) {
+    const revision = ++fileRevision.current;
+    fileReader.current?.abort();
+    setBusy(true);
+    try {
+      if (file.size > 8 * 1024 * 1024) throw new Error(t('正文超过 8 MiB'));
+      const bodyBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader(); fileReader.current = reader;
+        reader.onload = () => resolve(String(reader.result).split(',', 2)[1]);
+        reader.onerror = () => reject(reader.error);
+        reader.onabort = () => reject(new Error('cancelled'));
+        reader.readAsDataURL(file);
+      });
+      if (!alive.current || revision !== fileRevision.current) return;
+      setResponse(current => ({...current, bodyBase64, headers: [
+        ...current.headers.filter(h => h.disabled || !['content-type', 'content-encoding', 'content-length', 'transfer-encoding'].includes(h.name.toLowerCase())),
+        {name: 'Content-Type', value: file.type || 'application/octet-stream'},
+      ]}));
+      setEditorEpoch(n => n + 1); setPreview(true); setError('');
+    } catch (e) { if (alive.current && revision === fileRevision.current) setError(String(e)); }
+    finally { if (revision === fileRevision.current) { fileReader.current = undefined; if (alive.current) setBusy(false); } }
+  }
+  const setHeaders = (headers: typeof request.headers) => {
+    if (busy) return;
+    if (editingResponse) setResponse(current => ({...current, headers})); else setRequest(current => ({...current, headers}));
+  };
+  function setBody(value: string) {
+    if (busy || !alive.current || bodyContext.current !== context) return;
+    const bodyBase64 = base64 ? value : encodeText(value);
+    const headers = (current: typeof request.headers) => current.filter(h => h.disabled ||
+      (!['content-length', 'transfer-encoding'].includes(h.name.toLowerCase()) && (base64 || h.name.toLowerCase() !== 'content-encoding')))
+      .map(h => !base64 && !h.disabled && h.name.toLowerCase() === 'content-type' ? {...h, value: utf8ContentType(h.value)} : h);
+    if (editingResponse) setResponse(current => ({...current, bodyBase64, headers: headers(current.headers)}));
+    else setRequest(current => ({...current, bodyBase64, headers: headers(current.headers)}));
+  }
+  async function resolve(action: string) {
+    setBusy(true);
+    try {
+      await invoke('resolve_interception', {decision: {id: item.id, action,
+        request: action === 'modify' && !editingResponse ? request : null,
+        response: action === 'replace' || action === 'modify' && editingResponse ? response : null}});
+      await onDone();
+    } catch (e) { if (alive.current) setError(String(e)); }
+    finally { if (alive.current) setBusy(false); }
+  }
+  return <div className="interception-editor">
+    <fieldset disabled={busy} className="interception-edit-fields">
+      <div className="interception-controls interception-editor-heading">
+        <strong>{editingResponse ? t('响应编辑') : t('请求编辑')}</strong>
+        {item.stage === 'request' && <label><input type="checkbox" checked={replace} onChange={e => { setReplace(e.target.checked); setParser('auto'); }}/>{t('直接替换响应（不发送请求）')}</label>}
+        <button type="button" onClick={() => { setRequest(item.flow.request); setResponse(defaultResponse(item)); setEditorEpoch(n => n + 1); setError(''); }}>{t('恢复原始内容')}</button>
+      </div>
+      {editingResponse ? <label className="interception-status">{t('状态码')}<input aria-label={t('拦截响应状态码')} type="number" min="100" max="599" value={response.status} onChange={e => { const status = Number(e.target.value); setResponse(current => ({...current, status})); }}/></label>
+        : <div className="request-bar"><input aria-label={t('拦截请求方法')} value={request.method} onChange={e => { const method = e.target.value; setRequest(current => ({...current, method})); }}/><input aria-label={t('拦截请求 URL')} value={request.url} onChange={e => { const url = e.target.value; setRequest(current => ({...current, url})); }}/></div>}
+      <div className="interception-section"><OrderedHeaders key={`${editingResponse}-${editorEpoch}`} headers={message.headers} onChange={setHeaders}/></div>
+      <section className="interception-section interception-body">
+        <div className="interception-controls">
+          <strong>{t('正文')}</strong>
+          <select aria-label={t('拦截正文编码')} value={base64 ? 'base64' : 'text'} onChange={e => setBase64(e.target.value === 'base64')}><option value="text">UTF-8</option><option value="base64">{t('Base64（原始字节）')}</option></select>
+          {!base64 && <select aria-label={t('拦截正文语言')} value={parser} onChange={e => setParser(e.target.value)}>
+            <option value="auto">{t('自动识别')}</option><option value="text">Text</option><option value="json">JSON</option><option value="html">HTML / SVG</option><option value="babel">JavaScript</option><option value="css">CSS</option>
+          </select>}
+          {editingResponse && <><button type="button" onClick={() => fileInput.current?.click()}>{t('从文件替换响应正文')}</button><input hidden type="file" ref={fileInput} onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void replaceFile(file); }}/></>}
+          <button type="button" aria-pressed={preview} onClick={() => setPreview(!preview)}>{preview ? t('编辑') : t('预览')}</button>
+        </div>
+        {editingResponse && <p className="interception-hint">{t('Base64 编辑保留原始压缩声明；UTF-8 编辑会移除压缩声明并将已有 charset 改为 UTF-8。修改正文会移除长度和传输编码头。')}</p>}
+        {preview ? <ResponseBody body={message.bodyBase64} headers={message.headers} onCopy={v => void writeClipboard(v).catch(e => { if (alive.current) setError(String(e)); })}/>
+          : !base64 && text === null ? <p className="interception-hint">{t('正文包含非 UTF-8 字节，请使用 Base64 编辑，原始字节已保留。')} <button type="button" onClick={() => setBase64(true)}>{t('切换到 Base64')}</button></p>
+          : <BodyCodeEditor key={`${editingResponse}-${base64}-${editorEpoch}`} label={t('拦截正文')} value={base64 ? message.bodyBase64 : text!} parser={base64 ? 'text' : language} onChange={setBody} formatting={!base64} disabled={busy}/>}
+      </section>
+      <details className="interception-original"><summary>{t('原始内容（保留备查）')}</summary><pre>{JSON.stringify(item.stage === 'request' ? item.flow.request : item.flow.response, null, 2)}</pre></details>
+    </fieldset>
+    {error && <p role="alert">{error}</p>}
+    <div className="interception-controls interception-actions"><button disabled={busy} onClick={() => void resolve('continue')}>{t('原样放行')}</button><button className="interception-primary" disabled={busy} onClick={() => void resolve(replace ? 'replace' : 'modify')}>{replace ? t('返回自定义响应') : t('修改后放行')}</button><button disabled={busy} onClick={() => void resolve('abort')}>{t('终止')}</button></div>
+  </div>;
 }

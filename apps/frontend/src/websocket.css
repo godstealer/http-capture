@@ -1,5 +1,5 @@
 .ws-panel { --ws-bg:#fff; --ws-surface:#f7f8fa; --ws-border:#e3e6eb; --ws-text:#414b58; --ws-muted:#85909d; --ws-accent:#b97710; --ws-accent-bg:#fff4db; --ws-in:#24866b; color:var(--ws-text); background:var(--ws-bg); font-size:12px; }
-[data-theme="dark"] .ws-panel { --ws-bg:#191e25; --ws-surface:#20262f; --ws-border:#333d49; --ws-text:#c6d0dc; --ws-muted:#8593a5; --ws-accent:#72d8b5; --ws-accent-bg:#263f37; --ws-in:#82b7ee; }
+[data-color-scheme='dark'] .ws-panel { --ws-bg:#191e25; --ws-surface:#20262f; --ws-border:#333d49; --ws-text:#c6d0dc; --ws-muted:#8593a5; --ws-accent:#72d8b5; --ws-accent-bg:#263f37; --ws-in:#82b7ee; }
 .ws-panel .ws-toolbar,.ws-panel .ws-compose-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .ws-panel .ws-toolbar { padding:10px 12px; border-bottom:1px solid var(--ws-border); flex-shrink:0; }
 .ws-toolbar strong { margin-right:auto; font-size:12px; }
@@ -36,6 +36,6 @@
 .ws-expand { color:var(--ws-muted); font-size:18px; transition:transform .15s; }
 .ws-message[open] .ws-expand { transform:rotate(90deg); }
 .ws-message[open] summary { border-bottom:1px solid var(--ws-border); }
-[data-theme="dark"] .ws-message.ws-client { border-color:#493959; }
-[data-theme="dark"] .ws-message.ws-client summary { background:#2a2235; color:#c9a3f1; }
-[data-theme="dark"] .ws-message.ws-server summary { background:var(--ws-surface); }
+[data-color-scheme='dark'] .ws-message.ws-client { border-color:#493959; }
+[data-color-scheme='dark'] .ws-message.ws-client summary { background:#2a2235; color:#c9a3f1; }
+[data-color-scheme='dark'] .ws-message.ws-server summary { background:var(--ws-surface); }

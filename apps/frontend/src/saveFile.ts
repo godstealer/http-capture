@@ -10,8 +10,16 @@ export async function chooseSave(name:string):Promise<Handle|null|undefined> {
 export async function saveText(content:string,name:string,format:string,handle:Handle|null|undefined):Promise<string>{
   if(handle===null)return t('已取消保存');
   if(isTauri()) {const path=await invoke<string|null>('save_session_file',{content,format});return path?t('已保存：')+path:t('已取消保存');}
-  const blob=new Blob([content],{type:format==='pem'?'application/x-pem-file':'application/json'});
+  const blob=new Blob([content],{type:format==='pem'?'application/x-pem-file':['json','har'].includes(format)?'application/json':'text/plain;charset=utf-8'});
   if(handle){const writer=await handle.createWritable();try{await writer.write(blob);await writer.close();}catch(e){await writer.abort().catch(()=>{});throw e;}return t('已保存：')+handle.name;}
   const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
   return t('已提交浏览器下载，请在浏览器下载列表查看保存位置');
+}
+
+export async function saveCodeFile(content:string,name:string):Promise<string> {
+  if(isTauri()) {
+    const path=await invoke<string|null>('save_code_file',{content,filename:name});
+    return path?t('已保存：')+path:t('已取消保存');
+  }
+  return saveText(content,name,'txt',await chooseSave(name));
 }

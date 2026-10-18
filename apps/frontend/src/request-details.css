@@ -23,3 +23,10 @@
 .header-order .order-comparison thead{display:table-header-group}.header-order .order-comparison th:first-child,.header-order .order-comparison td:first-child{width:50%}
 
 .upstream-settings{border:1px solid #8885;border-radius:6px;margin:18px 0;padding:14px;min-width:0}.upstream-settings legend{padding:0 6px}.upstream-settings label{display:flex;flex-direction:column;gap:6px;margin:10px 0}.upstream-settings .upstream-toggle{flex-direction:row;align-items:center}.upstream-settings input:not([type=checkbox]){border:1px solid #8885;padding:8px;border-radius:4px;width:100%;min-width:0}.upstream-auth{display:flex;gap:12px}.upstream-auth label{flex:1;min-width:0}.modal:has(.upstream-settings){max-height:90vh;overflow:auto;width:600px}.upstream-settings p{font-size:11px}
+.message-copy-toolbar{display:flex;justify-content:flex-end;padding:7px 12px;border-bottom:1px solid var(--field-border,#8884)}
+.message-copy-toolbar button{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--field-border,#8884);border-radius:5px;background:var(--field-bg,transparent);font-size:12px}
+.message-headers .inspector-headers>div{grid-template-columns:25px minmax(100px,1fr) minmax(140px,2fr) 28px;align-items:start}
+.message-headers .inspector-headers>div>span{user-select:none}
+.message-headers .inspector-headers :is(strong,code),.message-text pre{user-select:text;-webkit-user-select:text;cursor:text;white-space:pre-wrap}
+.message-headers .inspector-headers .icon-button{height:24px;width:24px;opacity:.65}
+.message-headers .inspector-headers>div:hover .icon-button,.message-headers .inspector-headers .icon-button:focus-visible{opacity:1}

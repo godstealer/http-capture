@@ -115,7 +115,7 @@ jobs:
   publish:
     needs: [preflight, build]
     runs-on: ubuntu-latest
-    # Serialize channel reads + writes across commits, including delayed old builds.
+    # Serialize stable Latest and compatibility-channel writes across commits.
     concurrency:
       group: updater-preview-publish
       cancel-in-progress: false
@@ -138,7 +138,7 @@ jobs:
           merge-multiple: true
       - name: Require all four signed updater artifacts
         run: node scripts/generate-updater.mjs
-      - name: Publish immutable build and advance preview update channel
+      - name: Publish stable build and advance compatible update channel
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/publish-release.mjs

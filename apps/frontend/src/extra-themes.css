@@ -1,0 +1,390 @@
+/* Additional palettes share component rules; dimensions and virtual row geometry stay unchanged. */
+:root[data-theme='arctic'] {
+  color-scheme: light;
+  --ui-bg: #edf4fa; --ui-surface: #fbfdff; --ui-surface-alt: #f2f7fc;
+  --ui-border: #d5e2ed; --ui-border-strong: #b3c8d9; --ui-text: #203c52; --ui-muted: #567087;
+  --ui-accent: #276eb5; --ui-accent-soft: #dfedfb; --ui-accent-strong: #1d5793;
+  --ui-danger: #b74c59; --ui-radius: 12px; --ui-shadow: 0 14px 44px #234d771b;
+  --skin-sidebar: #e6eff8; --skin-header: linear-gradient(110deg, #fbfdff, #e8f3ff);
+  --skin-brand: linear-gradient(145deg, #fff, #d2e7fc); --skin-primary-text: #fff;
+  --skin-card-radius: 12px; --skin-field-radius: 8px; --skin-icon-radius: 15px;
+  --skin-selected: #dcecfb; --skin-selection: #b8d7f4; --skin-backdrop: #16314d70;
+  --skin-get: #287b78; --skin-post: #996723; --skin-change: #286bb1; --skin-options: #7557ac;
+  --skin-success: #277264; --skin-success-bg: #e0f1ec;
+  --skin-warning: #8c681e; --skin-warning-bg: #f7efd9;
+  --skin-danger-bg: #fae9ee; --skin-ws-in: #267e83;
+  --field-ring: #276eb523;
+  --syntax-404740: #334e63; --syntax-708: #8154a6; --syntax-219: #75539c;
+  --syntax-164: #25735c; --syntax-a11: #a14f49; --syntax-e40: #94621f;
+  --syntax-00f: #2866ad; --syntax-30a: #7c4fa2; --syntax-085: #237b78;
+  --syntax-167: #267692; --syntax-256: #3d6e93; --syntax-00c: #255f9a;
+  --syntax-940: #5d7680; --syntax-f00: #b64c59;
+}
+:root[data-theme='dusk'] {
+  color-scheme: dark;
+  --ui-bg: #1c1825; --ui-surface: #282132; --ui-surface-alt: #30283c;
+  --ui-border: #44394f; --ui-border-strong: #655673; --ui-text: #eee5f3; --ui-muted: #b4a2bf;
+  --ui-accent: #c9a2f5; --ui-accent-soft: #433052; --ui-accent-strong: #dfbeff;
+  --ui-danger: #f3a0b0; --ui-radius: 12px; --ui-shadow: 0 16px 48px #0b061c70;
+  --skin-sidebar: #211a2b; --skin-header: linear-gradient(110deg, #2b2236, #38283e);
+  --skin-brand: linear-gradient(145deg, #58406b, #36263e); --skin-primary-text: #291b36;
+  --skin-card-radius: 12px; --skin-field-radius: 8px; --skin-icon-radius: 15px;
+  --skin-selected: #49354f; --skin-selection: #74528799; --skin-backdrop: #100a1edb;
+  --skin-get: #a9d1c6; --skin-post: #e6c095; --skin-change: #b3b7f5; --skin-options: #d8b1ef;
+  --skin-success: #b1d8c6; --skin-success-bg: #2f403c;
+  --skin-warning: #e9caa0; --skin-warning-bg: #453b33;
+  --skin-danger-bg: #492f40; --skin-ws-in: #e4afca;
+  --field-ring: #c9a2f52b;
+  --syntax-404740: #e4d9ed; --syntax-708: #d3b3f2; --syntax-219: #d8b6e8;
+  --syntax-164: #b3d6bc; --syntax-a11: #e8b0c3; --syntax-e40: #e8c095;
+  --syntax-00f: #b8b9f5; --syntax-30a: #dcbbef; --syntax-085: #b6d4d1;
+  --syntax-167: #accbdc; --syntax-256: #c1c4e3; --syntax-00c: #c4b7f2;
+  --syntax-940: #aa99b4; --syntax-f00: #f3a0b0;
+}
+:root[data-theme='paper'] {
+  color-scheme: light;
+  --ui-bg: #eee9df; --ui-surface: #fffcf5; --ui-surface-alt: #f6f1e7;
+  --ui-border: #dcd2c2; --ui-border-strong: #c6b8a5; --ui-text: #4e4032; --ui-muted: #7e705f;
+  --ui-accent: #82603e; --ui-accent-soft: #efe2cc; --ui-accent-strong: #63472d;
+  --ui-danger: #a3463f; --ui-radius: 5px; --ui-shadow: 0 12px 40px #56452c1c;
+  --skin-sidebar: #e9e1d2; --skin-header: #faf5e9;
+  --skin-brand: #f8efdf; --skin-primary-text: #fffcf5;
+  --skin-card-radius: 5px; --skin-field-radius: 4px; --skin-icon-radius: 6px;
+  --skin-selected: #ebdfc9; --skin-selection: #dfc9a5; --skin-backdrop: #40352885;
+  --skin-get: #4e745e; --skin-post: #98682d; --skin-change: #4c6c87; --skin-options: #796184;
+  --skin-success: #4b7156; --skin-success-bg: #e7ecdc;
+  --skin-warning: #8d692b; --skin-warning-bg: #f2e8cf;
+  --skin-danger-bg: #f6e4dc; --skin-ws-in: #4f756d;
+  --field-ring: #82603e20;
+  --syntax-404740: #514637; --syntax-708: #805c7a; --syntax-219: #7b5c72;
+  --syntax-164: #58734d; --syntax-a11: #a15343; --syntax-e40: #95672f;
+  --syntax-00f: #4c6c8c; --syntax-30a: #775b87; --syntax-085: #487665;
+  --syntax-167: #44737a; --syntax-256: #5f7281; --syntax-00c: #4c6884;
+  --syntax-940: #7c715e; --syntax-f00: #ac4b43;
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) {
+  --field-bg: var(--ui-surface); --field-border: var(--ui-border-strong); --field-text: var(--ui-text);
+  --field-placeholder: var(--ui-muted); --field-focus: var(--ui-accent); --field-disabled: var(--ui-surface-alt);
+  --code-gutter: var(--ui-surface-alt); --code-muted: var(--ui-muted); --code-border: var(--ui-border); --code-active: var(--ui-accent-soft);
+  --danger: var(--ui-danger); --border: var(--ui-border);
+  --skin-mono: 'Cascadia Code', 'SFMono-Regular', Consolas, 'Microsoft YaHei', monospace;
+  color: var(--ui-text); background: var(--ui-bg);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell .app-sidebar {
+  background: var(--skin-sidebar); border-right-color: var(--ui-border-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .sidebar-brand {
+  border: 1px solid var(--ui-border-strong); border-radius: var(--skin-icon-radius); background: var(--skin-brand); color: var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-sidebar .sidebar-item {
+  border-radius: var(--skin-field-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-sidebar .sidebar-item.active {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell .proxy-toolbar {
+  background: var(--skin-header); border-bottom-color: var(--ui-border-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .workspace-heading > span {
+  color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell :is(.upstream-chip, .proxy-settings-button, .new-tab, .curl-import-button) {
+  border-radius: var(--skin-field-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell :is(.capture-switch, .button.primary) {
+  background: var(--ui-accent); border-color: var(--ui-accent); color: var(--skin-primary-text); border-radius: var(--skin-field-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell :is(.capture-switch, .button.primary):hover:not(:disabled) {
+  background: var(--ui-accent-strong); border-color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell .capture-switch.is-running {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell .work-tab.active {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong); border-bottom-color: var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell .session-table tbody tr.selected {
+  background: var(--skin-selected); box-shadow: inset 3px 0 var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .http-method {
+  color: var(--skin-get);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .http-method.post {
+  color: var(--skin-post);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.http-method.put, .http-method.patch) {
+  color: var(--skin-change);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .http-method.options {
+  color: var(--skin-options);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.http-method.delete, .session-table td.blocked-status) {
+  color: var(--ui-danger);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .http-status {
+  background: var(--skin-success-bg); color: var(--skin-success);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .http-status.redirect {
+  background: var(--skin-warning-bg); color: var(--skin-warning);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .http-status.error {
+  background: var(--skin-danger-bg); color: var(--ui-danger);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .http-status.pending {
+  background: var(--ui-surface-alt); color: var(--ui-muted);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.cm-editor, .response-code-editor) {
+  background: var(--field-bg); color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.cm-scroller, .body-editor textarea, .formatted-scroll pre) {
+  font-family: var(--skin-mono); color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .cm-selectionBackground {
+  background: var(--skin-selection);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .cm-focused .cm-selectionBackground {
+  background: var(--skin-selection);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .cm-cursor {
+  border-left-color: var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .cm-foldPlaceholder {
+  background: var(--ui-surface-alt); border-color: var(--ui-border-strong); color: var(--ui-muted); border-radius: var(--skin-field-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .cm-tooltip {
+  background: var(--ui-surface); border-color: var(--ui-border-strong); color: var(--ui-text); box-shadow: var(--ui-shadow);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell :is(.format-toolbar > span, .editor-toolbar, .tls-toggles) {
+  color: var(--ui-muted);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell :is(.preset.active > svg:last-child, .tls-intro, .add-header) {
+  color: var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .layout-direction button[aria-pressed="true"] {
+  background: var(--ui-accent-soft); border-color: var(--ui-accent); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.request-context-menu, .capture-action-menu, .request-history > div) {
+  background: var(--ui-surface); border-color: var(--ui-border-strong); color: var(--ui-text); border-radius: var(--skin-card-radius); box-shadow: var(--ui-shadow);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .request-context-menu button {
+  color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .request-context-menu button > span {
+  color: var(--ui-muted);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .request-context-menu button:hover:not(:disabled) {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .request-context-menu button:focus-visible {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .request-context-menu [role="separator"] {
+  background: var(--ui-border);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.modal, .app-update-dialog, .file-progress) {
+  background: var(--ui-surface); border-color: var(--ui-border-strong); color: var(--ui-text); border-radius: var(--skin-card-radius); box-shadow: var(--ui-shadow);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .modal h2 {
+  color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .modal :is(p, li) {
+  color: var(--ui-muted);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.modal-symbol, .app-update-symbol) {
+  background: var(--ui-accent-soft); color: var(--ui-accent); border-radius: var(--skin-icon-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .modal :is(.setting-card, .command) {
+  background: var(--ui-surface-alt); border-color: var(--ui-border); color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .modal .setting-card strong {
+  color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .upstream-current-badge {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.modal-backdrop, .app-update-backdrop) {
+  background-color: var(--skin-backdrop);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell .modal.settings-layout {
+  border-color: var(--ui-border-strong); border-radius: var(--skin-card-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-dialog-header {
+  background: var(--skin-header);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-dialog-symbol {
+  border-color: var(--ui-border-strong); border-radius: var(--skin-icon-radius); background: var(--skin-brand); color: var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-tabs {
+  background: var(--ui-surface-alt); border-color: var(--ui-border);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-tab {
+  border-radius: var(--skin-field-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-tab[aria-selected="true"] {
+  background: var(--ui-accent-soft); border-color: var(--ui-border-strong); color: var(--ui-accent-strong); box-shadow: inset 0 -2px var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-section {
+  border-radius: var(--skin-card-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-section :is(input:not([type="checkbox"]), textarea, select) {
+  border-radius: var(--skin-field-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-certificate-export .setting-card {
+  background: transparent; border: 0;
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .settings-layout .settings-help-content .command {
+  background: var(--ui-surface-alt); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.library-create, .library-grid > div, .library-templates, .plugins-toolbar, .plugins-workspace .setting-card, .plugins-logs, .blocking-settings, .blocking-rule, .blocking-empty, .interception-rules, .capture-scripts, .interception-workspace > aside, .interception-editor, .interception-page > .interception-controls) {
+  border-radius: var(--skin-card-radius);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.request-library, .plugins-workspace, .request-blocking-page) :is(.secondary-empty > svg, .blocking-empty > svg) {
+  border-radius: var(--skin-icon-radius); background: var(--ui-accent-soft); color: var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .ws-panel {
+  --ws-bg: var(--ui-surface); --ws-surface: var(--ui-surface-alt); --ws-border: var(--ui-border);
+  --ws-text: var(--ui-text); --ws-muted: var(--ui-muted); --ws-accent: var(--ui-accent); --ws-accent-bg: var(--ui-accent-soft); --ws-in: var(--skin-ws-in);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .ws-panel .ws-message.ws-client {
+  border-color: var(--ui-border-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .ws-panel .ws-message.ws-client summary {
+  background: var(--ui-accent-soft); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .ws-panel .ws-message.ws-server summary {
+  background: var(--ui-surface-alt); color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-update-backdrop {
+  --update-accent: var(--ui-accent); --update-accent-text: var(--skin-primary-text); --update-soft: var(--ui-accent-soft); --update-danger: var(--ui-danger);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-update-trigger.has-update {
+  background: var(--ui-accent-soft); border-color: var(--ui-border-strong); color: var(--ui-accent-strong);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.error-box, .blocked-banner) {
+  background: var(--skin-danger-bg); border-color: color-mix(in srgb, var(--ui-danger) 45%, var(--ui-border)); color: var(--ui-danger);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) :is(.request-body-error, .blocking-error, .body-code-status.error, .interception-editor [role="alert"]) {
+  color: var(--ui-danger);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell .bad {
+  color: var(--ui-danger) !important;
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .muted {
+  color: var(--ui-muted) !important;
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .app-shell input[aria-invalid="true"] {
+  border-color: var(--ui-danger); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-danger) 20%, transparent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) select option {
+  background: var(--ui-surface); color: var(--ui-text);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .image-preview-viewport {
+  background: var(--ui-surface-alt);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) .image-preview-toolbar button[aria-pressed="true"] {
+  background: var(--ui-accent-soft); border-color: var(--ui-accent);
+}
+
+:root:is([data-theme='arctic'], [data-theme='dusk'], [data-theme='paper'], [data-theme='sonar'], [data-theme='forge'], [data-theme='matrix'], [data-theme='sakura']) ::selection {
+  background: var(--skin-selection); color: var(--ui-text);
+}
+
+/* Arctic is bright and lightly framed; Dusk uses a soft rose edge. */
+:root[data-theme='arctic'] .app-shell :is(.capture-workbench, .composer-page > .detail-panel) { box-shadow: 0 3px 16px #467cac0b; }
+:root[data-theme='arctic'] .app-sidebar .sidebar-item.active { box-shadow: inset 0 0 0 1px #b7d5f1; }
+:root[data-theme='dusk'] .app-sidebar .sidebar-item.active { background: linear-gradient(105deg, #453050, #38283e); color: #e8c9ff; }
+:root[data-theme='dusk'] .settings-layout .settings-dialog-title > span { color: #dca9c7; }
+:root[data-theme='dusk'] .settings-layout .settings-tab[aria-selected='true'] { border-color: #765a86; box-shadow: inset 0 -2px #dca9c7; }
+
+/* Paper texture stays in workspace gutters; code and controls remain plain. */
+:root[data-theme='paper'] .app-shell .workspace,
+:root[data-theme='paper'] :is(.request-library, .plugins-workspace, .request-blocking-page, .interception-page) {
+  background-color: var(--ui-bg);
+  background-image: radial-gradient(#8a755912 .5px, transparent .8px);
+  background-size: 5px 5px;
+}
+:root[data-theme='paper'] .app-shell :is(.capture-page, .composer-page) { background: transparent; }
+:root[data-theme='paper'] .app-shell :is(input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea) { font-family: var(--skin-mono); }
+:root[data-theme='paper'] :is(.workspace-heading > strong, .library-page-heading h1, .plugins-heading h1, .blocking-title h1, .interception-page > .interception-controls > strong, .settings-layout .settings-dialog-title h2) {
+  font-family: Georgia, 'Times New Roman', 'Songti SC', SimSun, serif;
+  letter-spacing: 0;
+}
+:root[data-theme='paper'] .app-sidebar .sidebar-item.active { box-shadow: inset 0 0 0 1px #d3c0a5; }
+:root[data-theme='paper'] .settings-layout .settings-tab[aria-selected='true'] { background: #fffcf5; border-color: #c6b8a5; }
+:root[data-theme='paper'] .app-shell :is(.capture-workbench, .composer-page > .detail-panel) { box-shadow: 0 2px 0 #d8cdbc66; }

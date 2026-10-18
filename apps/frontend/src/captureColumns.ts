@@ -30,6 +30,24 @@ export const captureColumns = [
     "default": true
   },
   {
+    "id": "originApplication",
+    "label": "来源应用",
+    "width": 170,
+    "default": true
+  },
+  {
+    "id": "clientAddress",
+    "label": "客户端地址",
+    "width": 180,
+    "default": false
+  },
+  {
+    "id": "trafficEntry",
+    "label": "流量入口",
+    "width": 140,
+    "default": false
+  },
+  {
     "id": "type",
     "label": "Type",
     "width": 90,

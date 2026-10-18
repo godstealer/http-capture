@@ -3,7 +3,7 @@ import { invoke } from './api';
 import type { RequestDraft } from './types';
 
 export interface GrpcDraft { method: string; json: string }
-export interface RequestEditor { grpcDraft?: GrpcDraft; id: string; draft: RequestDraft; selected: string | null; parentId: string | null }
+export interface RequestEditor { grpcDraft?: GrpcDraft; savedRequestId?: string; id: string; draft: RequestDraft; selected: string | null; parentId: string | null }
 interface Workspace { editors: RequestEditor[]; activeEditor: string; revision: number }
 const empty = JSON.stringify({ editors: [], activeEditor: '' });
 
@@ -26,7 +26,7 @@ export function useRequestWorkspace() {
         if (disposed) return;
         const json = JSON.stringify({ editors: data.editors, activeEditor: data.activeEditor });
         Object.assign(persistence.current, { revision: data.revision, latest: json, saved: json, ready: true });
-        setEditors(data.editors); setActiveEditor(data.activeEditor); setReady(true); setError(false); setMessage('请求已保存');
+        setEditors(data.editors); setActiveEditor(data.activeEditor); setReady(true); setError(false); setMessage('草稿已自动保存');
       } catch (e) {
         if (!disposed) { setError(true); setMessage(`工作区读取失败：${String(e)}`); timer = setTimeout(() => void load(), 5000); }
       }
@@ -43,14 +43,14 @@ export function useRequestWorkspace() {
     try {
       while (state.latest !== state.saved) {
         const json = state.latest;
-        if (alive.current) { setMessage('正在保存请求…'); setError(false); }
+        if (alive.current) { setMessage('正在保存草稿…'); setError(false); }
         const revision = await invoke<number>('save_request_workspace', { workspace: { ...JSON.parse(json), revision: state.revision } });
         state.revision = revision; state.saved = json;
       }
-      if (alive.current) { setMessage('请求已保存'); setError(false); }
+      if (alive.current) { setMessage('草稿已自动保存'); setError(false); }
       return true;
     } catch (e) {
-      if (alive.current) { setMessage(`请求未保存：${String(e)}`); setError(true); }
+      if (alive.current) { setMessage(`草稿未保存：${String(e)}`); setError(true); }
       return false;
     } finally { state.running = false; }
     })();
@@ -63,10 +63,10 @@ export function useRequestWorkspace() {
     const state = persistence.current;
     state.latest = JSON.stringify({ editors, activeEditor });
     if (state.latest === state.saved) {
-      if (!state.running) { setMessage('请求已保存'); setError(false); }
+      if (!state.running) { setMessage('草稿已自动保存'); setError(false); }
       return;
     }
-    setMessage('请求有未保存的修改');
+    setMessage('草稿有未保存的修改');
     const timer = setTimeout(() => void flush(), 400);
     return () => clearTimeout(timer);
   }, [editors, activeEditor, ready, flush]);
