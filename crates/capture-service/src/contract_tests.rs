@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 #[tokio::test]
 async fn blocking_api_requires_auth_and_rejects_invalid_updates_atomically() {
  let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();
- let state=Arc::new(Service{engine:engine.clone(),proxy:Mutex::new(None),token:"contract-test".into()});
+ let state=Service::new(engine.clone(),"contract-test".into()).unwrap();
  let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
  let task=tokio::spawn(async move{axum::serve(listener,router(state)).await.unwrap()});
  let config=json!({"enabled":true,"scope":"all","rules":[{"id":"api-rule","enabled":true,"matchType":"urlContains","pattern":"/blocked","method":""}]});
@@ -36,10 +36,42 @@ async fn call(address:std::net::SocketAddr,path:&str,body:Value,authorized:bool)
 }
 
 #[tokio::test]
+async fn mcp_and_rest_control_one_listener_and_shutdown_rejects_new_network_work() {
+ tokio::time::timeout(std::time::Duration::from_secs(20),async {
+  let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();let state=Service::new(engine,"contract-test".into()).unwrap();
+  let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let served=state.clone();
+  let task=tokio::spawn(async move{axum::serve(listener,router(served)).await.unwrap()});
+  let reserved=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let mcp_port=reserved.local_addr().unwrap().port();drop(reserved);
+  let config=json!({"enabled":true,"port":mcp_port,"allowSend":false,"allowCaptureControl":true,"includeSensitiveHeaders":false});
+  assert_eq!(call(address,"/mcp/configure",json!({"config":config}),false).await.0,401);
+  assert!(!state.mcp_server.status().await.running);
+  assert_eq!(call(address,"/mcp/connection",json!({}),false).await.0,401);
+  assert_eq!(call(address,"/mcp/configure",json!({"config":config}),true).await.0,200);
+  let connection=state.mcp_server.connection_info().await.unwrap();
+  let profile=state.mcp_clients.save(capture_mcp::ClientInput{id:None,name:"local MCP contract".into(),transport:"http".into(),url:connection["url"].as_str().unwrap().into(),command:String::new(),args:vec![],bearer_token:Some(connection["headers"]["Authorization"].as_str().unwrap().strip_prefix("Bearer ").unwrap().into())}).await.unwrap();
+  state.mcp_clients.connect(profile.id.clone()).await.unwrap();
+  let reserved=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let capture_port=reserved.local_addr().unwrap().port();drop(reserved);
+  state.mcp_clients.call(profile.id.clone(),"start_capture".into(),json!({"port":capture_port})).await.unwrap();
+  assert!(state.runtime.status().await.running);assert_eq!(state.proxy.lock().await.as_ref().unwrap().address.port(),capture_port);
+  // REST sees the listener started by the official MCP client and cannot create another.
+  assert_eq!(call(address,"/start",json!({"port":capture_port}),true).await.0,400);
+  assert_eq!(call(address,"/stop",json!({}),true).await.0,200);
+  let result=state.mcp_clients.call(profile.id,"capture_status".into(),json!({})).await.unwrap();
+  let result:Value=serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();assert_eq!(result["running"],false);
+  state.shutdown_network().await.unwrap();
+  assert_eq!(call(address,"/replay/prepare",json!({}),true).await.0,400);
+  assert_eq!(call(address,"/start",json!({"port":capture_port}),true).await.0,400);
+  assert_eq!(call(address,"/replay",json!({"request":{"method":"GET","url":"http://127.0.0.1:9/","headers":[],"bodyBase64":""}}),true).await.0,400);
+  assert!(!state.runtime.status().await.running);assert!(!state.mcp_server.status().await.running);
+  task.abort();let _=task.await;
+ }).await.expect("MCP/runtime host contract stalled");
+}
+
+#[tokio::test]
 async fn authenticated_staging_delta_and_library_contract(){
  tokio::time::timeout(std::time::Duration::from_secs(30),async{
   let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();
-  let state=Arc::new(Service{engine:engine.clone(),proxy:Mutex::new(None),token:"contract-test".into()});
+  let state=Service::new(engine.clone(),"contract-test".into()).unwrap();
   let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
   let task=tokio::spawn(async move{axum::serve(listener,router(state)).await.unwrap()});
   for path in ["/database/clear","/database/backup","/imports/begin"]{assert_eq!(call(address,path,json!({}),false).await.0,401);}
@@ -66,7 +98,7 @@ async fn authenticated_staging_delta_and_library_contract(){
 #[tokio::test]
 async fn system_settings_require_authentication_and_active_listener(){
  let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();
- let state=Arc::new(Service{engine,proxy:Mutex::new(None),token:"contract-test".into()});
+ let state=Service::new(engine,"contract-test".into()).unwrap();
  let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
  let task=tokio::spawn(async move{axum::serve(listener,router(state)).await.unwrap()});
  assert_eq!(call(address,"/system-proxy",json!({"enabled":true}),false).await.0,401);
@@ -79,7 +111,7 @@ async fn system_settings_require_authentication_and_active_listener(){
 #[tokio::test]
 async fn large_workspace_and_library_survive_restart() {
  let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();
- let state=Arc::new(Service{engine:engine.clone(),proxy:Mutex::new(None),token:"contract-test".into()});
+ let state=Service::new(engine.clone(),"contract-test".into()).unwrap();
  let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
  let task=tokio::spawn(async move{axum::serve(listener,router(state)).await.unwrap()});
  // Reject before reading an unauthenticated body, even with a huge Content-Length.

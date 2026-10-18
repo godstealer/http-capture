@@ -1,0 +1,37 @@
+.mcp-page { flex: 1; min-height: 0; overflow: auto; padding: 28px clamp(18px, 3vw, 44px) 44px; color: var(--ui-text); }
+.mcp-page > * { max-width: 1240px; margin-left: auto; margin-right: auto; }
+.mcp-page-heading { margin-bottom: 22px; }
+.mcp-page-heading h1 { display:flex;align-items:center;gap:10px;font-size:22px;margin:0 0 8px; }
+.mcp-page p { line-height:1.7; }
+.mcp-page-heading p,.mcp-server-heading p,.mcp-connection p,.mcp-page-hint { color:var(--ui-muted);font-size:12px;margin:8px 0; }
+.mcp-page-tabs { display:flex;gap:6px;padding:5px;border:1px solid var(--ui-border);border-radius:var(--skin-card-radius,10px);background:var(--ui-surface);margin-bottom:20px; }
+.mcp-page-tabs button { padding:10px 20px;border:0;border-radius:var(--skin-field-radius,7px);background:transparent;color:var(--ui-muted);cursor:pointer; }
+.mcp-page-tabs button.active { background:var(--ui-accent-soft);color:var(--ui-accent);font-weight:650; }
+.mcp-server-panel { padding:24px;border:1px solid var(--ui-border);border-radius:var(--skin-card-radius,12px);background:var(--ui-surface); }
+.mcp-server-heading { display:flex;align-items:flex-start;justify-content:space-between;gap:16px; }
+.mcp-server-heading h2 { font-size:17px;margin:0; }
+.mcp-running { flex-shrink:0;padding:5px 10px;border:1px solid var(--ui-border);border-radius:20px;color:var(--ui-muted);font-size:12px; }
+.mcp-running.is-running { color:var(--ui-accent);background:var(--ui-accent-soft);border-color:var(--ui-accent); }
+.mcp-server-settings { display:grid;grid-template-columns:minmax(180px,1fr) minmax(280px,2fr);gap:28px;margin:24px 0; }
+.mcp-port-field { display:flex;flex-direction:column;gap:10px;font-size:13px; }
+.mcp-port-field input { padding:11px 12px;max-width:240px;background:var(--ui-surface-alt);color:var(--ui-text);border:1px solid var(--ui-border);border-radius:var(--skin-field-radius,7px);font:14px Consolas,monospace; }
+.mcp-server-settings small { color:var(--ui-muted);font-size:12px;line-height:1.6; }
+.mcp-server-settings fieldset { border:1px solid var(--ui-border);border-radius:var(--skin-card-radius,10px);padding:16px;min-width:0; }
+.mcp-server-settings legend { display:flex;align-items:center;gap:6px;padding:0 8px;font-size:13px; }
+.mcp-server-settings fieldset label { display:flex;gap:10px;align-items:flex-start; }
+.mcp-server-settings fieldset label+label { margin-top:18px; }
+.mcp-server-settings input[type=checkbox] { accent-color:var(--ui-accent);margin-top:3px; }
+.mcp-server-settings strong { font-size:13px;font-weight:550; }
+.mcp-server-settings fieldset small { display:block;margin-top:4px; }
+.mcp-page-actions { display:flex;gap:9px;flex-wrap:wrap; }
+.mcp-connection { margin-top:24px;padding-top:20px;border-top:1px solid var(--ui-border); }
+.mcp-connection h3 { font-size:14px;margin:0 0 12px; }
+.mcp-connection > div { display:flex;align-items:center;gap:12px;flex-wrap:wrap; }
+.mcp-connection code { flex:1;padding:12px;border:1px solid var(--ui-border);border-radius:var(--skin-field-radius,7px);background:var(--ui-surface-alt);font:12px/1.6 Consolas,monospace;overflow-wrap:anywhere;min-width:160px; }
+.mcp-page-error { padding:12px;border:1px solid #bc6c63;border-radius:7px;color:var(--ui-danger,#d78074);overflow-wrap:anywhere; }
+.mcp-page-notice { display:flex;gap:8px;align-items:center;color:var(--ui-accent);font-size:12px; }
+.mcp-tool-list { margin-top:20px;color:var(--ui-muted);font-size:12px; }
+.mcp-tool-list summary { cursor:pointer; }
+.mcp-tool-list > div { display:flex;flex-wrap:wrap;gap:8px;margin-top:12px; }
+.mcp-tool-list code { padding:6px 8px;border:1px solid var(--ui-border);border-radius:5px; }
+@media(max-width:800px) { .mcp-server-settings { grid-template-columns:1fr;gap:18px; }.mcp-server-panel { padding:18px; } }

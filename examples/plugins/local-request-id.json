@@ -1,0 +1,11 @@
+{
+  "id": "local-request-id",
+  "name": "Local request ID",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "enabled": false,
+  "scope": "replay",
+  "urlPattern": "^http://(?:127\\.0\\.0\\.1|localhost)(?::[0-9]+)?/",
+  "before": "request.headers = request.headers.filter(header => header.name.toLowerCase() !== 'x-debug-request-id');\nconst id = utils.uuid();\nrequest.headers.push({name: 'X-Debug-Request-Id', value: id});\nconsole.log('added X-Debug-Request-Id', id);",
+  "after": ""
+}

@@ -46,6 +46,11 @@
 }
 
 .save-request-fields input[aria-invalid="true"] { border-color: var(--ui-danger); }
+.save-request-collection-picker { display: flex; gap: 8px; align-items: stretch; min-width: 0; }
+.save-request-collection-picker select { flex: 1; }
+.save-request-collection-picker button { flex: none; padding: 7px 12px; border: 1px solid var(--ui-border-strong, var(--ui-border)); border-radius: var(--skin-field-radius, 7px); background: var(--ui-surface); color: var(--ui-accent-strong, var(--ui-accent)); font: inherit; cursor: pointer; }
+.save-request-collection-picker button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.save-request-new-hint { margin: 0; color: var(--ui-muted); font-size: 12px; line-height: 1.6; }
 .save-request-error { margin: 14px 0 0; color: var(--ui-danger); line-height: 1.6; overflow-wrap: anywhere; }
 .save-request-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
 

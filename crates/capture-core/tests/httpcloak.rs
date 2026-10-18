@@ -27,6 +27,32 @@ async fn proxy_connect_auth_and_rejection_never_falls_back(engine_id:&str){
 
 #[tokio::test]
 async fn helper_proxy_rejection(){proxy_connect_auth_and_rejection_never_falls_back("httpcloak").await;}
+
+#[tokio::test]
+async fn captured_pseudo_headers_do_not_prevent_replay_or_override_edits(){
+ let engines=SendEngines::with_roots(rustls::RootCertStore::empty());
+ if !engines.list().iter().any(|e|e.id=="httpcloak"&&e.available){eprintln!("Build httpcloak helper to run integration test");return;}
+ let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+ let server=tokio::spawn(async move{
+  let(socket,_)=listener.accept().await.unwrap();let mut socket=BufReader::new(socket);
+  let raw=capture_core::http1::read_head(&mut socket).await.unwrap();
+  let request=capture_core::http1::parse_request(&raw).unwrap();
+  socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();request
+ });
+ let mut draft:RequestDraft=serde_json::from_value(serde_json::json!({
+  "engine":"httpcloak","method":"POST","url":format!("http://{address}/edited?q=2"),"headers":[],"bodyBase64":"",
+  "pseudoHeaders":[{"name":":method","value":"GET"},{"name":":scheme","value":"https"},{"name":":authority","value":"old.invalid"},{"name":":path","value":"/old"}],
+  "tls":{"preset":"chrome","browserVersion":"150"}
+ })).unwrap();
+ let original=serde_json::to_value(&draft).unwrap();
+ let(response,notes)=engines.send(&draft).await.unwrap();assert_eq!(response.status,200);
+ assert!(notes.iter().any(|note|note.contains("regenerates HTTP/2 pseudo headers")));
+ assert_eq!(serde_json::to_value(&draft).unwrap(),original);
+ let(method,path,headers)=server.await.unwrap();assert_eq!(method,"POST");assert_eq!(path,"/edited?q=2");
+ assert!(headers.iter().any(|header|header.name.eq_ignore_ascii_case("host")&&header.value==address.to_string()));
+ draft.pseudo_headers.push(Header{name:":protocol".into(),value:"websocket".into(),disabled:false});
+ let error=format!("{:#}",engines.send(&draft).await.unwrap_err());assert!(error.contains("extended HTTP/2"),"{error}");
+}
 #[cfg(feature="browser-replay")]
 #[tokio::test]
 async fn wreq_proxy_rejection(){proxy_connect_auth_and_rejection_never_falls_back("wreq").await;}

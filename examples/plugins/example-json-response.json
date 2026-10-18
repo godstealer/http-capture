@@ -1,0 +1,11 @@
+{
+  "id": "example-json-response",
+  "name": "Example JSON response marker",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "enabled": false,
+  "scope": "replay",
+  "urlPattern": "^https?://example\\.invalid(?::[0-9]+)?/api/",
+  "before": "",
+  "after": "const type = response.headers.find(header => header.name.toLowerCase() === 'content-type');\nconst coding = response.headers.find(header => header.name.toLowerCase() === 'content-encoding');\nconst mime = type ? type.value.split(';')[0].trim().toLowerCase() : '';\nconst charset = type && /charset\\s*=\\s*\"?([^;\"\\s]+)/i.exec(type.value);\nif (!(mime === 'application/json' || (mime.startsWith('application/') && mime.endsWith('+json')))) {\n  console.log('skipped: response is not JSON');\n} else if (coding && coding.value.trim() && coding.value.trim().toLowerCase() !== 'identity') {\n  console.log('skipped: encoded response body');\n} else if (charset && !/^utf-?8$/i.test(charset[1])) {\n  console.log('skipped: response is not UTF-8');\n} else if (!response.bodyBase64) {\n  console.log('skipped: empty response body');\n} else {\n  const data = JSON.parse(decodeText(response.bodyBase64));\n  if (data !== null && typeof data === 'object' && !Array.isArray(data)) {\n    data.debugPlugin = 'example-json-response';\n    response.bodyBase64 = encodeText(JSON.stringify(data, null, 2));\n    console.log('added debugPlugin to JSON response');\n  } else {\n    console.log('skipped: JSON root is not an object');\n  }\n}"
+}

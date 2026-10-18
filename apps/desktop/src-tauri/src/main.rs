@@ -1,9 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app_update;
-use capture_core::{model::{Flow, ProxyStatus, RequestDraft}, proxy::{self, ProxyHandle}, Engine};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+mod mcp_commands;
+use capture_core::{model::{Flow, ProxyStatus, RequestDraft}, CaptureRuntime, Engine};
+use capture_mcp::{server::ServerManager, client::ClientManager};
+use std::sync::{Arc, atomic::Ordering};
 use tauri::{Emitter, Manager, State};
-use tokio::sync::Mutex;
 
 #[tauri::command]
 fn grpc_poll(state:State<'_,AppState>,id:String)->Result<Option<Flow>,String>{state.engine.store.get(&id).map_err(|e|e.to_string())}
@@ -113,30 +114,27 @@ async fn delete_flows(state: State<'_, AppState>, ids: Vec<String>) -> Result<()
 #[tauri::command]
 async fn import_flows(state: State<'_, AppState>, flows: Vec<Flow>) -> Result<usize,String> { state.engine.store.import_flows(flows).map_err(|e|e.to_string()) }
 struct AppState {
-    engine: Arc<Engine>,
-    proxy: Mutex<Option<ProxyHandle>>,
-    network_lifecycle: Mutex<()>,
-    shutting_down: AtomicBool,
+    runtime: Arc<CaptureRuntime>,
+    mcp_server: Arc<ServerManager>,
+    mcp_clients: Arc<ClientManager>,
+}
+impl std::ops::Deref for AppState {
+    type Target = CaptureRuntime;
+    fn deref(&self) -> &Self::Target { &self.runtime }
 }
 impl AppState {
-    fn ensure_network_ready(&self) -> Result<(), String> {
-        if self.shutting_down.load(Ordering::Acquire) { Err("应用正在安装更新或退出，请稍后再操作".into()) } else { Ok(()) }
+    async fn resume_network_commands(&self) -> Result<(), String> {
+        self.mcp_clients.resume().await.map_err(|error|error.to_string())?;
+        self.runtime.resume_network_commands();
+        Ok(())
     }
-    fn resume_network_commands(&self) { self.shutting_down.store(false, Ordering::Release); }
     async fn shutdown_network(&self) -> Result<(), String> {
-        let _lifecycle = self.network_lifecycle.lock().await;
         self.shutting_down.store(true, Ordering::Release);
         self.engine.executions.cancel_all();
-        let engine = self.engine.clone();
-        let restored = tauri::async_runtime::spawn_blocking(move || engine.system_proxy.restore()).await;
         let mut errors = Vec::new();
-        match restored {
-            Ok(Ok(())) => {},
-            Ok(Err(error)) => errors.push(format!("恢复系统代理失败：{error}")),
-            Err(error) => errors.push(format!("恢复系统代理任务失败：{error}")),
-        }
-        if let Some(proxy) = self.proxy.lock().await.take() { proxy.stop().await; }
-        if let Err(error) = self.engine.tun.stop().await { errors.push(format!("停止 TUN 失败：{error}")); }
+        if let Err(error) = self.mcp_server.shutdown().await { errors.push(format!("MCP: {error}")); }
+        if let Err(error) = self.mcp_clients.shutdown().await { errors.push(format!("MCP client: {error}")); }
+        if let Err(error) = self.runtime.shutdown_network().await { errors.push(error); }
         if errors.is_empty() { Ok(()) } else { Err(errors.join("；")) }
     }
 }
@@ -157,27 +155,15 @@ async fn check_listener_port(host: String, port: u16) -> Result<(), String> {
 }
 #[tauri::command]
 async fn proxy_status(state: State<'_, AppState>) -> Result<ProxyStatus, String> {
-    let proxy = state.proxy.lock().await;
-    Ok(ProxyStatus { upstream: state.engine.upstream.status(), send_engines: state.engine.send_engines.list(), running: proxy.is_some(), address: proxy.as_ref().map(|p| p.address.to_string()),
-        ca_path: state.engine.ca.cert_path.to_string_lossy().into_owned(), browser_replay: cfg!(feature = "browser-replay") })
+    Ok(state.runtime.status().await)
 }
 #[tauri::command]
 async fn start_proxy(port: u16, host: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
-    let _lifecycle = state.network_lifecycle.lock().await;
-    state.ensure_network_ready()?;
-    let mut handle = state.proxy.lock().await;
-    if handle.is_some() { return Err("代理已经启动".into()); }
-    let address = capture_core::network::listener_address(host.as_deref().unwrap_or("127.0.0.1"),port).map_err(|e|format!("{e:#}"))?;
-    *handle = Some(proxy::start_at(state.engine.clone(), address).await.map_err(|e| format!("{e:#}"))?);
-    Ok(())
+    state.runtime.start_proxy(host.unwrap_or_else(||"127.0.0.1".into()),port).await
 }
 #[tauri::command]
 async fn stop_proxy(state: State<'_, AppState>) -> Result<(), String> {
-    let mut handle = state.proxy.lock().await;
-    let restored=state.engine.system_proxy.restore().map_err(|e|e.to_string());
-    if let Some(proxy) = handle.take() { proxy.stop().await; }
-    restored?;
-    Ok(())
+    state.runtime.stop_proxy().await
 }
 #[tauri::command]
 async fn flow_revision(state: State<'_, AppState>) -> Result<String, String> {
@@ -193,12 +179,7 @@ async fn list_flows(state: State<'_, AppState>) -> Result<Vec<Flow>, String> {
 }
 #[tauri::command]
 async fn replay_request(request: RequestDraft, parent_id: Option<String>, execution_id: Option<String>, state: State<'_, AppState>) -> Result<Flow, String> {
-    let execution_id = {
-        let _lifecycle = state.network_lifecycle.lock().await;
-        state.ensure_network_ready()?;
-        match execution_id { Some(id) => id, None => state.engine.executions.prepare().map_err(|e| e.to_string())? }
-    };
-    state.engine.replay(request, parent_id, Some(execution_id)).await.map_err(|e| e.to_string())
+    state.runtime.replay(request,parent_id,execution_id).await
 }
 #[tauri::command]
 fn prepare_replay(state: State<'_, AppState>) -> Result<String, String> {
@@ -293,10 +274,17 @@ fn main() {
                     }
                 }
             });
-            app.manage(AppState { engine, proxy: Mutex::new(None), network_lifecycle: Mutex::new(()), shutting_down: AtomicBool::new(false) });
+            let runtime = CaptureRuntime::new(engine);
+            let mcp_server = ServerManager::new(runtime.clone())?;
+            let mcp_clients = ClientManager::new(runtime.engine.store.clone())?;
+            let startup = mcp_server.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = startup.restore().await { eprintln!("MCP startup: {error}"); }
+            });
+            app.manage(AppState { runtime, mcp_server, mcp_clients });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![mcp_commands::mcp_status,mcp_commands::mcp_configure,mcp_commands::mcp_connection_info,mcp_commands::mcp_clients,mcp_commands::mcp_save_client,mcp_commands::mcp_remove_client,mcp_commands::mcp_connect_client,mcp_commands::mcp_disconnect_client,mcp_commands::mcp_client_tools,mcp_commands::mcp_call_tool,mcp_commands::plugins_validate,app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {

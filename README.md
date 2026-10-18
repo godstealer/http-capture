@@ -2,15 +2,17 @@
 
 跨平台 HTTP/HTTPS 调试代理。Rust/Tokio 内核，React 界面，Tauri 桌面外壳。
 
-状态更新：2026-10-18。正式版 [0.1.19](https://github.com/godstealer/http-capture/releases/tag/build-c65e4d49b4d9) 已发布为 Latest，四平台构建和公开更新包验签通过，改动见 [正式版更新说明](docs/release-2026-10-18.md)。开发状态见 [路线图](docs/roadmap.md)，协议边界见 [协议说明](docs/protocols.md)。按用户要求暂缓手工实机验收，独立记录在 [验收清单](docs/acceptance-2026-10-18.md)；TUN H3 实机排查继续暂停。
+状态更新：2026-10-19。正式版 [0.1.19](https://github.com/godstealer/http-capture/releases/tag/build-c65e4d49b4d9) 已发布为 Latest，四平台构建和公开更新包验签通过，改动见 [正式版更新说明](docs/release-2026-10-18.md)。开发状态见 [路线图](docs/roadmap.md)，协议边界见 [协议说明](docs/protocols.md)。按用户要求暂缓手工实机验收，独立记录在 [验收清单](docs/acceptance-2026-10-18.md)；TUN H3 实机排查继续暂停。
 
 公开源码：[godstealer/http-capture](https://github.com/godstealer/http-capture)。功能实现、自动化验证和实机验收分别记录，不以编译通过代替跨平台可用。
 
 本轮包含：请求页直接保存/更新/另存为，按语言和库导出 20 种代码示例，CodeMirror 6 拦截正文与可选粘贴格式化，正文类型/二进制编辑，头部复制，原生缩放修正，监听设置恢复，五页代理设置、十套主题及流量来源。代码导出与保存入口位于请求区上方右侧。使用与验证记录见 [使用反馈修复记录](docs/ui-feedback-2026-10-16.md) 和上述版本说明。
 
-流量来源支持 Windows 本机 TCP 进程识别；Linux 待实机，macOS、TUN 原始进程及 UDP/QUIC 识别仍有边界。0.1.19 包含 H2/H3 分块暂存；发布后独立开发分支继续减少正文快照及序列化副本，见 [大正文内存改造](docs/body-memory.md)，这部分尚未发布，整进程峰值测量和完整文件引用仍待完成。
+流量来源支持 Windows 本机 TCP 进程识别；Linux 待实机，macOS、TUN 原始进程及 UDP/QUIC 识别仍有边界。0.1.19 包含 H2/H3 分块暂存；发布后独立开发分支继续减少正文快照及序列化副本，见 [大正文内存改造](docs/body-memory.md)，共享引用阶段进入本轮待发布批次，整进程峰值测量和完整文件引用仍待完成。
 
 正式发布保留旧安装包使用的兼容更新地址；完整四平台产物及五个签名更新目标通过后才推进版本。0.1.0 等不带更新器的旧版需先手动安装新版。真实安装升级与系统集成仍按清单验收。
+
+本轮待发布：MCP 双向接入、插件在线编辑/语法检查和紧凑管理、集合新增入口、工作区冲突合并恢复、httpcloak 伪头兼容及共享正文引用。详见 [本轮说明](docs/release-2026-10-19.md)、[MCP 使用](docs/mcp.md) 和 [本轮验收](docs/acceptance-2026-10-19.md)。全局配置迁移本期仅提供 [设计](docs/config-migration.md)，尚未实现导入/导出。
 
 ## 项目结构
 
@@ -22,6 +24,7 @@ apps/
   desktop/src-tauri/   Tauri 桌面外壳，通过 IPC 调用 core
 crates/
   capture-core/        抓包、TLS、协议解析、发送引擎、拦截、脚本和存储
+  capture-mcp/         官方 SDK 的本机 MCP 服务端与 HTTP/stdio 客户端
   capture-service/     本地 HTTP 控制 API，供浏览器开发模式调用
 vendor/h2/             保留字段顺序所需的 h2 定制版本
 scripts/               跨平台启动脚本及回归检查
@@ -202,3 +205,5 @@ assert(plain === 'hello');
 新增 httpcloak Go 辅助进程，支持 Chrome 143–152，UA 版本与 TLS 预设可分别设置。使用 `scripts/build-httpcloak.ps1` 构建后重启开发服务；wreq、httpcloak 和原生引擎并存。模块拆分、验证结果、跨平台构建和限制见 [transport-engines.md](docs/transport-engines.md)。
 
 会话备份、HAR、请求集合、环境、脚本模板和表单编辑的用法及边界见 [会话与工作区](docs/sessions-workspaces.md)。
+
+本地 JavaScript 插件的安装、JSON 包格式、脚本 API、示例和排错见 [插件使用说明](docs/plugins.md)。

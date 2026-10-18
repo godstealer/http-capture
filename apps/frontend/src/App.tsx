@@ -1,4 +1,5 @@
 import Plugins from './Plugins';
+import McpPage from './McpPage';
 import AppUpdater from './AppUpdater';
 import './settings-layout.css';
 import SettingsTabs, { type SettingsPageId } from './SettingsTabs';
@@ -121,7 +122,7 @@ export default function App() {
     try { await persistLibrary(library); } catch { /* The collection page keeps the error and local edits. */ }
   }
   const [flows, setFlows] = useState<Flow[]>([]);
-  const { editors, setEditors, activeEditor, setActiveEditor, ready: workspaceReady, message: workspaceMessage, error: workspaceError, retry: saveWorkspace } = useRequestWorkspace();
+  const { editors, setEditors, activeEditor, setActiveEditor, ready: workspaceReady, message: workspaceMessage, error: workspaceError, retry: saveWorkspace, conflict: workspaceConflict, recovering: workspaceRecovering, recover: recoverWorkspace } = useRequestWorkspace();
   const updateInProgress = useRef(false);
   const closing = useDesktopClose(saveWorkspace, () => libraryReady && (libraryBusy || JSON.stringify(library) !== librarySaved.current), message => setNotice(message), () => updateInProgress.current);
   async function beforeUpdateInstall() {
@@ -465,12 +466,13 @@ export default function App() {
         <div className="sidebar-divider"/>
         <button className={view === 'library' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'library' ? 'page' : undefined} title={t('集合与环境')} aria-label={t('集合与环境')} onClick={() => { setView('library'); if (!libraryReady) void loadLibrary(); }}><FolderOpen size={21}/><span>{t('集合')}</span></button>
         <button className={view === 'plugins' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'plugins' ? 'page' : undefined} onClick={() => setView('plugins')}><Puzzle size={21}/><span>{t('插件')}</span></button>
+        <button className={view === 'mcp' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'mcp' ? 'page' : undefined} onClick={() => setView('mcp')}><Code2 size={21}/><span>MCP</span></button>
       </nav>
       <button className="sidebar-item sidebar-help" onClick={() => setModal('help')}><CircleHelp size={21}/><span>{t('使用帮助')}</span></button>
     </aside>
     <div className="workspace">
       <header className="proxy-toolbar">
-        <div className="workspace-heading"><span>HTTP CAPTURE</span><strong>{view === 'capture' ? t('流量捕获') : view === 'replay' ? t('请求重放') : view === 'interception' ? t('拦截') : view === 'blocking' ? t('阻止请求') : view === 'library' ? t('集合与环境') : t('插件')}</strong></div>
+        <div className="workspace-heading"><span>HTTP CAPTURE</span><strong>{view === 'capture' ? t('流量捕获') : view === 'replay' ? t('请求重放') : view === 'interception' ? t('拦截') : view === 'blocking' ? t('阻止请求') : view === 'library' ? t('集合与环境') : view === 'mcp' ? 'MCP' : t('插件')}</strong></div>
         <div className="proxy-address"><span className={status.running ? 'dot green' : 'dot'}/><div><span>{!connected ? t('内核未连接') : status.running ? t('代理已就绪') : t('代理已停止')}</span><code>{listenAddress}</code></div><button className="icon-button" title={wildcard ? t('所有网卡监听：客户端请填写本机局域网 IP 和端口') : t('复制代理地址')} disabled={wildcard} onClick={() => void copy(listenAddress)}><Copy size={14}/></button></div>
         <button className="upstream-chip" title={t('上游代理设置')} onClick={() => openSettings('upstream')}><Globe2 size={14}/><span>{status.upstream?.enabled ? t('上游：{v0}', {v0: status.upstream.profileName ?? status.upstream.url}) : t('上游：直连')}</span></button>
         <div className="toolbar-actions"><AppUpdater beforeInstall={beforeUpdateInstall} onBusyChange={value => { updateInProgress.current = value; }}/><SystemProxyToggle running={status.running} connected={connected} locked={proxyBusy} preferred={useSystemProxy} onPreference={setUseSystemProxy} onError={notify}/><ThemeSelector value={theme} onChange={value => { setTheme(value); applyTheme(value); }}/><button className="proxy-settings-button" aria-label={t('代理设置')} title={t('修改监听端口、配置上游代理')} onClick={() => openSettings()}><Settings2 size={17}/><span>{t('代理设置')}</span></button><button className={'capture-switch' + (status.running ? ' is-running' : '')} disabled={proxyBusy} onClick={() => void capture()}>{status.running ? <Square size={15}/> : <Play size={15}/>}<span>{proxyBusy ? t('处理中…') : status.running ? t('停止') : t('开始捕获')}</span></button></div>
@@ -487,11 +489,12 @@ export default function App() {
         </div>
         <details className="request-history"><summary>{t("重放历史 (")}{flows.filter(f => f.source === 'replay').length})</summary><div>{flows.filter(f => f.source === 'replay').map(f => <button key={f.id} onClick={event => { openEditor(f, 'result'); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{f.request.method} {f.request.url} <span>{f.response?.status ?? 'ERR'}</span></button>)}</div></details>
       </nav>
-      {workspaceError && <div className="workspace-save-status workspace-save-error" role="status"><CircleHelp size={14}/><span>{t(workspaceMessage)}</span>{workspaceReady && <button onClick={() => void saveWorkspace()}>{t('重试保存')}</button>}</div>}
+      {workspaceError && <div className="workspace-save-status workspace-save-error" role="status"><CircleHelp size={14}/><span>{t(workspaceMessage)}</span>{workspaceReady && (workspaceConflict?<button disabled={workspaceRecovering} onClick={() => void recoverWorkspace()}>{workspaceRecovering?t('正在合并…'):t('保留草稿并合并重载')}</button>:<button disabled={workspaceRecovering} onClick={() => void saveWorkspace()}>{t('重试保存')}</button>)}</div>}
       {!connected && !workspaceError && <div className="preview-strip"><span><Layers3 size={14} />{t("界面预览 · 尚未连接抓包内核")}</span><span>{t("仅显示实际捕获的请求")}</span></div>}
 
       {interception.items.length > 0 && view !== 'interception' && <button className="preview-strip" onClick={() => setView('interception')}>{t("有")}{interception.items.length} {t("项等待拦截放行，点击处理")}</button>}
       {view === 'plugins' && <Plugins />}
+      {view === 'mcp' && <McpPage />}
       {view === 'interception' && <Interception snapshot={interception} onUpdate={setInterception} />}
       {view === 'blocking' && <RequestBlocking key={blockingEditorVersion} connected={connected} onSaved={loadBlocking} />}
       {view==='library'&&<RequestLibrary value={library} onChange={v=>{if(!libraryOperation.current){setLibrary(v);setLibraryMessage(t('有未保存的修改'));}}} onSave={()=>void saveLibrary()} onReload={()=>void loadLibrary()} onOpen={v=>openEditor(undefined,'draft',v.draft,v)} draft={editor?.draft} draftContext={currentRequestContext(editor)} message={libraryMessage} busy={libraryBusy||!libraryReady}/>}

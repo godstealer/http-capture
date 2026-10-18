@@ -199,11 +199,11 @@ pub async fn install_app_update(app: AppHandle, state: State<'_, AppUpdateState>
             return Err(format!("验证更新失败，抓包仍保持运行：{error}"));
         }
         Err(InstallFailure::Cleanup(error)) => {
-            network.resume_network_commands();
+            network.resume_network_commands().await.map_err(|resume|format!("更新清理失败：{error}；恢复网络操作失败：{resume}"))?;
             return Err(format!("更新已验证，但网络清理失败，尚未安装：{error}"));
         }
         Err(InstallFailure::Install(error)) => {
-            network.resume_network_commands();
+            network.resume_network_commands().await.map_err(|resume|format!("安装更新失败：{error}；恢复网络操作失败：{resume}"))?;
             return Err(format!("安装更新失败，应用仍在运行；可重新启动抓包：{error}"));
         }
     }

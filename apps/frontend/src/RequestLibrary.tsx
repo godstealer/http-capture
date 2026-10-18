@@ -1,9 +1,13 @@
 import { lazy, Suspense, useRef, useState } from "react";
 import { t } from "./i18n";
-import { parseLibrary, type Library, type SavedRequestContext } from "./library";
+import { parseLibrary, withSavedRequest, suggestedRequestName, type Library, type SavedRequestContext } from "./library";
 import type { RequestDraft } from "./types";
 import { emptyScripts } from "./ScriptsEditor";
 import { Braces, FileCode2, FolderOpen } from 'lucide-react';
+import LibraryCreateDialog from './LibraryCreateDialog';
+import SaveRequestDialog from './SaveRequestDialog';
+import './library-create.css';
+type Creating = {kind:'collection'|'environment'|'request'|'script';collectionId?:string;draft?:RequestDraft;context?:SavedRequestContext};
 const ScriptCodeEditor = lazy(() => import("./ScriptCodeEditor"));
 
 export default function RequestLibrary({
@@ -27,8 +31,12 @@ export default function RequestLibrary({
   message: string;
   busy: boolean;
 }) {
-  const [name, setName] = useState("");
-  const [collection, setCollection] = useState("");
+  const [creating, setCreating] = useState<Creating|null>(null);
+  const [reading, setReading] = useState(false);
+  const importing = useRef(false);
+  const latest = useRef({value,busy}); latest.current={value,busy};
+  const menu = useRef<HTMLDetailsElement>(null);
+  const locked = busy || reading;
   const [environment, setEnvironment] = useState("");
   const [variables, setVariables] = useState("{}");
   const [error, setError] = useState("");
@@ -37,62 +45,24 @@ export default function RequestLibrary({
     onChange(next);
     setError("");
   };
-  function add(kind: "collection" | "request" | "environment" | "script") {
-    if (!name.trim()) {
-      setError(t("请输入名称"));
-      return;
+  function openCreate(kind:Creating['kind'],collectionId?:string) {
+    if(busy||importing.current)return;
+    if((kind==='request'||kind==='script')&&!draft)return;
+    if(menu.current)menu.current.open=false;
+    setError('');
+    setCreating({kind,collectionId,...((kind==='request'||kind==='script')?{draft:structuredClone(draft!),context:structuredClone(draftContext??{})}:{})});
+  }
+  function add(name:string) {
+    if(!creating||busy||importing.current)return;
+    const id=crypto.randomUUID();
+    if(creating.kind==='collection')update({...value,collections:[...value.collections,{id,name}]});
+    if(creating.kind==='environment'){
+      update({...value,environments:[...value.environments,{id,name,variables:{}}]});
+      setEnvironment(id);setVariables('{}');
     }
-    const id = crypto.randomUUID();
-    if (kind === "collection") {
-      update({
-        ...value,
-        collections: [...value.collections, { id, name: name.trim() }],
-      });
-      setCollection(id);
-    }
-    if (kind === "request" && draft) {
-      if (!value.collections.some((c) => c.id === collection)) {
-        setError(t("请选择集合"));
-        return;
-      }
-      update({
-        ...value,
-        requests: [
-          ...value.requests,
-          {
-            id,
-            name: name.trim(),
-            collectionId: collection,
-            draft: structuredClone(draft),
-            ...structuredClone(draftContext ?? {}),
-          },
-        ],
-      });
-    }
-    if (kind === "environment") {
-      update({
-        ...value,
-        environments: [
-          ...value.environments,
-          { id, name: name.trim(), variables: {} },
-        ],
-      });
-      setEnvironment(id);
-      setVariables("{}");
-    }
-    if (kind === "script" && draft)
-      update({
-        ...value,
-        scripts: [
-          ...value.scripts,
-          {
-            id,
-            name: name.trim(),
-            scripts: structuredClone(draft.scripts ?? emptyScripts),
-          },
-        ],
-      });
-    setName("");
+    if(creating.kind==='script'&&creating.draft)
+      update({...value,scripts:[...value.scripts,{id,name,scripts:structuredClone(creating.draft.scripts??emptyScripts)}]});
+    setCreating(null);
   }
   function exportFile() {
     const url = URL.createObjectURL(
@@ -116,7 +86,7 @@ export default function RequestLibrary({
   return (
     <section className="request-library">
       <fieldset
-        disabled={busy}
+        disabled={locked}
         style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
       >
         <div className="library-toolbar library-page-heading">
@@ -124,6 +94,15 @@ export default function RequestLibrary({
           <button disabled={busy} onClick={onSave}>
             {t("保存集合与环境")}
           </button>
+          <details className="library-add-menu" ref={menu} onKeyDown={event=>{if(event.key==='Escape'&&menu.current){menu.current.open=false;menu.current.querySelector('summary')?.focus();}}}>
+            <summary aria-disabled={locked} onClick={event=>{if(locked)event.preventDefault();}}>{t('新增')}</summary>
+            <div className="library-add-options">
+              <button type="button" disabled={locked} onClick={()=>openCreate('collection')}>{t('新建集合')}</button>
+              <button type="button" disabled={locked} onClick={()=>openCreate('environment')}>{t('新建环境')}</button>
+              <button type="button" disabled={locked||!draft} onClick={()=>openCreate('request')}>{t('收藏当前请求')}</button>
+              <button type="button" disabled={locked||!draft} onClick={()=>openCreate('script')}>{t('保存当前脚本模板')}</button>
+            </div>
+          </details>
           <button
             disabled={busy}
             onClick={() => {
@@ -147,12 +126,15 @@ export default function RequestLibrary({
           onChange={async (e) => {
             const file = e.target.files?.[0];
             e.target.value = "";
-            if (!file) return;
+            if (!file || busy || importing.current) return;
+            const snapshot=value;
+            importing.current=true;setReading(true);
             try {
-              update(parseLibrary(await file.text(), value.revision));
-            } catch (e) {
-              setError(String(e));
-            }
+              const text=await file.text();
+              if(latest.current.value!==snapshot||latest.current.busy)throw Error(t('集合已更新，请重新导入文件。'));
+              update(parseLibrary(text,snapshot.revision));
+            } catch (e) {setError(String(e));}
+            finally {importing.current=false;setReading(false);}
           }}
         />
         <p>
@@ -160,38 +142,10 @@ export default function RequestLibrary({
             "导入只替换当前编辑内容；点击保存才落盘。请求与环境可能包含凭据，请妥善保存导出文件。",
           )}
         </p>
-        <div className="library-toolbar library-create">
-          <input
-            aria-label={t("名称")}
-            placeholder={t("名称")}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <button onClick={() => add("collection")}>{t("新建集合")}</button>
-          <button onClick={() => add("environment")}>{t("新建环境")}</button>
-          <select
-            aria-label={t("集合")}
-            value={collection}
-            onChange={(e) => setCollection(e.target.value)}
-          >
-            <option value="">{t("请选择集合")}</option>
-            {value.collections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <button disabled={!draft} onClick={() => add("request")}>
-            {t("收藏当前请求")}
-          </button>
-          <button disabled={!draft} onClick={() => add("script")}>
-            {t("保存当前脚本模板")}
-          </button>
-        </div>
         <div className="library-grid">
           <div className="library-collections">
-            <h2>{t('集合')}</h2>
-            {!value.collections.length && <div className="secondary-empty"><FolderOpen size={28} aria-hidden="true"/><strong>{t('暂无请求集合')}</strong><p>{t('输入名称并新建集合，按项目整理常用请求。')}</p></div>}
+            <div className="library-section-heading"><h2>{t('集合')}</h2><button type="button" onClick={()=>openCreate('collection')}>{t('新建集合')}</button></div>
+            {!value.collections.length && <div className="secondary-empty"><FolderOpen size={28} aria-hidden="true"/><strong>{t('暂无请求集合')}</strong><p>{t('按项目整理常用请求，从新建一个集合开始。')}</p><button type="button" onClick={()=>openCreate('collection')}>{t('新建集合')}</button></div>}
             {value.collections.map((c) => (
               <details key={c.id} open>
                 <summary>
@@ -263,7 +217,7 @@ export default function RequestLibrary({
             ))}
           </div>
           <div className="library-environments">
-            <h2>{t('编辑环境')}</h2>
+            <div className="library-section-heading"><h2>{t('编辑环境')}</h2><button type="button" onClick={()=>openCreate('environment')}>{t('新建环境')}</button></div>
             <select
               aria-label={t("编辑环境")}
               value={environment}
@@ -286,7 +240,7 @@ export default function RequestLibrary({
                 </option>
               ))}
             </select>
-            {!value.environments.length && <div className="secondary-empty"><Braces size={28} aria-hidden="true"/><strong>{t('暂无环境')}</strong><p>{t('新建环境后，可在这里维护请求变量。')}</p></div>}
+            {!value.environments.length && <div className="secondary-empty"><Braces size={28} aria-hidden="true"/><strong>{t('暂无环境')}</strong><p>{t('新建环境后，可在这里维护请求变量。')}</p><button type="button" onClick={()=>openCreate('environment')}>{t('新建环境')}</button></div>}
             {value.environments.some((v) => v.id === environment) && (
               <>
                 <input
@@ -363,7 +317,7 @@ export default function RequestLibrary({
         </div>
         <details className="library-templates">
           <summary>{t("脚本模板")}</summary>
-          {!value.scripts.length && <div className="secondary-empty"><FileCode2 size={28} aria-hidden="true"/><strong>{t('尚未保存脚本模板')}</strong><p>{t('打开请求后，可将脚本保存为模板。')}</p></div>}
+          {!value.scripts.length && <div className="secondary-empty"><FileCode2 size={28} aria-hidden="true"/><strong>{t('尚未保存脚本模板')}</strong><p>{t('打开请求后，可将脚本保存为模板。')}</p><button type="button" disabled={!draft} onClick={()=>openCreate('script')}>{t('保存当前脚本模板')}</button></div>}
           {value.scripts.map((v) => (
             <div className="library-toolbar" key={v.id}>
               <input
@@ -393,6 +347,19 @@ export default function RequestLibrary({
         </details>
         {error && <p role="alert">{error}</p>}
       </fieldset>
+      {creating?.kind==='request'&&creating.draft&&<SaveRequestDialog collections={value.collections}
+        initialName={suggestedRequestName(creating.draft)} initialCollectionId={creating.collectionId}
+        defaultCollectionName={t('我的请求')} busy={locked} error={error} confirmLabel={t('新增')}
+        description={t('新增到当前编辑内容，点击「保存集合与环境」后写入磁盘。')}
+        onClose={()=>setCreating(null)} onSave={selection=>{
+          if(locked||importing.current)return;
+          try{update(withSavedRequest(value,creating.draft!,selection,undefined,creating.context).library);setCreating(null);}
+          catch(e){setError(String(e));}
+        }}/>}
+      {creating&&creating.kind!=='request'&&<LibraryCreateDialog busy={locked}
+        title={creating.kind==='collection'?t('新建集合'):creating.kind==='environment'?t('新建环境'):t('保存当前脚本模板')}
+        label={creating.kind==='collection'?t('集合名称'):creating.kind==='environment'?t('环境名称'):t('模板名称')}
+        onCreate={add} onClose={()=>setCreating(null)}/>}
     </section>
   );
 }

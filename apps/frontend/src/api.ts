@@ -3,6 +3,10 @@ import { invoke as tauriInvoke, isTauri } from '@tauri-apps/api/core';
 export async function invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return tauriInvoke<T>(command, args);
   const routes: Record<string, [string, string]> = {
+    mcp_status:['GET','mcp/status'],mcp_configure:['POST','mcp/configure'],mcp_connection_info:['POST','mcp/connection'],
+    mcp_clients:['GET','mcp/clients'],mcp_save_client:['POST','mcp/clients/save'],mcp_remove_client:['POST','mcp/clients/remove'],
+    mcp_connect_client:['POST','mcp/clients/connect'],mcp_disconnect_client:['POST','mcp/clients/disconnect'],mcp_client_tools:['POST','mcp/clients/tools'],mcp_call_tool:['POST','mcp/clients/call'],
+    plugins_validate:['POST','plugins/validate'],
     plugins_list:['GET','plugins'],plugins_save:['POST','plugins'],plugin_logs:['GET','plugins/logs'],
     grpc_poll:['POST','grpc/poll'],grpc_start:['POST','grpc/start'],grpc_send:['POST','grpc/send'],
     system_proxy_status:['GET','system-proxy'], set_system_proxy:['POST','system-proxy'], ca_status:['GET','ca/trust'], set_ca_trust:['POST','ca/trust'],
@@ -29,7 +33,7 @@ export async function invoke<T = unknown>(command: string, args?: Record<string,
   const response = await fetch(`/__capture/${route[1]}`, { method: route[0],
     headers: { 'X-Capture-UI': '1', 'Content-Type': 'application/json' },
     body: route[0] === 'POST' ? JSON.stringify(args ?? {}) : undefined,
-    signal: AbortSignal.timeout(command === 'replay_request' ? 360000 : ['start_tun','backup_database','compact_database','finish_import'].includes(command) ? 300000 : 35000),
+    signal: AbortSignal.timeout(command === 'replay_request' ? 360000 : command === 'mcp_call_tool' ? 70000 : command === 'mcp_connect_client' ? 45000 : ['start_tun','backup_database','compact_database','finish_import'].includes(command) ? 300000 : 35000),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
   return command === 'export_certificate' ? await response.text() as T : response.json();

@@ -1,0 +1,35 @@
+.mcp-clients { display:flex;flex-direction:column;gap:18px;min-width:0;color:var(--text,#27323d) }
+.mcp-clients-heading { display:flex;justify-content:space-between;align-items:flex-start;gap:20px }
+.mcp-clients-heading h2,.mcp-client-tools h3 { margin:0 0 7px;font-size:18px }
+.mcp-clients-heading p,.mcp-client-tools header p { margin:0;color:var(--muted,#75808d);line-height:1.7;font-size:13px }
+.mcp-clients-actions { display:flex;flex-wrap:wrap;align-items:center;gap:8px }
+.mcp-clients-actions .button,.mcp-client-tools>.button { display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap }
+.mcp-clients-note { display:flex;align-items:flex-start;gap:9px;padding:12px 14px;border:1px solid var(--border,#dce3ea);border-radius:10px;background:var(--surface-alt,var(--panel,#f7f9fb));font-size:12px;line-height:1.7;color:var(--muted,#75808d) }
+.mcp-clients-note svg { flex-shrink:0;margin-top:2px }.mcp-clients-note p { margin:0 }
+.mcp-client-error { color:var(--danger,#c55353);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;line-height:1.6 }
+.mcp-client-notice { color:var(--success,#25836c);display:flex;align-items:center;gap:7px;font-size:13px;margin:0 }
+.mcp-client-editor,.mcp-client-card,.mcp-client-tools { border:1px solid var(--border,#dce3ea);border-radius:12px;padding:18px;background:var(--panel,var(--surface,#fff));min-width:0 }
+.mcp-client-editor { display:flex;flex-direction:column;gap:14px;border-color:var(--accent,#4c9e86) }
+.mcp-client-editor h3,.mcp-client-card h3 { margin:0;font-size:15px }
+.mcp-client-fields { display:grid;grid-template-columns:minmax(0,1fr) minmax(180px,.55fr);gap:14px }
+.mcp-client-editor label:not(.mcp-client-check),.mcp-client-tools>label { display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:500 }
+.mcp-clients input:not([type=checkbox]),.mcp-clients select,.mcp-clients textarea { box-sizing:border-box;width:100%;min-width:0;padding:10px 12px;border:1px solid var(--input-border,var(--border,#bac7d4));border-radius:7px;background:var(--input-bg,var(--surface,#fff));color:inherit;font:inherit;outline:none }
+.mcp-clients input:focus,.mcp-clients select:focus,.mcp-clients textarea:focus { border-color:var(--accent,#4c9e86);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4c9e86) 15%,transparent) }
+.mcp-clients textarea { resize:vertical;font-family:Consolas,monospace;line-height:1.6 }.mcp-clients input::placeholder,.mcp-clients textarea::placeholder { color:var(--muted,#8291a0) }
+.mcp-client-check { display:flex;align-items:center;gap:7px;font-size:12px }.mcp-client-check input { accent-color:var(--accent,#4c9e86) }
+.mcp-client-hint { margin:0;color:var(--muted,#75808d);font-size:12px;line-height:1.7 }
+.mcp-client-list { display:flex;flex-direction:column;gap:12px }.mcp-client-card { display:flex;flex-direction:column;gap:13px }
+.mcp-client-card.is-selected { border-color:var(--accent,#4c9e86);box-shadow:inset 3px 0 var(--accent,#4c9e86) }
+.mcp-client-card-heading { display:flex;justify-content:space-between;gap:15px;min-width:0 }.mcp-client-card-heading>div { min-width:0 }
+.mcp-client-card h3 { display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-bottom:7px }
+.mcp-client-card code { font-size:12px;color:var(--muted,#75808d);overflow-wrap:anywhere;white-space:pre-wrap }
+.mcp-client-state,.mcp-client-transport { font-size:11px;font-weight:500;border-radius:5px;padding:3px 7px;background:var(--surface-alt,#eef2f6);color:var(--muted,#75808d) }
+.mcp-client-state.is-connected { color:var(--success,#25836c);background:color-mix(in srgb,var(--success,#25836c) 12%,transparent) }
+.mcp-client-transport { align-self:flex-start;flex-shrink:0 }.mcp-client-remove { color:var(--danger,#c55353) }
+.mcp-client-tools { display:flex;flex-direction:column;gap:15px }.mcp-client-tools>.button { align-self:flex-start }
+.mcp-client-tools pre,.mcp-client-server-info pre { margin:9px 0 0;padding:12px;max-height:300px;overflow:auto;background:var(--code-bg,#f5f7fa);border:1px solid var(--border,#dce3ea);border-radius:7px;font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere }
+.mcp-client-tools summary,.mcp-client-server-info summary { cursor:pointer;font-size:12px;color:var(--muted,#75808d) }.mcp-tool-description { font-size:13px;line-height:1.7;white-space:pre-wrap;margin:0;overflow-wrap:anywhere }
+.mcp-client-arguments h4,.mcp-client-result h4 { font-size:13px;margin:0 0 9px }.mcp-client-arguments .body-code-editor { min-height:180px }.mcp-client-result { min-width:0 }.mcp-client-result .response-code-editor { height:320px;min-width:0;border:1px solid var(--border,#dce3ea);border-radius:7px;overflow:hidden }
+.mcp-clients-empty { display:flex;align-items:center;flex-direction:column;gap:11px;padding:45px 20px;color:var(--muted,#75808d);border:1px dashed var(--border,#dce3ea);border-radius:12px;text-align:center }.mcp-clients-empty p { margin:0;font-size:13px;line-height:1.6 }
+.mcp-client-spinner { animation:mcp-client-spin 1s linear infinite }@keyframes mcp-client-spin { to { transform:rotate(360deg) } }@media(prefers-reduced-motion:reduce) { .mcp-client-spinner { animation:none } }
+@media(max-width:900px) { .mcp-clients-heading { flex-direction:column }.mcp-client-fields { grid-template-columns:1fr } }

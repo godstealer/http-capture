@@ -10,6 +10,9 @@ pub struct FlowChange {pub position:i64,pub flow:Flow}
 #[derive(Serialize,Deserialize)]
 pub struct FlowChanges {pub revision:String,pub reset:bool,pub rows:Vec<FlowChange>,pub deleted:Vec<String>}
 pub struct Store(Mutex<Connection>, String);
+#[path = "store_mcp.rs"]
+mod mcp;
+pub use mcp::{McpBodyChunk, McpRequestFilter, McpRequestPage};
 
 impl Store {
     pub fn backup(&self) -> Result<String> {

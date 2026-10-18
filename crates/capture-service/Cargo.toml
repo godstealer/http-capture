@@ -13,6 +13,7 @@ browser-replay = ["capture-core/browser-replay"]
 base64 = "0.22"
 serde_json.workspace = true
 capture-core = { path = "../capture-core" }
+capture-mcp = { path = "../capture-mcp" }
 anyhow.workspace = true
 serde.workspace = true
 tokio.workspace = true

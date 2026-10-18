@@ -1,0 +1,58 @@
+.plugins-workspace > :is(.plugin-help, .plugin-editor, .plugin-help-status, .plugin-list-panel, .plugin-detail) { box-sizing: border-box; width: 100%; max-width: 1240px; margin: 0 auto 20px; }
+.plugin-help, .plugin-editor, .plugin-list-panel, .plugin-detail { border: 1px solid var(--ui-border); border-radius: var(--skin-card-radius, 12px); background: var(--ui-surface); color: var(--ui-text); }
+.plugin-help > summary { padding: 15px 18px; cursor: pointer; font-weight: 650; }
+.plugin-help[open] > summary { border-bottom: 1px solid var(--ui-border); }
+.plugin-help-content, .plugin-editor, .plugin-detail { padding: 18px; }
+.plugin-help-content :is(h2, h3, p), .plugin-editor :is(h2, h3, p), .plugin-detail h2 { margin: 0; }
+.plugin-help-content h2 { margin: 22px 0 10px; font-size: 14px; }
+.plugin-help-content h3, .plugin-editor h3 { font-size: 13px; }
+.plugin-help-content p, .plugin-help-troubleshooting, .plugin-editor > p { color: var(--ui-muted); line-height: 1.8; font-size: 12px; }
+.plugin-help-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 14px 28px; margin: 0; padding-left: 24px; }
+.plugin-help-steps li { padding-left: 3px; }
+.plugin-help-steps li::marker { color: var(--ui-accent); font-weight: 700; }
+.plugin-help-steps p { margin-top: 7px; }
+.plugin-help-examples, .plugin-editor-code { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
+.plugin-help-examples article { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; min-width: 0; padding: 16px; border: 1px solid var(--ui-border); border-radius: var(--skin-card-radius, 9px); background: var(--ui-surface-alt); }
+.plugin-help-examples .button { margin-top: auto; }
+.plugin-help-troubleshooting { padding-left: 20px; }
+.plugin-help-troubleshooting li + li { margin-top: 5px; }
+.plugin-editor h2, .plugin-detail h2 { font-size: 16px; }
+.plugin-editor > p { margin-top: 8px; }
+.plugin-editor-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin: 16px 0; padding: 0; border: 0; min-width: 0; }
+.plugin-editor-fields label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 12px; }
+.plugin-editor-fields :is(input, select) { box-sizing: border-box; min-width: 0; width: 100%; padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: var(--skin-field-radius, 7px); background: var(--ui-surface-alt); color: var(--ui-text); }
+.plugin-editor-pattern { grid-column: 1 / -1; }
+.plugin-editor-code > section { min-width: 0; }
+.plugin-editor-code h3 { margin-bottom: 9px; }
+.plugin-editor-code .body-code-editor { height: 320px; }
+.plugin-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.plugin-list-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px; border-bottom: 1px solid var(--ui-border); }
+.plugin-list-filters input { flex: 1 1 220px; min-width: 120px; }
+.plugin-list-filters :is(input, select) { padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: var(--skin-field-radius, 7px); background: var(--ui-surface-alt); color: var(--ui-text); }
+.plugin-list-count { color: var(--ui-muted); font-size: 12px; }
+.plugin-list-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 13px 16px; }
+.plugin-list-row + .plugin-list-row { border-top: 1px solid var(--ui-border); }
+.plugin-list-row[data-selected='true'] { background: var(--ui-accent-soft); }
+.plugin-list-identity { flex: 1 1 200px; min-width: 0; }
+.plugin-list-identity strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+.plugin-list-identity small { display: block; margin-top: 4px; color: var(--ui-muted); font: 11px/1.5 Consolas, monospace; overflow-wrap: anywhere; }
+.plugin-list-scope { color: var(--ui-muted); font-size: 12px; }
+.plugin-list-toggle { display: flex; align-items: center; gap: 7px; min-width: 78px; font-size: 12px; }
+.plugin-list-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.plugin-list-empty { margin: 0; padding: 28px 16px; color: var(--ui-muted); text-align: center; }
+.plugin-detail pre { max-height: 360px; overflow: auto; padding: 14px; border: 1px solid var(--ui-border); border-radius: var(--skin-field-radius, 7px); background: var(--ui-surface-alt); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font-size: 12px; }
+.plugin-help-dialog { box-sizing: border-box; width: min(900px, calc(var(--ui-viewport-width, 100vw) - 32px)); max-width: none; max-height: calc(var(--ui-viewport-height, 100dvh) - 32px); padding: 0; border: 1px solid var(--ui-border); border-radius: var(--skin-card-radius, 14px); background: var(--ui-surface); color: var(--ui-text); box-shadow: var(--ui-shadow); overflow: hidden; }
+.plugin-help-dialog[open] { display: flex; flex-direction: column; }
+.plugin-help-dialog::backdrop { background: color-mix(in srgb, var(--ui-text) 35%, transparent); }
+.plugin-help-dialog header { flex: none; padding: 20px 24px 16px; border-bottom: 1px solid var(--ui-border); }
+.plugin-help-dialog h2 { margin: 0; font-size: 19px; line-height: 1.5; }
+.plugin-help-dialog header p { margin: 6px 0 0; color: var(--ui-muted); font-size: 12px; line-height: 1.6; }
+.plugin-help-document { min-height: 0; margin: 0; padding: 20px 24px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 12px/1.8 Consolas, 'SFMono-Regular', monospace; background: var(--ui-surface-alt); }
+.plugin-help-dialog footer { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--ui-border); }
+.plugin-help-dialog footer span { flex: 1 1 160px; color: var(--ui-muted); font-size: 12px; }
+.plugin-help-dialog footer span:empty { display: none; }
+.plugin-help-dialog footer [role='alert'] { color: var(--ui-danger); }
+.plugin-help-dialog button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--ui-border); border-radius: var(--skin-field-radius, 7px); background: var(--ui-surface); color: var(--ui-text); cursor: pointer; }
+.plugin-help-dialog button:hover:not(:disabled) { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+.plugin-help-dialog button:disabled { opacity: .55; cursor: default; }
+.plugin-help-dialog :focus-visible, .plugin-help :focus-visible, .plugin-editor :focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
