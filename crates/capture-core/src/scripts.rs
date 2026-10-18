@@ -52,12 +52,53 @@ impl ScriptState {
 }
 #[derive(Deserialize)]
 pub struct Output { pub request:RequestDraft, pub response:Option<CapturedResponse>, pub variables:BTreeMap<String,String>, pub logs:Vec<String>, pub error:Option<String> }
-// Serialize directly from the shared model. Building a serde_json::Value first
-// would copy each complete Base64 body before writing the same text to JSON.
+// The old script input passed through serde_json::Value, which sorted every
+// object's keys. JavaScript can observe that order through Object.keys and
+// JSON.stringify. Keep small metadata in Value while borrowing the large body.
+struct ScriptEntity<'a> {
+ body: &'a SharedBody,
+ metadata: serde_json::Map<String,serde_json::Value>,
+}
+impl<'a> From<&'a RequestDraft> for ScriptEntity<'a> {
+ fn from(request:&'a RequestDraft)->Self {
+  let RequestDraft{upstream_profile_id,scripts,pseudo_headers,engine,method,url,headers,body_base64,tls}=request;
+  let serde_json::Value::Object(metadata)=serde_json::json!({
+   "upstreamProfileId":upstream_profile_id,"scripts":scripts,"pseudoHeaders":pseudo_headers,
+   "engine":engine,"method":method,"url":url,"headers":headers,"tls":tls,
+  }) else {unreachable!()};
+  Self{body:body_base64,metadata}
+ }
+}
+impl<'a> From<&'a CapturedResponse> for ScriptEntity<'a> {
+ fn from(response:&'a CapturedResponse)->Self {
+  let CapturedResponse{trailers,upstream_tls,tls_version,sent_request_headers,status,version,headers,body_base64,raw_head_base64}=response;
+  let serde_json::Value::Object(metadata)=serde_json::json!({
+   "trailers":trailers,"upstreamTls":upstream_tls,"tlsVersion":tls_version,
+   "sentRequestHeaders":sent_request_headers,"status":status,"version":version,
+   "headers":headers,"rawHeadBase64":raw_head_base64,
+  }) else {unreachable!()};
+  Self{body:body_base64,metadata}
+ }
+}
+impl Serialize for ScriptEntity<'_> {
+ fn serialize<S:serde::Serializer>(&self,serializer:S)->std::result::Result<S::Ok,S::Error> {
+  use serde::ser::SerializeMap;
+  let mut map=serializer.serialize_map(Some(self.metadata.len()+1))?;
+  let mut body_written=false;
+  for (name,value) in &self.metadata {
+   if !body_written && name.as_str()>"bodyBase64" {
+    map.serialize_entry("bodyBase64",self.body)?;body_written=true;
+   }
+   map.serialize_entry(name,value)?;
+  }
+  if !body_written {map.serialize_entry("bodyBase64",self.body)?;}
+  map.end()
+ }
+}
 #[derive(Serialize)]
 struct Input<'a> {
- request: &'a RequestDraft,
- response: Option<&'a CapturedResponse>,
+ request: ScriptEntity<'a>,
+ response: Option<ScriptEntity<'a>>,
  variables: &'a BTreeMap<String,String>,
 }
 fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse>,variables:BTreeMap<String,String>,modules:crate::script_tools::Modules,after:bool,stopped:Arc<std::sync::atomic::AtomicBool>)->Result<Output>{
@@ -68,7 +109,7 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
  let deadline=Instant::now()+Duration::from_secs(2);
  runtime.set_interrupt_handler(Some(Box::new(move||stopped.load(std::sync::atomic::Ordering::Relaxed)||Instant::now()>deadline)));
  let context=Context::full(&runtime)?;
- let input=serde_json::to_string(&Input{request:&request,response:response.as_ref(),variables:&variables})?;
+ let input=serde_json::to_string(&Input{request:(&request).into(),response:response.as_ref().map(Into::into),variables:&variables})?;
  let output=context.with(|ctx|->Result<String>{
   ctx.globals().set("__input",input)?;
   ctx.globals().set("encodeText",Function::new(ctx.clone(),|s:String| STANDARD.encode(s.as_bytes()))?)?;
@@ -129,4 +170,84 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
   result.response=response;
  }
  Ok(result)
+}
+
+#[cfg(test)]
+mod input_tests {
+ use super::*;
+ use serde_json::{json,Value};
+
+ fn request()->RequestDraft {
+  serde_json::from_value(json!({
+   "upstreamProfileId":"fixture-profile","engine":"native","method":"POST",
+   "url":"https://example.invalid/路径?q=%22","bodyBase64":"AP+AKg==",
+   "pseudoHeaders":[{"name":":path","value":"/first"},{"name":":path","value":"/second"}],
+   "headers":[{"name":"X-A","value":"first"},{"name":"Hidden","value":"not sent","disabled":true},{"name":"x-a","value":"last"}],
+   "scripts":{"enabled":true,"before":"request.headers.push({name:'X-Test',value:'中文\\\\'});","after":"response.status=201;",
+    "modules":{"utils":true,"encoding":true,"crypto":false},"variables":{"z":"last","a":"first\0"}},
+   "tls":{"clientHelloHex":"1603010000","browserVersion":"155","version":"1.3","preset":"custom",
+    "cipherList":"TLS_AES_128_GCM_SHA256","sigalgsList":"rsa_pss_rsae_sha256","curvesList":"X25519","grease":false,"permuteExtensions":true}
+  })).unwrap()
+ }
+
+ fn response()->CapturedResponse {
+  serde_json::from_value(json!({
+   "status":200,"version":"HTTP/2","bodyBase64":"AP8iXA==","rawHeadBase64":"SFRUUA==","tlsVersion":"TLS 1.3",
+   "headers":[{"name":"X-Z","value":"first"},{"name":"Hidden","value":"not sent","disabled":true},{"name":"X-Z","value":"last"}],
+   "trailers":[{"name":"grpc-status","value":"0"}],
+   "sentRequestHeaders":[{"name":"X-B","value":"first"},{"name":"X-A","value":"second"}],
+   "upstreamTls":{"version":"TLS 1.3","cipherSuite":"TLS_AES_128_GCM_SHA256","alpn":"h2","serverName":"example.invalid","handshakeKind":"full",
+    "offeredCipherSuites":["first","second"],"offeredAlpn":["h2","http/1.1"],"signatureSchemes":["rsa_pss_rsae_sha256"],"supportedGroups":["X25519"],
+    "certificates":[{"subject":"fixture subject","issuer":"fixture issuer","serial":"01","notBefore":"start","notAfter":"end","sha256":"fixture hash",
+     "dnsNames":["example.invalid"],"derBase64":"AP8=","parseError":null}]}
+  })).unwrap()
+ }
+
+ #[test]
+ fn borrowed_script_input_matches_legacy_json_bytes_with_nested_metadata_and_null_response() {
+  let mut request=request();request.retain_enabled_headers();
+  let mut response=response();response.retain_enabled_headers();
+  let variables=BTreeMap::from([("z".into(),"last".into()),("a".into(),"中文\0".into())]);
+  for response in [None,Some(&response)] {
+   let input=Input{request:(&request).into(),response:response.map(Into::into),variables:&variables};
+   // This full-model Value is only the legacy test oracle. Production excludes
+   // bodyBase64 from metadata and serializes the shared string directly.
+   let legacy=serde_json::to_string(&json!({"request":&request,"response":response,"variables":&variables})).unwrap();
+   let actual=serde_json::to_string(&input).unwrap();
+   assert_eq!(actual,legacy);
+   assert!(std::ptr::eq(input.request.body,&request.body_base64));
+   assert!(!input.request.metadata.contains_key("bodyBase64"));
+   if let Some(entity)=&input.response {
+    assert!(std::ptr::eq(entity.body,&response.unwrap().body_base64));
+    assert!(!entity.metadata.contains_key("bodyBase64"));
+   }
+   let value:Value=serde_json::from_str(&actual).unwrap();
+   assert_eq!(value["request"]["headers"],json!([{"name":"X-A","value":"first"},{"name":"x-a","value":"last"}]));
+   assert_eq!(value["request"]["bodyBase64"],"AP+AKg==");
+   assert_eq!(value["response"].is_null(),response.is_none());
+  }
+ }
+
+ #[test]
+ fn borrowed_script_input_matches_legacy_json_bytes_for_empty_entities_and_null_tls() {
+  let request:RequestDraft=serde_json::from_value(json!({"method":"GET","url":"https://example.invalid/","headers":[],"bodyBase64":""})).unwrap();
+  let response:CapturedResponse=serde_json::from_value(json!({"status":204,"version":"HTTP/1.1","headers":[],"bodyBase64":""})).unwrap();
+  let variables=BTreeMap::new();
+  let input=Input{request:(&request).into(),response:Some((&response).into()),variables:&variables};
+  assert_eq!(serde_json::to_string(&input).unwrap(),serde_json::to_string(&json!({"request":&request,"response":&response,"variables":&variables})).unwrap());
+ }
+
+ #[test]
+ fn body_is_merged_at_its_sorted_position_without_a_metadata_value_copy() {
+  let body:SharedBody="A".repeat(256*1024).into();let pointer=body.as_ptr();
+  for names in [vec![],vec!["aBefore"],vec!["zAfter"],vec!["aBefore","zAfter"]] {
+   let metadata=names.into_iter().map(|name|(name.to_owned(),json!(name))).collect();
+   let entity=ScriptEntity{body:&body,metadata};
+   assert_eq!(entity.body.as_ptr(),pointer);
+   assert!(!entity.metadata.contains_key("bodyBase64"));
+   let mut legacy=entity.metadata.clone();legacy.insert("bodyBase64".into(),json!(body));
+   assert_eq!(serde_json::to_string(&entity).unwrap(),serde_json::to_string(&legacy).unwrap());
+   assert_eq!(body.as_ptr(),pointer);
+  }
+ }
 }

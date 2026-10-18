@@ -38,7 +38,27 @@ async fn capture_scripts_use_rules_without_manual_breakpoints_and_share_variable
 async fn metadata_only_scripts_reuse_unchanged_request_and_response_bodies(){
  let (_dir,e,calls)=engine();let mut request=draft();request.body_base64="AP+A".repeat(32768).into();
  let body=request.body_base64.clone();
- request.scripts=Scripts{enabled:true,before:"request.headers.push({name:'X-Before',value:'yes'});".into(),after:"response.headers.push({name:'X-After',value:'yes'});".into(),..Default::default()};
+ request.scripts=Scripts{enabled:true,before:r#"
+function sorted(value) {
+ if(Array.isArray(value)) return value.map(sorted);
+ if(value && typeof value==='object') return Object.fromEntries(Object.keys(value).sort().map(key=>[key,sorted(value[key])]));
+ return value;
+}
+assert(Object.keys(request).join(',')==='bodyBase64,engine,headers,method,pseudoHeaders,scripts,tls,upstreamProfileId,url');
+assert(JSON.stringify(request)===JSON.stringify(sorted(request)),'legacy request property order');
+assert(response===null,'request stage response must remain null');
+request.headers.push({name:'X-Before',value:'yes'});
+"#.into(),after:r#"
+function sorted(value) {
+ if(Array.isArray(value)) return value.map(sorted);
+ if(value && typeof value==='object') return Object.fromEntries(Object.keys(value).sort().map(key=>[key,sorted(value[key])]));
+ return value;
+}
+assert(Object.keys(response).join(',')==='bodyBase64,headers,rawHeadBase64,sentRequestHeaders,status,tlsVersion,trailers,upstreamTls,version');
+assert(JSON.stringify(request)===JSON.stringify(sorted(request)),'legacy request property order after receive');
+assert(JSON.stringify(response)===JSON.stringify(sorted(response)),'legacy response property order');
+response.headers.push({name:'X-After',value:'yes'});
+"#.into(),..Default::default()};
  let flow=e.execute(request,None,"replay",None).await.unwrap();assert!(flow.error.is_none(),"{:?}",flow.error);
  assert_eq!(flow.request.body_base64.as_ptr(),body.as_ptr());
  assert_eq!(flow.original_request.as_ref().unwrap().body_base64.as_ptr(),body.as_ptr());
