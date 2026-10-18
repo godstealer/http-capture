@@ -75,7 +75,7 @@ curl --noproxy "" -x http://127.0.0.1:8080 --cacert .local/capture/certificates/
 | HTTP/HTTPS | HTTP 显式代理、CONNECT 解密、动态 CA、H1/H2 捕获；上下游 ALPN 协调；端口数字/范围/占用校验 | 跨设备与跨平台仍需实测；Windows/GNOME 支持显式系统代理接管，CA 信任仍需用户操作 |
 | 请求保序 | H1 原始头保存；H1/H2 普通头及伪头保序；头部启停、批量文本编辑/复制粘贴；分拆 Cookie 转 H1 时合并 | 会修正协议要求的字段；不承诺密文、HPACK/帧字节或 H3/QPACK 顺序一致 |
 | 主动发送 | Auto/native/h2/h3、多标签并行、取消、cURL 导入导出、自定义原生 TLS | Auto 协商 h2/h1，不自动发现 H3；普通正文旧 8 MiB 固定拒绝已移除，仍未实现全链路低内存 |
-| 浏览器预设 | wreq、httpcloak 独立引擎，UA 与 TLS 版本分开选择；httpcloak 支持 TCP ClientHello Hex 模板 | wreq 需 browser-replay；httpcloak helper 随预览安装包提供；完整扩展结构编辑及浏览器指纹保真未完成 |
+| 浏览器预设 | wreq、httpcloak 独立引擎，UA 与 TLS 版本分开选择；httpcloak 支持 TCP ClientHello Hex 模板 | wreq 需 browser-replay；httpcloak helper 随安装包提供；完整扩展结构编辑及浏览器指纹保真未完成 |
 | 代理 | HTTP/SOCKS5 列表、认证、系统凭据库；手动请求独立选择 | H3 支持 SOCKS5 UDP，不支持普通 HTTP 上游/CONNECT-UDP；失败不回退直连 |
 | 查看和编辑 | 请求/响应正文格式化；SVG/图片适应窗口、缩放和双向滚动；清晰输入框；规则拦截和文件替换响应，右键可建立响应拦截 | HTML 静态预览禁用脚本与外部资源；响应文件替换界面当前限制 8 MiB；原始字节与解码展示区分 |
 | 阻止请求 | URL 包含/正则、精确域名及可选方法；抓包/全部范围；本地 403、规则落盘、右键添加 | 不终止已建立的 WS/流式会话；未解密 CONNECT 只能按不限定方法的精确域名阻止；不是系统防火墙 |
@@ -83,7 +83,7 @@ curl --noproxy "" -x http://127.0.0.1:8080 --cacert .local/capture/certificates/
 | 会话 | SQLite、工作区恢复、会话 JSON 保存/导入、HAR 导入、Ctrl/Command+A 和批量删除 | 首次全量读取，不分页；后续增量同步；HAR 导出、全库 SQLite 备份及虚拟列表已支持，大正文流式存储待完善 |
 | 界面 | 主题切换、中英文及跟随系统、可拖动分栏、虚拟列表；输入框/下拉框边界及焦点状态统一 | 部分桌面 WebView 和跨平台实际 GUI 回归待补 |
 | TUN | Windows 指定应用 HTTP/HTTPS 捕获，停止及父进程退出清理有实测 | H3 动态 SNI 入口有本地测试，Windows 接管未验收且暂缓；macOS/Linux TUN 未实测 |
-| 发布 | [自动桌面预览版流程](docs/releases.md)包含两种 Mac 架构及 httpcloak；桌面端接入签名更新检查、提示、下载、安装和重启 | 旧安装包需先手动升级；真实四平台更新待验收；Windows 代码签名与 macOS 签名/公证待配置 |
+| 发布 | [自动桌面正式版流程](docs/releases.md)包含两种 Mac 架构及 httpcloak；桌面端接入签名更新检查、提示、下载、安装和重启 | 旧安装包需先手动升级；真实四平台更新待验收；Windows 代码签名与 macOS 签名/公证待配置 |
 
 H3 手动发送经 SOCKS5 到 tls3.peet.ws 已实测成功，不能据此宣称通用 TUN H3 抓包完成。详细证据见 [组件实测](docs/tls-components-test.md) 和 [TUN 文档](docs/tun.md)。完整 trailers、嵌套集合/规则、按规则路由、分段耗时和大文件低内存仍待完善。ANA 的 TLS 握手兼容性与网站返回 403 分别记录，不将握手成功写成航班搜索通过。
 
