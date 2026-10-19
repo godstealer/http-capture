@@ -14,16 +14,18 @@ extended CONNECT and server push are not supported. WebSocket uses HTTP/1 Upgrad
 
 HTTP/2 permits multiple Cookie fields, each containing one or more cookie-pairs.
 They are semantically equivalent to a single field joined with `; `. Native H2
-keeps separate input fields without proactively splitting a single value;
-the httpcloak Chrome/Firefox presets may split values during HPACK encoding.
-Input fields and actual sent fields therefore need to be compared separately.
+and the httpcloak ExactHeaders path keep the input Cookie field boundaries.
+The helper derives the active preset and disables only automatic Cookie splitting;
+TLS, other H2 settings and pseudo-header order remain inherited. This is applied
+after any imported ClientHello so that its TLS settings are retained.
 The header editor provides split/merge buttons beside Cookie fields; merging
 only combines fields with the same enabled/disabled state, and never changes
 Set-Cookie fields. Splitting preserves duplicate keys and does not decode values.
 
-Before native HTTP/1.1 forwarding, split Cookie fields are joined with `; ` at
-the first Cookie position. The httpcloak plaintext HTTP/1 path still writes
-separate Cookie fields; normalizing that path remains a roadmap item. See
+Before native or httpcloak HTTP/1.1 forwarding, split Cookie fields are joined
+with `; ` at the first Cookie position. The editor retains its input fields and
+the send notes explain the protocol adjustment. The helper still does not return
+an observed `sentRequestHeaders` list; input fields are not wire-order evidence. See
 [RFC 9113 section 8.2.3](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.3).
 
 ## Body buffering (released in 0.1.19)

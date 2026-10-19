@@ -59,13 +59,20 @@ func TestImportedHelloHandshake(t *testing.T) {
 		if protocol != expectedProtocol || !strings.Contains(note, "chrome-152") {
 			t.Fatal(protocol, note)
 		}
+		defer fingerprint.Unregister(in.Preset)
+		exactPreset, e := exactCookiePreset(in.Preset)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer fingerprint.Unregister(exactPreset)
+		assertOnlyCookiePolicyChanged(t, in.Preset, exactPreset)
 		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("hello")) }))
 		server.EnableHTTP2 = true
 		server.StartTLS()
 		defer server.Close()
 		roots := x509.NewCertPool()
 		roots.AddCert(server.Certificate())
-		transport := tr.NewTransportWithConfig(in.Preset, nil, &tr.TransportConfig{TLSOnly: true})
+		transport := tr.NewTransportWithConfig(exactPreset, nil, &tr.TransportConfig{TLSOnly: true})
 		defer transport.Close()
 		transport.SetProtocol(protocol)
 		transport.SetTLSVerify(&tr.TLSVerify{RootCAs: roots})

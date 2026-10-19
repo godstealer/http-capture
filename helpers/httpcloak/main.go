@@ -63,10 +63,19 @@ func execute(in Input) (map[string]any, error) {
 	if fingerprint.GetStrict(in.Preset) == nil {
 		return nil, fmt.Errorf("unsupported preset: %s", in.Preset)
 	}
+	originalPreset := in.Preset
 	customProtocol, customNote, err := applyClientHello(&in)
 	if err != nil {
 		return nil, err
 	}
+	if in.Preset != originalPreset {
+		defer fingerprint.Unregister(in.Preset)
+	}
+	transportPreset, err := exactCookiePreset(in.Preset)
+	if err != nil {
+		return nil, err
+	}
+	defer fingerprint.Unregister(transportPreset)
 	body, err := base64.StdEncoding.DecodeString(in.Request.Body)
 	if err != nil {
 		return nil, err
@@ -82,6 +91,13 @@ func execute(in Input) (map[string]any, error) {
 		}
 		pairs = append(pairs, fingerprint.HeaderPair{Key: h.Name, Value: string(value)})
 	}
+	protocol := customProtocol
+	if strings.HasPrefix(in.Request.URL, "http://") {
+		protocol = tr.ProtocolHTTP1
+	}
+	if protocol == tr.ProtocolHTTP1 {
+		pairs, _ = joinCookieFields(pairs)
+	}
 	var proxy *tr.ProxyConfig
 	if in.Proxy != nil {
 		if !strings.HasPrefix(in.Proxy.URL, "http://") && !strings.HasPrefix(in.Proxy.URL, "socks5://") {
@@ -89,13 +105,10 @@ func execute(in Input) (map[string]any, error) {
 		}
 		proxy = &tr.ProxyConfig{URL: in.Proxy.URL, Username: in.Proxy.Username, Password: in.Proxy.Password}
 	}
-	transport := tr.NewTransportWithConfig(in.Preset, proxy, &tr.TransportConfig{TLSOnly: true})
+	transport := tr.NewTransportWithConfig(transportPreset, proxy, &tr.TransportConfig{TLSOnly: true})
 	defer transport.Close()
 	// Explicit H2 for HTTPS, H1 for plaintext; no QUIC attempts or silent downgrade.
-	transport.SetProtocol(customProtocol)
-	if strings.HasPrefix(in.Request.URL, "http://") {
-		transport.SetProtocol(tr.ProtocolHTTP1)
-	}
+	transport.SetProtocol(protocol)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	var tlsDetails map[string]any
@@ -155,6 +168,11 @@ func execute(in Input) (map[string]any, error) {
 		tlsVersion = tlsDetails["version"]
 	}
 	notes := []string{"httpcloak preset: " + in.Preset, "httpcloak ExactHeaders enabled; response headers are parsed fields, not certified wire order"}
+	if response.Protocol == "h2" {
+		notes = append(notes, "httpcloak HTTP/2 Cookie fields follow the editor; automatic Cookie splitting is disabled")
+	} else if response.Protocol == "h1" {
+		notes = append(notes, "httpcloak HTTP/1.1 joins repeated Cookie fields with '; ' at the first Cookie position; original fields remain in the editor")
+	}
 	if customNote != "" {
 		notes = append(notes, customNote)
 	}

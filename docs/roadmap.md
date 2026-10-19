@@ -13,13 +13,15 @@
 - [x] 标准 JSON 包含偏好、集合环境、规则、上游和 HTTP MCP 定义，可选工作区、请求/变量内容与代码；专用代理密码、CA、控制令牌和 MCP Token 不迁移。
 - [x] SQLite 配置原子提交、会话及持久化 epoch 冻结，防旧窗口/旧 Store 回写；导入停止网络，完成后仅显示重启页，脚本/插件导入时禁用，MCP 权限重新确认。
 - [x] 上游代理元数据兼容迁移到 SQLite，导入重新生成代理 ID 并映射请求关联，避免错误读取本机已有密码。
-- [x] Cookie 请求头行旁新增拆分/合并入口；拆分保留原位置与启用状态，合并按原列表顺序只处理相同启用状态的 Cookie，不操作 Set-Cookie。
+- [x] Cookie 请求头行旁新增拆分/合并入口；拆分保留原位置与启用状态，合并按原列表顺序只处理相同启用状态的 Cookie，不操作 Set-Cookie。原生/httpcloak H2 保留编辑后的字段边界，httpcloak 仅关闭自动拆分、不改变 TLS 预设；原生/httpcloak H1 按协议合并。
 - [ ] 加密迁移与自动合并尚未实现；首版是未加密 JSON、按类别替换，16 MiB 上限，需要重启。
 - [ ] 安装版 AI 连接、跨设备迁移、原生保存/重启和真实升级等手工验收仍保留在[验收清单](acceptance-2026-10-19.md)。
 
 本轮本地自动验证已通过：内核单元/集成回归（既有系统凭据/TUN 实机项仍忽略）、MCP 37 项、传输层 12 项、服务接口 9 项、真实 stdio 子进程 3 项、桌面和服务编译、完整前端套件/TypeScript/生产构建及发布验签 34 项。跨平台源检查与安装包发布证据将在完成后补入，手工验收仍不勾选。
 
 追加的 Cookie 拆分/合并已通过纯函数与真实组件回归，完整前端套件、TypeScript 和生产构建通过；隔离浏览器已点击验证拆分、合并及窄窗口排版，未操作用户现有抓包工作区。安装版真实发送与跨平台交互继续按验收清单保留。
+
+httpcloak 发送修复通过完整 Go 11 项顶层回归，包含 Chrome/Firefox 的单条/多条 Cookie 实际 HPACK 字段、H1 原始请求收包、导入 ClientHello 后继承及并发隔离；验证预设除 Cookie 策略与内部标识外保持相同，未信任证书仍拒绝。此证据不替代安装版网站业务验收。
 
 ## 上一正式版（2026-10-19，0.1.23）
 
@@ -199,11 +201,11 @@ H1 Reqable 对照包含用户 Raw 截图及源站记录，固定样例一致；H
 | --- | --- | --- |
 | 架构 | 前端、Tauri、HTTP 服务、core 分离，共用 core | 完整 HTTP/IPC 契约覆盖、Rust → TS 类型生成（部分 HTTP 契约已测试） |
 | HTTP/HTTPS 抓包 | HTTP 显式代理、CONNECT、动态站点证书 MITM、上游证书校验；可选本机/所有 IPv4 网卡/指定 IP 监听 | 已支持显式 CONNECT 域名直通；Windows/GNOME 系统代理接管/恢复已实现，macOS/其他桌面适配与实际切换验收待做 |
-| HTTP/1 | 原始头字节、有序字段、大小写、交错重复字段保存与转发；原生路径合并分拆 Cookie | httpcloak 明文 H1 的分拆 Cookie 合并待补；连接复用、完整 trailers；不保证空白和分块边界一致 |
+| HTTP/1 | 原始头字节、有序字段、大小写、交错重复字段保存与转发；原生/httpcloak 路径合并分拆 Cookie | 连接复用、完整 trailers；不保证空白和分块边界一致 |
 | HTTP/2 | 上下游 ALPN 协调、多路流捕获、普通头与伪头保序及测试；原生 H2 → H1 Cookie 合并 | SETTINGS/优先级控制、HPACK/帧级控制、响应转发顺序保真 |
 | HTTP/3（部分） | 主动发送（含 SOCKS5 UDP）、指定目标反向代理、动态 SNI 入口及实验 TUN GUI | TUN 实机接管未验收且暂缓；QPACK 原始顺序、Alt-Svc、CONNECT-UDP |
 | 流式协议 | 原生 Auto/H1/H2 SSE 实时转发、事件视图、取消保留正文；WS/WSS Upgrade 抓包、双向帧查看与停止 | 已支持 WS 分片重组/permessage-deflate 解码；主动连接/消息编辑重发已支持（Native H1）；H3/浏览器引擎 SSE、压缩流增量事件解析、大文件流式存储；边界见协议文档 |
-| 发送引擎 | 独立接口；Auto/native/h2/h3/wreq/httpcloak 按请求选择；Go IPC 已接入 | wreq 需可选构建，httpcloak 需 helper；httpcloak 已随安装包发布，三平台实机验证待补 |
+| 发送引擎 | 独立接口；Auto/native/h2/h3/wreq/httpcloak 按请求选择；Go IPC 已接入 | wreq 需可选构建，httpcloak 需 helper；httpcloak 未提供 UA 时补 Go UA 的行为待处理，三平台实机验证待补 |
 | ClientHello（部分） | 原生 TLS 参数、wreq/httpcloak 浏览器预设、UA/显式版本选择；httpcloak TCP Hex 模板导入 | 完整扩展结构/顺序编辑和浏览器行为保真待做；模板重建密钥/SNI，非原始密文重放；常规包不含 wreq |
 | TLS 详情 | 部分客户端握手字段、协商协议/密码套件、证书链、证书下载 | 完整扩展展示；QUIC、wreq 等引擎详情不齐 |
 | 编辑与 Replay | 多标签、方法/URL/有序头/正文编辑、重放、cURL 导入导出；头部启停、Raw/DevTools 文本批量编辑；独立发送/并行/取消 | 已补 URL 编码表单和 Multipart 文件构造；全链路大文件低内存待做 |

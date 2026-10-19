@@ -103,7 +103,10 @@ func applyClientHello(in *Input) (tr.Protocol, string, error) {
 	preset.RawBluntMimicry = false
 	preset.RawPermuteExtensions = false
 	base := in.Preset
-	in.Preset = "capture-custom-hello"
-	fingerprint.Register(in.Preset, preset)
+	name, err := registerInternalPreset("client-hello", preset)
+	if err != nil {
+		return fail(err.Error())
+	}
+	in.Preset = name
 	return protocol, fmt.Sprintf("TLS: imported ClientHello SHA256=%x; HTTP settings: %s", sha256.Sum256(raw), base) + "; fresh keys/SNI generated, not byte-for-byte replay", nil
 }
