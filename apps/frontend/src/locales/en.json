@@ -1,4 +1,11 @@
 {
+  "拆分 Cookie {v0}": "Split Cookie {v0}",
+  "合并 Cookie {v0}": "Merge Cookie {v0}",
+  "拆分 Cookie {v0}：按分号拆为多行，保留启用状态；需要多个有效键值对。": "Split Cookie {v0}: split semicolon-separated pairs into rows and keep their enabled state; requires multiple valid pairs.",
+  "合并 Cookie {v0}：至少两行有效 Cookie；仅合并相同启用状态。": "Merge Cookie {v0}: requires at least two valid Cookie rows with the same enabled state.",
+  "已将第 {v0} 行 Cookie 拆分为 {v1} 行，启用状态保持不变。": "Split Cookie row {v0} into {v1} rows and kept their enabled state.",
+  "已合并 {v0} 行同状态 Cookie，启用状态保持不变。": "Merged {v0} Cookie rows with the same enabled state and kept that state.",
+  "Cookie 可拆分或合并；合并仅处理相同启用状态。": "Split or merge Cookie fields; merging only combines rows with the same enabled state.",
   "请求类型": "Request type",
   "解密选中应用的 H3（QUIC / UDP 443）": "Decrypt selected applications' H3 (QUIC / UDP 443)",
   "H3 抓包要求客户端信任 CA，且握手包含可见 SNI；暂不支持 ECH、非 443 端口和跨域连接复用。两项均关闭时 UDP 直连。已建立连接需重新建立；停止显式代理不会停止 TUN。": "H3 capture requires a trusted capture CA and visible SNI. ECH, ports other than 443, and cross-origin connection reuse are not supported yet. UDP connects directly when both options are off. Reconnect existing connections; stopping the explicit proxy does not stop TUN.",

@@ -21,4 +21,12 @@
 .ordered-headers .row-actions button { display: grid; place-items: center; width: 25px; height: 30px; }
 .ordered-headers .header-disabled input:not([type='checkbox']) { opacity: .55; }
 .ordered-headers .header-disabled .row-number { color: var(--field-placeholder); }
+.ordered-headers .header-name-cell { display: flex; align-items: center; gap: 4px; min-width: 0; }
+:root .app-shell .ordered-headers .header-name-cell input { flex: 1 1 auto; width: 0; min-width: 0; }
+.ordered-headers .cookie-header-actions { display: flex; flex: 0 0 auto; gap: 2px; }
+.ordered-headers .cookie-header-actions button { display: grid; place-items: center; flex: 0 0 23px; width: 23px; height: 28px; min-height: 28px; padding: 0; border: 1px solid var(--field-border); border-radius: 4px; background: var(--field-bg); color: var(--field-text); }
+.ordered-headers .cookie-header-actions button[aria-disabled='true'] { opacity: .4; cursor: default; }
+.ordered-headers .cookie-header-actions button[aria-disabled='true']:hover { border-color: var(--field-border); color: var(--field-text); }
+.ordered-headers .cookie-header-actions button:focus-visible { outline: 2px solid var(--field-focus); outline-offset: 2px; }
 .ordered-headers .field-note { display: flex; align-items: center; gap: 5px; padding: 0 16px 10px; line-height: 1.5; }
+.ordered-headers .cookie-header-note { color: var(--field-placeholder); font-size: 12px; }

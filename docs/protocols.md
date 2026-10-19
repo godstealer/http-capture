@@ -10,7 +10,23 @@ The CONNECT proxy first negotiates upstream TLS using the client's supported HTT
 currently have a 360-second lifetime. Ordinary HTTP bodies no longer have the old fixed 8 MiB rejection, but still have memory and timeout limits; this is not an end-to-end low-memory guarantee. Trailers,
 extended CONNECT and server push are not supported. WebSocket uses HTTP/1 Upgrade as described below.
 
-## Body buffering after 0.1.16 (not yet released)
+## Cookie fields
+
+HTTP/2 permits multiple Cookie fields, each containing one or more cookie-pairs.
+They are semantically equivalent to a single field joined with `; `. Native H2
+keeps separate input fields without proactively splitting a single value;
+the httpcloak Chrome/Firefox presets may split values during HPACK encoding.
+Input fields and actual sent fields therefore need to be compared separately.
+The header editor provides split/merge buttons beside Cookie fields; merging
+only combines fields with the same enabled/disabled state, and never changes
+Set-Cookie fields. Splitting preserves duplicate keys and does not decode values.
+
+Before native HTTP/1.1 forwarding, split Cookie fields are joined with `; ` at
+the first Cookie position. The httpcloak plaintext HTTP/1 path still writes
+separate Cookie fields; normalizing that path remains a roadmap item. See
+[RFC 9113 section 8.2.3](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.3).
+
+## Body buffering (released in 0.1.19)
 
 Ordinary native H2 capture uploads and responses, H3 upstream responses, and
 QUIC capture uploads receive data into a handle-owned body spool. Up to 64 KiB
