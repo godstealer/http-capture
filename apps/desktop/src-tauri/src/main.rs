@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app_update;
 mod mcp_commands;
+mod config_migration_commands;
 use capture_core::{model::{Flow, ProxyStatus, RequestDraft}, CaptureRuntime, Engine};
 use capture_mcp::{server::ServerManager, client::ClientManager};
 use std::sync::{Arc, atomic::Ordering};
@@ -230,6 +231,25 @@ async fn save_request_workspace(workspace:capture_core::store::Workspace,state:S
  let engine=state.engine.clone();tauri::async_runtime::spawn_blocking(move||engine.store.save_workspace(workspace)).await.map_err(|e|e.to_string())?.map_err(|e|e.to_string())
 }
 fn main() {
+    // Branch before GTK/WebKit/Tauri and before Engine::open. A configured AI
+    // client launches this executable as a stdio adapter to the running app.
+    match capture_mcp::bridge::stdio_options(std::env::args_os().skip(1)) {
+        Ok(Some(options))=>{
+            let outcome=tokio::runtime::Builder::new_multi_thread().enable_all().build()
+                .map_err(|error|error.to_string()).and_then(|runtime|{
+                    let outcome=runtime.block_on(capture_mcp::bridge::run_stdio(options));
+                    // Tokio's stdin owns an uncancellable blocking read. AI
+                    // clients can keep that pipe open after the app stops;
+                    // never wait for its worker during bridge process exit.
+                    runtime.shutdown_background();
+                    outcome.map_err(|error|error.to_string())
+                });
+            if let Err(error)=outcome {eprintln!("MCP stdio: {error}");std::process::exit(1);}
+            return;
+        }
+        Ok(None)=>{}
+        Err(error)=>{eprintln!("MCP stdio: {error}");std::process::exit(1);}
+    }
     // Must run before GTK/WebKit initialization and before worker threads exist.
     #[cfg(target_os = "linux")]
     {
@@ -284,7 +304,7 @@ fn main() {
             app.manage(AppState { runtime, mcp_server, mcp_clients });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![mcp_commands::mcp_status,mcp_commands::mcp_configure,mcp_commands::mcp_connection_info,mcp_commands::mcp_clients,mcp_commands::mcp_save_client,mcp_commands::mcp_remove_client,mcp_commands::mcp_connect_client,mcp_commands::mcp_disconnect_client,mcp_commands::mcp_client_tools,mcp_commands::mcp_call_tool,mcp_commands::plugins_validate,app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![config_migration_commands::config_status,config_migration_commands::config_export,config_migration_commands::config_preview,config_migration_commands::config_import,config_migration_commands::config_recovery,config_migration_commands::config_restart,config_migration_commands::config_save_file,mcp_commands::workspace_revisions,mcp_commands::mcp_status,mcp_commands::mcp_configure,mcp_commands::mcp_connection_info,mcp_commands::mcp_clients,mcp_commands::mcp_save_client,mcp_commands::mcp_remove_client,mcp_commands::mcp_connect_client,mcp_commands::mcp_disconnect_client,mcp_commands::mcp_client_tools,mcp_commands::mcp_call_tool,mcp_commands::plugins_validate,app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| { if let tauri::RunEvent::Exit = event {

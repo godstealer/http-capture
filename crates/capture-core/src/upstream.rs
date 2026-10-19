@@ -42,8 +42,8 @@ impl CredentialStore for SystemCredentials {
 #[derive(Serialize,Deserialize)]
 struct StoredCredential { url:String, username:String, password:String }
 
-struct Profiles { path:Option<PathBuf>, items:Vec<Profile>, credentials:Arc<dyn CredentialStore> }
-impl Default for Profiles {fn default()->Self{Self{path:None,items:vec![],credentials:Arc::new(SystemCredentials)}}}
+struct Profiles { path:Option<PathBuf>, store:Option<Arc<crate::store::Store>>, items:Vec<Profile>, credentials:Arc<dyn CredentialStore> }
+impl Default for Profiles {fn default()->Self{Self{path:None,store:None,items:vec![],credentials:Arc::new(SystemCredentials)}}}
 impl Profiles {
  fn commit(&self,items:&[Profile],change:Option<(&str,Option<&str>)>)->Result<()> {
   let previous=if let Some((id,value))=change {
@@ -68,6 +68,7 @@ impl Profiles {
  }
 
  fn persist(&self,items:&[Profile])->Result<()> {
+  if let Some(store)=&self.store {return store.save_setting("upstream.profiles.v1",&items);}
   if let Some(path)=&self.path { let temporary=path.with_extension("tmp"); std::fs::write(&temporary,serde_json::to_vec_pretty(items)?)?;std::fs::rename(&temporary,path)?; } Ok(())
  }
 }
@@ -82,6 +83,17 @@ impl UpstreamState {
         let path=directory.join("upstream-profiles.json");
         let items=if path.exists(){serde_json::from_slice(&std::fs::read(&path)?).context("读取代理列表失败")?}else{vec![]};
         let mut book=Profiles{path:Some(path),items,..Default::default()};book.restore_passwords();
+        Ok(Self{profiles:Mutex::new(book),..Default::default()})
+    }
+    /// SQLite is authoritative for new engines. Import the legacy metadata once,
+    /// preserving IDs so existing keyring URL/username matching remains valid.
+    pub fn open_with_store(directory:&Path,store:Arc<crate::store::Store>)->Result<Self> {
+        let items=if let Some(items)=store.setting::<Vec<Profile>>("upstream.profiles.v1")? {items} else {
+            let path=directory.join("upstream-profiles.json");
+            let items:Vec<Profile>=if path.exists(){serde_json::from_slice(&std::fs::read(path)?).context("读取代理列表失败")?}else{vec![]};
+            store.save_setting("upstream.profiles.v1",&items)?;items
+        };
+        let mut book=Profiles{store:Some(store),items,..Default::default()};book.restore_passwords();
         Ok(Self{profiles:Mutex::new(book),..Default::default()})
     }
     pub fn list_profiles(&self)->Vec<ProfileView>{let mut book=self.profiles.lock().unwrap();book.restore_passwords();book.items.iter().map(|p|ProfileView{id:p.id.clone(),name:p.name.clone(),url:p.url.clone(),username:p.username.clone(),auth_enabled:p.auth_enabled,needs_password:p.auth_enabled&&p.password.is_none(),remember_password:p.remember_password,credential_error:p.credential_error.clone()}).collect()}
@@ -244,10 +256,10 @@ mod credential_tests {
  #[test]
  fn credentials_restore_remove_and_rollback_without_plaintext_on_disk(){
   let dir=tempfile::tempdir().unwrap();let path=dir.path().join("upstream-profiles.json");let vault=Arc::new(Vault::default());
-  let state=UpstreamState{profiles:Mutex::new(Profiles{path:Some(path.clone()),items:vec![],credentials:vault.clone()}),..Default::default()};
+  let state=UpstreamState{profiles:Mutex::new(Profiles{path:Some(path.clone()),store:None,items:vec![],credentials:vault.clone()}),..Default::default()};
   state.save_profile(input(None,true,Some("first-secret"))).unwrap();let id=state.list_profiles()[0].id.clone();
   assert!(!std::fs::read_to_string(&path).unwrap().contains("first-secret"));assert!(!serde_json::to_string(&state.list_profiles()).unwrap().contains("first-secret"));
-  let reload=||UpstreamState{profiles:Mutex::new(Profiles{path:Some(path.clone()),items:serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap(),credentials:vault.clone()}),..Default::default()};
+  let reload=||UpstreamState{profiles:Mutex::new(Profiles{path:Some(path.clone()),store:None,items:serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap(),credentials:vault.clone()}),..Default::default()};
   let reopened=reload();assert!(!reopened.list_profiles()[0].needs_password);reopened.select_profile(Some(id.clone())).unwrap();assert_eq!(reopened.snapshot().unwrap().password,"first-secret");
   state.save_profile(input(Some(id.clone()),true,Some("updated-secret"))).unwrap();assert_eq!(reload().list_profiles()[0].remember_password,true);
   let old=vault.read(&id).unwrap();state.profiles.lock().unwrap().path=Some(dir.path().join("missing/config.json"));

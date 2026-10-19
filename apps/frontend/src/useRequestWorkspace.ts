@@ -8,7 +8,7 @@ export interface RequestEditor { grpcDraft?: GrpcDraft; savedRequestId?: string;
 interface Workspace { editors: RequestEditor[]; activeEditor: string; revision: number }
 const empty = JSON.stringify({ editors: [], activeEditor: '' });
 
-export function useRequestWorkspace() {
+export function useRequestWorkspace(suspended=false) {
   const [editors, applyEditors] = useState<RequestEditor[]>([]);
   const [activeEditor, applyActiveEditor] = useState('');
   const [ready, setReady] = useState(false);
@@ -19,6 +19,7 @@ export function useRequestWorkspace() {
   const alive = useRef(true);
   const saving = useRef<Promise<boolean> | null>(null);
   const recovery = useRef<Promise<boolean> | null>(null);
+  const syncing = useRef(false);
   // Update the authoritative local snapshot synchronously. A keystroke during
   // an awaited recovery must be included even before React commits its render.
   const setEditors=useCallback((action:SetStateAction<RequestEditor[]>)=>{
@@ -114,8 +115,24 @@ export function useRequestWorkspace() {
     })();
     recovery.current=operation;void operation.finally(()=>{recovery.current=null});return operation;
   },[]);
+  const synchronize=useCallback(async(remoteRevision:number)=>{
+    const state=persistence.current;
+    if(suspended||!state.ready||state.running||state.recovering||state.conflict||syncing.current||remoteRevision<=state.revision)return;
+    if(state.latest!==state.saved){state.conflict=true;setConflict(true);setError(true);setMessage('工作区已在其他窗口修改，当前草稿已保留；请合并恢复后继续保存');return}
+    const revision=state.revision,saved=state.saved;
+    syncing.current=true;
+    try{
+      const remote=await invoke<Workspace>('request_workspace');
+      // Input and CAS saves may race with this read. Never replace newer local
+      // state; its next save/recovery will reconcile the remote revision.
+      if(!alive.current||state.running||state.recovering||state.conflict||state.revision!==revision||state.saved!==saved||state.latest!==saved||remote.revision<=revision)return;
+      const local={editors:remote.editors,activeEditor:remote.activeEditor},json=JSON.stringify(local);
+      Object.assign(state,{revision:remote.revision,local,latest:json,saved:json});
+      applyEditors(local.editors);applyActiveEditor(local.activeEditor);setError(false);setMessage('草稿已自动保存');
+    }finally{syncing.current=false}
+  },[suspended]);
   useLayoutEffect(() => {
-    if (!ready) return;
+    if (!ready||suspended) return;
     const state = persistence.current;
     if(state.recovering)return;
     if(state.conflict){setError(true);setMessage('工作区已在其他窗口修改，当前草稿已保留；请合并恢复后继续保存');return}
@@ -126,7 +143,7 @@ export function useRequestWorkspace() {
     setMessage('草稿有未保存的修改');
     const timer = setTimeout(() => void flush(), 400);
     return () => clearTimeout(timer);
-  }, [editors, activeEditor, ready, flush]);
+  }, [editors, activeEditor, ready, flush, suspended]);
   useEffect(() => {
     const leave = (event: BeforeUnloadEvent) => {
       if (persistence.current.latest !== persistence.current.saved) { event.preventDefault(); event.returnValue = ''; }
@@ -134,5 +151,5 @@ export function useRequestWorkspace() {
     window.addEventListener('beforeunload', leave);
     return () => window.removeEventListener('beforeunload', leave);
   }, []);
-  return { editors, setEditors, activeEditor, setActiveEditor, ready, message, error, conflict, recovering, recover, retry: flush };
+  return { editors, setEditors, activeEditor, setActiveEditor, ready, message, error, conflict, recovering, recover, synchronize, retry: flush };
 }

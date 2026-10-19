@@ -4,6 +4,7 @@ use serde::{Serialize, Deserialize};
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 use tokio::sync::oneshot;
 use base64::Engine as _;
+use sha2::{Digest, Sha256};
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub struct Config { pub request: bool, pub response: bool, pub scope: String, #[serde(default)] pub rules: Vec<Rule> }
@@ -39,6 +40,10 @@ pub(crate) fn matches_rules(rules:&[Rule],flow:&Flow)->bool {
 #[derive(Clone, Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct Item { pub id: String, pub stage: String, pub flow: Flow }
+/// Small projection for automation: no headers, script state or body allocation.
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct PendingSummary {pub id:String,pub stage:String,pub request_id:String,pub source:String,pub method:String,pub url:String,pub status:Option<u16>,pub started_at:u64}
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub struct Decision { pub id: String, pub action: String, pub request: Option<RequestDraft>, pub response: Option<CapturedResponse> }
@@ -58,23 +63,31 @@ impl Interceptor {
  }
 
  pub fn snapshot(&self) -> Snapshot { let s=self.inner.lock().unwrap(); Snapshot { hits:s.hits.clone(), config:s.config.clone(), items:s.items.values().map(|x|x.0.clone()).collect() } }
- pub fn configure(&self, mut config:Config) -> Result<()> {
-  ensure!(["all","capture","replay"].contains(&config.scope.as_str()), "无效的拦截范围");
-  ensure!(config.rules.len()<=32,"最多支持 32 条规则");
-  for r in &mut config.rules {
-   ensure!(r.nonempty(),"规则至少需要一个条件");
-   ensure!(r.group.len()<=128 && r.url_contains.len()<=2048 && r.host.len()<=253 && r.method.len()<=32 && r.header_name.len()<=256 && r.header_contains.len()<=2048,"规则条件过长");
-   r.compiled_url = if r.url_regex && !r.url_contains.is_empty() {
-    Some(regex::RegexBuilder::new(&r.url_contains).size_limit(1024*1024).build().map_err(|e|anyhow::anyhow!("URL 正则表达式无效：{e}"))?)
-   } else { None };
-   ensure!(r.status.is_none_or(|v|(100..=599).contains(&v)),"无效状态码");
-   ensure!(r.header_contains.is_empty() || !r.header_name.is_empty(),"请填写请求头名称");
-  }
-  let mut s=self.inner.lock().unwrap(); if let Some(store)=&self.store{store.save_setting("interception.v1",&config)?;}s.hits=vec![0;config.rules.len()];s.config=config;
+ pub fn pending_summaries(&self,offset:usize,limit:usize)->(usize,Vec<PendingSummary>){
+  let state=self.inner.lock().unwrap();let items=state.items.values().skip(offset).take(limit.min(64)).map(|(item,_)|PendingSummary{id:item.id.clone(),stage:item.stage.clone(),request_id:item.flow.id.clone(),source:item.flow.source.chars().take(32).collect(),method:item.flow.request.method.chars().take(32).collect(),url:item.flow.request.url.chars().take(8192).collect(),status:item.flow.response.as_ref().map(|r|r.status),started_at:item.flow.started_at}).collect();(state.items.len(),items)
+ }
+ /// Clone only the immutable shared body handle for the requested pending item.
+ pub fn pending_body(&self,id:&str,direction:&str)->Result<SharedBody>{
+  let state=self.inner.lock().unwrap();let (item,_)=state.items.get(id).ok_or_else(||anyhow::anyhow!("Interception ended or timed out"))?;
+  match direction {"request"=>Ok(item.flow.request.body_base64.clone()),"response"=>Ok(item.flow.response.as_ref().ok_or_else(||anyhow::anyhow!("No response is available at the request breakpoint"))?.body_base64.clone()),_=>bail!("direction must be request or response")}
+ }
+ /// Read the configuration and its content version under the same lock. Hit counters
+ /// and pending traffic do not change this version.
+ pub fn config_versioned(&self)->(Config,String) {
+  let state=self.inner.lock().unwrap();(state.config.clone(),config_version(&state.config))
+ }
+ pub fn configure(&self, config:Config) -> Result<()> {self.configure_inner(config,None).map(|_|())}
+ /// Compare and persist under the same lock, including writes from the desktop UI.
+ pub fn configure_if_version(&self,config:Config,expected_version:&str)->Result<String>{self.configure_inner(config,Some(expected_version))}
+ fn configure_inner(&self, mut config:Config,expected_version:Option<&str>) -> Result<String> {
+  validate_and_compile(&mut config)?;
+  let mut s=self.inner.lock().unwrap();
+  if let Some(expected)=expected_version {ensure!(expected==config_version(&s.config),"Interception configuration changed; read get_interception again before applying changes");}
+  if let Some(store)=&self.store{store.save_setting("interception.v1",&config)?;}s.hits=vec![0;config.rules.len()];s.config=config;
   // Disabling a breakpoint releases its waiting requests unchanged.
   let ids:Vec<_>=s.items.iter().filter(|(_, (i,_))| !enabled(&s.config,&i.stage,&i.flow.source) || !matches_rules(&s.config.rules,&i.flow)).map(|(id,_)|id.clone()).collect();
   for id in ids { if let Some((_,tx))=s.items.remove(&id) { let _=tx.send(Decision{id,action:"continue".into(),request:None,response:None}); } }
-  Ok(())
+  Ok(config_version(&s.config))
  }
  pub fn resolve(&self, mut d:Decision)->Result<()> {
   let mut s=self.inner.lock().unwrap(); let (item,_) = s.items.get(&d.id).ok_or_else(||anyhow::anyhow!("拦截已结束或超时"))?;
@@ -107,6 +120,22 @@ impl Interceptor {
   if d.action=="abort" { bail!("用户终止了请求"); } Ok(Some(d))
  }
 }
+/// Validate imported breakpoint conditions without persisting them or releasing
+/// any waiting requests. The caller's regex cache is left unchanged.
+pub fn validate_config(config:&Config)->Result<()>{let mut candidate=config.clone();validate_and_compile(&mut candidate)}
+fn validate_and_compile(config:&mut Config)->Result<()>{
+ ensure!(["all","capture","replay"].contains(&config.scope.as_str()), "无效的拦截范围");
+ ensure!(config.rules.len()<=32,"最多支持 32 条规则");
+ for r in &mut config.rules {
+  ensure!(r.nonempty(),"规则至少需要一个条件");
+  ensure!(r.group.len()<=128 && r.url_contains.len()<=2048 && r.host.len()<=253 && r.method.len()<=32 && r.header_name.len()<=256 && r.header_contains.len()<=2048,"规则条件过长");
+  r.compiled_url=if r.url_regex&&!r.url_contains.is_empty(){Some(regex::RegexBuilder::new(&r.url_contains).size_limit(1024*1024).build().map_err(|e|anyhow::anyhow!("URL 正则表达式无效：{e}"))?)}else{None};
+  ensure!(r.status.is_none_or(|v|(100..=599).contains(&v)),"无效状态码");
+  ensure!(r.header_contains.is_empty()||!r.header_name.is_empty(),"请填写请求头名称");
+ }
+ Ok(())
+}
+fn config_version(config:&Config)->String {format!("{:x}",Sha256::digest(serde_json::to_vec(config).expect("serializable interception configuration")))}
 fn enabled(c:&Config,stage:&str,source:&str)->bool { (c.scope=="all" || c.scope==source) && if stage=="request" {c.request} else {c.response} }
 
 #[cfg(test)] mod rule_tests {
@@ -129,6 +158,20 @@ fn enabled(c:&Config,stage:&str,source:&str)->bool { (c.scope=="all" || c.scope=
   assert_eq!(interceptor.snapshot().hits,vec![1,0]);
   config.rules[1].disabled=false;interceptor.configure(config).unwrap();
   assert_eq!(task.await.unwrap().unwrap().action,"continue");assert!(interceptor.snapshot().items.is_empty());
+ }
+
+ #[tokio::test] async fn import_validation_neither_reconfigures_nor_releases_waiting_requests(){
+  let interceptor=std::sync::Arc::new(Interceptor::default());
+  let flow:Flow=serde_json::from_value(serde_json::json!({"id":"validation","parentId":null,"startedAt":0,"durationMs":0,"source":"capture","request":{"method":"GET","url":"https://example.test/api","headers":[],"bodyBase64":""},"response":null,"error":null,"notes":[]})).unwrap();
+  interceptor.configure(Config{request:true,response:false,scope:"all".into(),rules:vec![Rule{host:"example.test".into(),..Default::default()}]}).unwrap();
+  let expected=interceptor.config_versioned().1;
+  let cloned=interceptor.clone();let task=tokio::spawn(async move{cloned.pause(&flow,"request").await.unwrap()});
+  tokio::time::timeout(Duration::from_secs(2),async{while interceptor.snapshot().items.is_empty(){tokio::task::yield_now().await}}).await.unwrap();
+  // Applying this candidate would release the waiter; a preview must not.
+  let mut candidate=Config{request:false,response:false,scope:"all".into(),rules:vec![Rule{url_regex:true,url_contains:"^https://other[.]test/".into(),..Default::default()}]};
+  validate_config(&candidate).unwrap();assert!(candidate.rules[0].compiled_url.is_none());assert_eq!(interceptor.config_versioned().1,expected);
+  candidate.rules[0].url_contains="[".into();assert!(validate_config(&candidate).is_err());assert_eq!(interceptor.snapshot().items.len(),1);assert!(!task.is_finished());
+  let id=interceptor.snapshot().items[0].id.clone();interceptor.resolve(Decision{id,action:"continue".into(),request:None,response:None}).unwrap();assert_eq!(task.await.unwrap().unwrap().action,"continue");
  }
 
 }

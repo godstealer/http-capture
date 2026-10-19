@@ -23,6 +23,23 @@ impl Scripts {
   ensure!(serde_json::to_vec(&self.variables)?.len()<=64*1024,"脚本变量最多 64 KiB"); Ok(())
  }
 }
+/// Parse both hooks without invoking either hook or registering any HTTP helpers.
+pub fn validate_scripts(scripts:&Scripts)->Result<()> {
+ scripts.validate()?;
+ let runtime=Runtime::new()?;runtime.set_memory_limit(64*1024*1024);runtime.set_max_stack_size(256*1024);
+ let deadline=Instant::now()+Duration::from_secs(2);
+ runtime.set_interrupt_handler(Some(Box::new(move||Instant::now()>deadline)));
+ let context=Context::full(&runtime)?;
+ context.with(|ctx|->Result<()>{
+  for (stage,source) in [("before",&scripts.before),("after",&scripts.after)] {
+   ctx.globals().set("__scriptSource",source.as_str())?;
+   ctx.eval::<(),_>("new Function('\"use strict\";\\n' + __scriptSource); void 0;")
+    .catch(&ctx).map_err(|error|anyhow::anyhow!("Global script {stage} syntax: {error}"))?;
+  }
+  Ok(())
+ })
+}
+fn scripts_version(scripts:&Scripts)->String {format!("{:x}",Sha256::digest(serde_json::to_vec(scripts).expect("serializable scripts")))}
 pub struct ScriptState { store:Option<Arc<crate::store::Store>>, capture: Mutex<(Scripts,u64)>, slots: Arc<tokio::sync::Semaphore> }
 impl Default for ScriptState { fn default()->Self {Self{store:None,capture:Mutex::new((Scripts::default(),0)),slots:Arc::new(tokio::sync::Semaphore::new(4))}} }
 impl ScriptState {
@@ -32,7 +49,14 @@ impl ScriptState {
  }
 
  pub fn snapshot(&self)->(Scripts,u64){self.capture.lock().unwrap().clone()}
+ pub fn snapshot_versioned(&self)->(Scripts,String){let state=self.capture.lock().unwrap();(state.0.clone(),scripts_version(&state.0))}
  pub fn configure(&self,s:Scripts)->Result<()> {s.validate()?;let mut current=self.capture.lock().unwrap();if let Some(store)=&self.store{store.save_setting("capture-scripts.v1",&s)?;}current.0=s;current.1+=1;Ok(())}
+ /// Content comparison includes variable changes committed by running scripts.
+ pub fn configure_if_version(&self,s:Scripts,expected_version:&str)->Result<String>{
+  s.validate()?;let mut current=self.capture.lock().unwrap();
+  ensure!(expected_version==scripts_version(&current.0),"Global scripts changed; read get_global_scripts again before applying changes");
+  if let Some(store)=&self.store{store.save_setting("capture-scripts.v1",&s)?;}current.0=s;current.1+=1;Ok(scripts_version(&current.0))
+ }
  pub fn commit_variables(&self,revision:u64,before:&BTreeMap<String,String>,after:&BTreeMap<String,String>)->Result<()> {
   let mut current=self.capture.lock().unwrap();if current.1!=revision{return Ok(());}
   let mut next=current.0.clone();

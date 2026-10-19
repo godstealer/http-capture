@@ -1,6 +1,6 @@
 .mcp-page { flex: 1; min-height: 0; overflow: auto; padding: 28px clamp(18px, 3vw, 44px) 44px; color: var(--ui-text); }
 .mcp-page > * { max-width: 1240px; margin-left: auto; margin-right: auto; }
-.mcp-page-heading { margin-bottom: 22px; }
+.mcp-page-heading { display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px; }
 .mcp-page-heading h1 { display:flex;align-items:center;gap:10px;font-size:22px;margin:0 0 8px; }
 .mcp-page p { line-height:1.7; }
 .mcp-page-heading p,.mcp-server-heading p,.mcp-connection p,.mcp-page-hint { color:var(--ui-muted);font-size:12px;margin:8px 0; }
@@ -35,3 +35,33 @@
 .mcp-tool-list > div { display:flex;flex-wrap:wrap;gap:8px;margin-top:12px; }
 .mcp-tool-list code { padding:6px 8px;border:1px solid var(--ui-border);border-radius:5px; }
 @media(max-width:800px) { .mcp-server-settings { grid-template-columns:1fr;gap:18px; }.mcp-server-panel { padding:18px; } }
+.mcp-quick-start { margin-bottom:20px;padding:18px 22px;border:1px solid var(--ui-border);border-left:3px solid var(--ui-accent);border-radius:var(--skin-card-radius,10px);background:var(--ui-surface);font-size:12px; }
+.mcp-quick-start > div { display:flex;align-items:center;gap:8px;color:var(--ui-accent); }
+.mcp-quick-start strong { font-size:13px; }
+.mcp-quick-start ol { padding-left:22px;margin:12px 0 8px;line-height:1.8; }
+.mcp-quick-start li+li { margin-top:5px; }
+.mcp-quick-start p { margin:8px 0 0;color:var(--ui-muted); }
+.mcp-help-dialog { box-sizing:border-box;width:min(960px,calc(var(--ui-viewport-width,100vw) - 32px));max-width:none;max-height:calc(var(--ui-viewport-height,100dvh) - 32px);padding:0;border:1px solid var(--ui-border);border-radius:var(--skin-card-radius,14px);background:var(--ui-surface);color:var(--ui-text);box-shadow:var(--ui-shadow);overflow:hidden; }
+.mcp-help-dialog[open] { display:flex;flex-direction:column; }
+.mcp-help-dialog::backdrop { background:color-mix(in srgb,var(--ui-text) 35%,transparent); }
+.mcp-help-dialog header { display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px 16px;border-bottom:1px solid var(--ui-border); }
+.mcp-help-dialog h2 { display:flex;align-items:center;gap:9px;font-size:19px;margin:0; }
+.mcp-help-dialog header p { margin:8px 0 0;font-size:12px;line-height:1.6;color:var(--ui-muted); }
+.mcp-help-document { min-height:0;margin:0;padding:20px 24px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;font:13px/1.9 Consolas,'SFMono-Regular',monospace;background:var(--ui-surface-alt); }
+.mcp-help-dialog footer { display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:10px;padding:14px 24px;border-top:1px solid var(--ui-border); }
+.mcp-help-dialog footer span { flex:1 1 160px;color:var(--ui-muted);font-size:12px; }
+.mcp-help-dialog footer [role=alert] { color:var(--ui-danger); }
+.mcp-help-dialog .button { display:inline-flex;align-items:center;gap:7px;padding:8px 12px; }
+.mcp-setup,.mcp-incoming-clients { margin-top:24px;padding-top:22px;border-top:1px solid var(--ui-border); }
+.mcp-setup h3,.mcp-incoming-clients h3 { display:flex;align-items:center;gap:8px;font-size:14px;margin:0 0 10px; }
+.mcp-setup p,.mcp-setup ol,.mcp-incoming-clients p { color:var(--ui-muted);font-size:12px;line-height:1.8; }
+.mcp-setup-fields { display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:16px 0; }
+.mcp-setup-fields label { display:flex;flex-direction:column;gap:8px;flex:1 1 180px;font-size:12px; }
+.mcp-setup-fields select { padding:10px 12px;border:1px solid var(--ui-border);background:var(--ui-surface-alt);color:var(--ui-text);border-radius:var(--skin-field-radius,7px); }
+.mcp-setup-target { display:flex;align-items:center;flex-wrap:wrap;gap:9px;font-size:12px;margin-top:18px; }
+.mcp-setup-target a { display:inline-flex;align-items:center;gap:5px;margin-left:auto;color:var(--ui-accent); }
+.mcp-setup-preview { max-height:330px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;border:1px solid var(--ui-border);background:var(--ui-surface-alt);border-radius:var(--skin-field-radius,7px);padding:16px;font:12px/1.8 Consolas,monospace; }
+.mcp-incoming-clients ul { list-style:none;padding:0;margin:12px 0 0; }
+.mcp-incoming-clients li { display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:11px 0;border-bottom:1px solid var(--ui-border);font-size:12px; }
+.mcp-incoming-clients li span { color:var(--ui-muted);flex:1 1 160px; }
+.mcp-incoming-clients li small { color:var(--ui-muted); }

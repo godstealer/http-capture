@@ -4,6 +4,9 @@ use tauri::State;
 use serde_json::Value;
 
 #[tauri::command]
+pub async fn workspace_revisions(state:State<'_,AppState>)->Result<Value,String>{let mut value=state.engine.store.workspace_revisions().map_err(|e|format!("{e:#}"))?;value["configurationFrozen"]=serde_json::json!(state.engine.store.configuration_ready().is_err());Ok(value)}
+
+#[tauri::command]
 pub async fn mcp_status(state:State<'_,AppState>)->Result<ServerStatus,String> {Ok(state.mcp_server.status().await)}
 #[tauri::command]
 pub async fn mcp_configure(state:State<'_,AppState>,config:ServerConfig)->Result<ServerStatus,String>{state.ensure_network_ready()?;state.mcp_server.configure(config).await.map_err(|e|format!("{e:#}"))}

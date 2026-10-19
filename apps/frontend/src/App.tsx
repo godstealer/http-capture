@@ -1,5 +1,8 @@
 import Plugins from './Plugins';
 import McpPage from './McpPage';
+import ConfigMigration, {type ConfigImportResult} from './ConfigMigration';
+import {acknowledgeConfigurationImport} from './configImportRecovery';
+import type {ConfigurationImportStatus} from './configImportRecovery';
 import AppUpdater from './AppUpdater';
 import './settings-layout.css';
 import SettingsTabs, { type SettingsPageId } from './SettingsTabs';
@@ -57,7 +60,7 @@ const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 const blank: RequestDraft = emptyRequest();
 type RequestSaveTarget = SavedRequestContext & { editorId: string; draft: RequestDraft; name: string; collectionId?: string };
 
-export default function App() {
+export default function App({initialImportStatus}:{initialImportStatus?:ConfigurationImportStatus}={}) {
   useLanguage();
   const [interception, setInterception] = useState<InterceptSnapshot>({config:{request:false,response:false,scope:'all'},items:[]});
   async function interceptResponse(flow: Flow) {
@@ -84,7 +87,9 @@ export default function App() {
   const [theme, setTheme] = useState(readTheme);
   const flowRefreshEpoch = useRef(0);
   function replaceFlows(rows: Flow[]) { flowRefreshEpoch.current++; setFlows(rows); }
-  const [library,setLibrary]=useState<Library>(emptyLibrary);
+  const [library,applyLibrary]=useState<Library>(emptyLibrary);
+  const libraryLatest=useRef(emptyLibrary);
+  function setLibrary(next:Library){libraryLatest.current=next;applyLibrary(next)}
   const [libraryReady,setLibraryReady]=useState(false);
   const [libraryBusy,setLibraryBusy]=useState(false);
   const [libraryMessage,setLibraryMessage]=useState('');
@@ -122,8 +127,28 @@ export default function App() {
     try { await persistLibrary(library); } catch { /* The collection page keeps the error and local edits. */ }
   }
   const [flows, setFlows] = useState<Flow[]>([]);
-  const { editors, setEditors, activeEditor, setActiveEditor, ready: workspaceReady, message: workspaceMessage, error: workspaceError, retry: saveWorkspace, conflict: workspaceConflict, recovering: workspaceRecovering, recover: recoverWorkspace } = useRequestWorkspace();
+  const [configurationImported,setConfigurationImported]=useState<ConfigImportResult|null>(()=>initialImportStatus?.frozen?{epoch:initialImportStatus.epoch,importedSections:initialImportStatus.importedSections??[],preferences:initialImportStatus.preferences??{},warnings:initialImportStatus.warnings,requiresRestart:true,recoveryAvailable:true}:null);
+  const { editors, setEditors, activeEditor, setActiveEditor, ready: workspaceReady, message: workspaceMessage, error: workspaceError, retry: saveWorkspace, conflict: workspaceConflict, recovering: workspaceRecovering, recover: recoverWorkspace, synchronize: synchronizeWorkspace } = useRequestWorkspace(!!configurationImported);
   const updateInProgress = useRef(false);
+  const [configurationError,setConfigurationError]=useState('');
+  const [configurationPreferencesApplied,setConfigurationPreferencesApplied]=useState(!!initialImportStatus?.frozen);
+  const [configurationRestarting,setConfigurationRestarting]=useState(false);
+  async function beforeConfigurationTransfer(){
+    if(!workspaceReady||!libraryReady)throw Error(t('配置尚未读取完成，请稍后再试。'));
+    if(libraryOperation.current||JSON.stringify(libraryLatest.current)!==librarySaved.current)throw Error(t('集合或环境有未保存的修改，请先在集合页保存，再迁移配置。'));
+    if(!await saveWorkspace())throw Error(t('草稿保存失败，请合并恢复或保存成功后再迁移配置。'));
+  }
+  function finishConfigurationImport(result:ConfigImportResult){
+    setConfigurationImported(result);setConfigurationError('');
+    try{acknowledgeConfigurationImport(result);setConfigurationPreferencesApplied(true)}
+    catch(e){setConfigurationPreferencesApplied(false);setConfigurationError(t('内核配置已导入，但界面偏好保存失败；请重试后再重启：{v0}',{v0:String(e)}))}
+  }
+  async function restartAfterConfigurationImport(){
+    if(configurationRestarting||!configurationPreferencesApplied)return;
+    setConfigurationRestarting(true);setConfigurationError('');
+    try{await invoke('config_restart')}
+    catch(e){setConfigurationError(String(e));setConfigurationRestarting(false)}
+  }
   const closing = useDesktopClose(saveWorkspace, () => libraryReady && (libraryBusy || JSON.stringify(library) !== librarySaved.current), message => setNotice(message), () => updateInProgress.current);
   async function beforeUpdateInstall() {
     if (!workspaceReady) throw new Error(t('请求工作区尚未读取完成，请稍后再更新。'));
@@ -254,6 +279,31 @@ export default function App() {
     return work;
   }
   useEffect(()=>{if(connected&&!libraryReady)void loadLibrary();},[connected]);
+  useEffect(()=>{
+    if(!connected||!libraryReady||configurationImported)return;
+    let disposed=false;
+    let timer:ReturnType<typeof setTimeout>;
+    async function synchronize(){
+      try{
+        const revisions=await invoke<{workspaceRevision:number;libraryRevision:number;configurationFrozen?:boolean}>('workspace_revisions');
+        if(disposed)return;
+        if(revisions.configurationFrozen){setConfigurationImported({importedSections:[],preferences:{},requiresRestart:true,recoveryAvailable:true});setConfigurationPreferencesApplied(true);return}
+        await synchronizeWorkspace(revisions.workspaceRevision);
+        const current=libraryLatest.current;
+        if(!disposed&&!libraryOperation.current&&revisions.libraryRevision>(current.revision??0)){
+          const before=JSON.stringify(current);
+          if(before!==librarySaved.current){setLibraryMessage(t('集合已在其他窗口修改，请先在集合页导出当前修改，再重新加载后重试。'));return}
+          const remote=await invoke<Library>('request_library');
+          if(!disposed&&!libraryOperation.current&&JSON.stringify(libraryLatest.current)===before&&librarySaved.current===before){
+            librarySaved.current=JSON.stringify(remote);setLibrary(remote);setLibraryMessage('');
+          }
+        }
+      }catch{/* A disconnected core is handled by the existing connection state. */}
+      finally{if(!disposed)timer=setTimeout(()=>void synchronize(),2000)}
+    }
+    void synchronize();
+    return()=>{disposed=true;clearTimeout(timer)};
+  },[connected,libraryReady,synchronizeWorkspace,configurationImported]);
   const [notice, setNotice] = useState('');
   const [modal, setModal] = useState<'settings' | 'help' | null>(null);
   const [settingsPage, setSettingsPage] = useState<SettingsPageId>('general');
@@ -313,7 +363,7 @@ export default function App() {
   }
   const flow = flows.find(f => f.id === (activeRun?.executionId ?? selected));
   const [requestModes,setRequestModes]=useState<Record<string,string>>(()=>{try{return JSON.parse(localStorage.getItem('http-capture.request-modes')||'{}')}catch{return {}}});
-  useEffect(()=>{localStorage.setItem('http-capture.request-modes',JSON.stringify(requestModes))},[requestModes]);
+  useEffect(()=>{if(!configurationImported)localStorage.setItem('http-capture.request-modes',JSON.stringify(requestModes))},[requestModes,configurationImported]);
   const requestMode=requestModes[editor?.id??'']??(/^wss?:/i.test(draft.url)?'websocket':draft.headers.some(h=>!h.disabled&&h.name.toLowerCase()==='content-type'&&isGrpcContentType(h.value))?'grpc':'http');
   const grpcRequest=requestMode==='grpc';
   const wsRequest=requestMode==='websocket';
@@ -447,6 +497,7 @@ export default function App() {
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
+      if(configurationImported)return;
       if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's' || view !== 'replay' || !editor) return;
       event.preventDefault();
       if (!requestSaveTarget && !codeExportRequest && !modal && curlText === null) void saveRequest(event.shiftKey);
@@ -455,6 +506,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', shortcut);
   });
 
+  if(configurationImported)return <div className="config-restart" role="dialog" aria-modal="true" aria-label={t('配置导入完成')}><div><h2>{t('配置导入完成')}</h2><p>{t('网络功能已停止。导入前的配置已保留为恢复点，重启后可在配置迁移页导出恢复。')}</p><p>{desktop?t('重启应用后使用新配置；导入的脚本、插件保持禁用，监听和 MCP 需要手动启用。'):t('请先停止并重新启动开发内核，再刷新此页面。仅刷新页面不会重启内核。')}</p>{!!configurationImported.warnings?.length&&<ul>{configurationImported.warnings.map((warning,i)=><li key={i}>{warning}</li>)}</ul>}{configurationError&&<p className="error-box" role="alert">{configurationError}</p>}{!configurationPreferencesApplied&&<button className="button primary" onClick={()=>finishConfigurationImport(configurationImported)}>{t('重试保存界面偏好')}</button>}{desktop&&<button className="button primary" autoFocus disabled={!configurationPreferencesApplied||configurationRestarting} onClick={()=>void restartAfterConfigurationImport()}>{configurationRestarting?t('正在重启…'):t('重启应用')}</button>}</div></div>;
   return <div className="app-shell">
     {closing && <div className="modal-backdrop" style={{zIndex:10000}} role="alertdialog" aria-modal="true" aria-label={t("正在保存并关闭…")}><div className="modal">{t("正在保存并关闭…")}</div></div>}
     <aside className="app-sidebar" aria-label={t('功能导航')}>
@@ -596,6 +648,9 @@ export default function App() {
           },
           { id: 'tun', label: 'TUN', icon: <Layers3 size={16}/>, content:
             <section className="settings-section settings-tun"><TunSettings status={tun} onUpdate={setTun}/></section>
+          },
+          { id: 'migration', label: t('配置迁移'), icon: <FileJson size={16}/>, content:
+            <ConfigMigration connected={connected} beforeTransfer={beforeConfigurationTransfer} onImported={finishConfigurationImport}/>
           },
         ]}/> : <div className="settings-dialog-body"><div className="settings-help-content">
             <p>{desktop ? t("启动捕获后，将客户端 HTTP / HTTPS 代理设置为下方地址。") : t("主页面只列出实际捕获的请求。当前预览未连接内核，列表为空。")}</p>

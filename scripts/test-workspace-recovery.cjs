@@ -121,5 +121,21 @@ function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve
   assert(host.current.editors.some(item=>item.draft.url==='https://example.invalid/keep-on-failure'));
   assert(host.current.editors.some(item=>item.draft.url==='https://example.invalid/new-remote'));
   assert(host.beforeUnload());host.dispose();
-  console.log('Workspace recovery: three-way edits, conflict copies, remote deletions/additions, ordered duplicate headers, gRPC bytes, ID collisions, limits, CAS races and typing during read/save passed.');
+  // MCP edits appear without a reload while clean. A keystroke during a remote
+  // read or a dirty local draft must never be overwritten by synchronization.
+  let syncRead=async()=>({...structuredClone(base),revision:1});let syncWrites=0;
+  const synced=hookHost(async(command)=>{if(command==='request_workspace')return syncRead();if(command==='save_request_workspace'){syncWrites++;return 4}throw Error(command)});
+  synced.render();await synced.settle();
+  syncRead=async()=>({...snapshot([editor('ai-created')],'ai-created'),revision:2});
+  await synced.current.synchronize(2);await synced.settle();
+  assert.equal(synced.current.activeEditor,'ai-created');assert.equal(syncWrites,0);assert(!synced.beforeUnload());
+  const pendingSync=deferred();syncRead=()=>pendingSync.promise;
+  const pending=synced.current.synchronize(3);
+  synced.current.setEditors(items=>items.map(item=>changed(item,'typing-during-sync')));
+  pendingSync.resolve({...snapshot([editor('remote-only')]),revision:3});
+  await pending;await synced.settle();
+  assert.equal(synced.current.editors[0].draft.url,'https://example.invalid/typing-during-sync');assert(synced.beforeUnload());
+  await synced.current.synchronize(3);await synced.settle();
+  assert(synced.current.conflict);assert.equal(syncWrites,0);assert.equal(await synced.current.retry(),false);synced.dispose();
+  console.log('Workspace recovery and MCP synchronization: CAS races, remote additions, ordered headers, binary drafts and typing preservation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -20,6 +20,7 @@ jobs:
         run: bash scripts/test-gnome-proxy.sh
       - run: cargo check --locked -p capture-service
       - run: cargo test --locked -p capture-service --bin capture-service
+      - run: cargo test --locked -p capture-service --test mcp_stdio
   frontend:
     runs-on: ubuntu-latest
     steps:

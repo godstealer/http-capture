@@ -19,7 +19,8 @@ export async function invoke<T = unknown>(command: string, args?: Record<string,
     delete_flows:['POST','flows/delete'], import_flows:['POST','flows/import'],
     tun_status:['GET','tun'], start_tun:['POST','tun/start'], stop_tun:['POST','tun/stop'],
     network_interfaces: ['GET', 'network/interfaces'], check_listener_port: ['POST', 'network/check-port'],
-    request_workspace:['GET','workspace'], save_request_workspace:['POST','workspace'],
+    request_workspace:['GET','workspace'], save_request_workspace:['POST','workspace'], workspace_revisions:['GET','workspace/revisions'],
+    config_status:['GET','config/status'],config_export:['POST','config/export'],config_preview:['POST','config/preview'],config_import:['POST','config/import'],config_recovery:['POST','config/recovery'],
     interception: ['GET', 'interception'], configure_interception: ['POST', 'interception'], resolve_interception: ['POST', 'interception/resolve'],
     blocking: ['GET', 'blocking'], configure_blocking: ['POST', 'blocking'],
     capture_scripts: ['GET', 'scripts'], set_capture_scripts: ['POST', 'scripts'],
@@ -33,7 +34,7 @@ export async function invoke<T = unknown>(command: string, args?: Record<string,
   const response = await fetch(`/__capture/${route[1]}`, { method: route[0],
     headers: { 'X-Capture-UI': '1', 'Content-Type': 'application/json' },
     body: route[0] === 'POST' ? JSON.stringify(args ?? {}) : undefined,
-    signal: AbortSignal.timeout(command === 'replay_request' ? 360000 : command === 'mcp_call_tool' ? 70000 : command === 'mcp_connect_client' ? 45000 : ['start_tun','backup_database','compact_database','finish_import'].includes(command) ? 300000 : 35000),
+    signal: AbortSignal.timeout(command === 'replay_request' ? 360000 : command === 'mcp_call_tool' ? 70000 : command === 'mcp_connect_client' ? 45000 : ['start_tun','backup_database','compact_database','finish_import','config_import'].includes(command) ? 300000 : 35000),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
   return command === 'export_certificate' ? await response.text() as T : response.json();

@@ -1,5 +1,6 @@
 pub mod grpc_client;
 pub mod runtime;
+pub mod config_migration;
 pub use runtime::CaptureRuntime;
 pub mod body_export;
 mod body_spool;
@@ -93,7 +94,7 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open(data_dir)?, store,
+        Ok(Arc::new(Self { blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open_with_store(data_dir,store.clone())?, store,
             ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
             send_engines, upstream_roots }))
     }

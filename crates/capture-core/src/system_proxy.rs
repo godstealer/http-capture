@@ -24,6 +24,9 @@ impl Default for SystemProxy {
     }
 }
 impl SystemProxy {
+    /// Explicit state namespace for embedders and isolated integration tests.
+    /// The desktop/service default continues to share the normal OS recovery log.
+    pub fn with_state_directory(directory:PathBuf)->Self {Self{directory,state:Mutex::new(State::default())}}
     pub fn status(&self)->Status {
         let state=self.state.lock().unwrap();
         Status { supported:platform::supported(), active:state.active, pending_recovery:self.directory.join("recovery.json").exists(), message:state.message.clone() }

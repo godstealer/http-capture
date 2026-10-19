@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc};
 
 mod mcp_routes;
+mod config_migration_routes;
 struct Service { runtime: Arc<CaptureRuntime>, mcp_server: Arc<ServerManager>, mcp_clients: Arc<ClientManager>, token: String }
 impl std::ops::Deref for Service {
     type Target = CaptureRuntime;
@@ -198,8 +199,21 @@ async fn workspace(State(s):State<Shared>,headers:HeaderMap)->Result<Json<captur
 async fn save_workspace(State(s):State<Shared>,headers:HeaderMap,Json(input):Json<SaveWorkspace>)->Result<Json<u64>,ApiError>{
  authorize(&headers,&s)?;tokio::task::spawn_blocking(move||s.engine.store.save_workspace(input.workspace)).await.map_err(error)?.map(Json).map_err(error)
 }
+fn main() -> Result<()> {
+    // A bridge must not create an Engine, overwrite control.token, or bind the
+    // development API port. stdout is reserved for MCP protocol messages.
+    if let Some(options)=capture_mcp::bridge::stdio_options(std::env::args_os().skip(1))? {
+        let runtime=tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+        let outcome=runtime.block_on(capture_mcp::bridge::run_stdio(options));
+        // stdin's blocking reader cannot be cancelled while the AI keeps its
+        // pipe open. MCP transports were cleaned up before this returns.
+        runtime.shutdown_background();
+        return outcome;
+    }
+    run_service()
+}
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn run_service() -> Result<()> {
     let root = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".local/capture".into()));
     let engine = Engine::open(&root)?;
     if let Err(error)=engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}
@@ -224,7 +238,7 @@ async fn main() -> Result<()> {
 }
 
 fn router(state:Shared)->Router {
-    Router::new().merge(mcp_routes::router()).route("/grpc/poll",post(grpc_poll)).route("/grpc/start",post(grpc_start).layer(axum::extract::DefaultBodyLimit::disable())).route("/grpc/send",post(grpc_send).layer(axum::extract::DefaultBodyLimit::disable())).route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library).layer(axum::extract::DefaultBodyLimit::disable())).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
+    Router::new().merge(mcp_routes::router()).merge(config_migration_routes::router()).route("/grpc/poll",post(grpc_poll)).route("/grpc/start",post(grpc_start).layer(axum::extract::DefaultBodyLimit::disable())).route("/grpc/send",post(grpc_send).layer(axum::extract::DefaultBodyLimit::disable())).route("/system-proxy",get(system_proxy_status).post(set_system_proxy)).route("/ca/trust",get(ca_status).post(set_ca_trust)).route("/websocket/connect",post(websocket_connect)).route("/websocket/send",post(websocket_send)).route("/decryption",get(decryption_hosts).post(save_decryption_hosts)).route("/upstream/test",post(test_upstream)).route("/library",get(library).post(save_library).layer(axum::extract::DefaultBodyLimit::disable())).route("/database/backup",post(backup_database)).route("/database/compact",post(compact_database)).route("/database/clear",post(clear_database))
         .route("/imports/begin",post(begin_import)).route("/imports/append",post(append_import).layer(axum::extract::DefaultBodyLimit::max(64*1024*1024))).route("/imports/finish",post(finish_import)).route("/tun",get(tun_status)).route("/tun/start",post(start_tun)).route("/tun/stop",post(stop_tun)).route("/network/interfaces",get(network_interfaces)).route("/network/check-port",post(check_listener_port)).route("/status", get(status)).route("/flows", get(list)).route("/flows/changes",post(flow_changes)).route("/flows/revision", get(flow_revision)).route("/flows/delete",post(delete_flows)).route("/flows/import",post(import_flows))
         .route("/workspace",get(workspace).post(save_workspace).layer(axum::extract::DefaultBodyLimit::disable())).route("/start", post(start)).route("/stop", post(stop)).route("/replay", post(replay).layer(axum::extract::DefaultBodyLimit::disable())).route("/replay/prepare",post(prepare_replay)).route("/replay/cancel",post(cancel_replay))
         .route("/upstream/profiles",get(upstream_profiles).post(save_upstream_profile)).route("/upstream/select",post(select_upstream_profile)).route("/upstream/delete",post(delete_upstream_profile))

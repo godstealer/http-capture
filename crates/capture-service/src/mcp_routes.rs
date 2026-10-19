@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub fn router()->Router<Shared>{
-    Router::new().route("/mcp/status",get(status))
+    Router::new().route("/mcp/status",get(status)).route("/workspace/revisions",get(workspace_revisions))
         .route("/mcp/configure",post(configure)).route("/mcp/connection",post(connection))
         .route("/mcp/clients",get(clients)).route("/mcp/clients/save",post(save))
         .route("/mcp/clients/remove",post(remove)).route("/mcp/clients/connect",post(connect))
@@ -13,6 +13,7 @@ pub fn router()->Router<Shared>{
         .route("/mcp/clients/call",post(call)).route("/plugins/validate",post(validate_plugin))
 }
 async fn status(State(s):State<Shared>)->Json<ServerStatus>{Json(s.mcp_server.status().await)}
+async fn workspace_revisions(State(s):State<Shared>)->Result<Json<Value>,ApiError>{let mut value=s.engine.store.workspace_revisions().map_err(error)?;value["configurationFrozen"]=serde_json::json!(s.engine.store.configuration_ready().is_err());Ok(Json(value))}
 #[derive(Deserialize)] struct Configure {config:ServerConfig}
 async fn configure(State(s):State<Shared>,Json(p):Json<Configure>)->Result<Json<ServerStatus>,ApiError>{s.ensure_network_ready().map_err(error)?;s.mcp_server.configure(p.config).await.map(Json).map_err(error)}
 async fn connection(State(s):State<Shared>)->Result<Json<Value>,ApiError>{s.mcp_server.connection_info().await.map(Json).map_err(error)}

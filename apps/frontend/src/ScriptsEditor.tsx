@@ -18,7 +18,7 @@ export function CaptureScripts(){
  const [value,setValue]=useState<Scripts>(emptyScripts);const [ready,setReady]=useState(false);const [message,setMessage]=useState('');const [busy,setBusy]=useState(false);
  useEffect(()=>{let live=true;invoke<Scripts>('capture_scripts').then(s=>{if(live){setValue(s);setReady(true);}}).catch(e=>{if(live)setMessage(String(e));});return()=>{live=false;};},[]);
  async function save(){setBusy(true);try{await invoke('set_capture_scripts',{config:value});setMessage(t("抓包脚本已应用"));}catch(e){setMessage(String(e));}finally{setBusy(false);}}
- return <details className="capture-scripts"><summary>{t("抓包自动脚本")}</summary><p>{t("复用上方已应用的匹配规则，独立于手动拦截开关。无匹配规则时不执行。请求前、响应后分别匹配该阶段数据；状态码条件只适用于响应后。配置及变量仅保留至服务退出。")}</p>{ready&&<><ScriptsEditor value={value} onChange={setValue}/><button disabled={busy} onClick={()=>void save()}>{t("应用抓包脚本")}</button><button disabled={busy} onClick={()=>void invoke<Scripts>('capture_scripts').then(s=>{setValue(s);setMessage(t("已加载当前配置及变量"));}).catch(e=>setMessage(String(e)))}>{t("重新加载配置及变量")}</button></>}<p role="status">{message}</p></details>;
+ return <details className="capture-scripts"><summary>{t("抓包自动脚本")}</summary><p>{t("复用上方已应用的匹配规则，独立于手动拦截开关。无匹配规则时不执行。请求前、响应后分别匹配该阶段数据；状态码条件只适用于响应后。配置及变量保存在本机，重启后恢复；新设备需重新确认匹配范围。")}</p>{ready&&<><ScriptsEditor value={value} onChange={setValue}/><button disabled={busy} onClick={()=>void save()}>{t("应用抓包脚本")}</button><button disabled={busy} onClick={()=>void invoke<Scripts>('capture_scripts').then(s=>{setValue(s);setMessage(t("已加载当前配置及变量"));}).catch(e=>setMessage(String(e)))}>{t("重新加载配置及变量")}</button></>}<p role="status">{message}</p></details>;
 }
 
 const examples: Array<{title:string;stage:'before'|'after';code:string}> = [

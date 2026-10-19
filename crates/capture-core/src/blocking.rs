@@ -90,6 +90,8 @@ fn compile(config:&mut Config) -> Result<()> {
     }
     Ok(())
 }
+/// Offline migration validation; never changes the active configuration.
+pub fn validate_config(config:&Config)->Result<()> {let mut value=config.clone();compile(&mut value)}
 
 impl Blocking {
     pub fn open(store:Arc<Store>) -> Result<Self> {

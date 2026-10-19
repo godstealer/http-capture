@@ -22,6 +22,9 @@ export function setLanguage(value: LanguagePreference) {
   try { localStorage.setItem(storageKey, value); } catch { /* Session choice still works. */ }
   update();
 }
+/** Refresh the module cache after startup configuration projection without
+ * persisting another value or relying on a same-window storage event. */
+export function reloadLanguagePreference(){preference=readPreference();update()}
 if (typeof window !== 'undefined') {
 window.addEventListener('languagechange', update);
 window.addEventListener('storage', e => { if (e.key === storageKey || e.key === null) { preference = readPreference(); update(); } });

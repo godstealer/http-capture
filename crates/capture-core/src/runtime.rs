@@ -7,14 +7,15 @@ pub struct CaptureRuntime {
     pub engine: Arc<Engine>,
     pub proxy: Mutex<Option<ProxyHandle>>,
     pub network_lifecycle: Mutex<()>,
+    pub configuration_migration: Mutex<()>,
     pub shutting_down: AtomicBool,
 }
 impl CaptureRuntime {
     pub fn new(engine: Arc<Engine>) -> Arc<Self> {
-        Arc::new(Self { engine, proxy: Mutex::new(None), network_lifecycle: Mutex::new(()), shutting_down: AtomicBool::new(false) })
+        Arc::new(Self { engine, proxy: Mutex::new(None), network_lifecycle: Mutex::new(()), configuration_migration:Mutex::new(()), shutting_down: AtomicBool::new(false) })
     }
     pub fn ensure_network_ready(&self) -> Result<(), String> {
-        if self.shutting_down.load(Ordering::Acquire) { Err("应用正在安装更新或退出，请稍后再操作".into()) } else { Ok(()) }
+        if self.shutting_down.load(Ordering::Acquire) { Err("应用正在安装更新或退出，请稍后再操作".into()) } else { self.engine.store.configuration_ready().map_err(|error|error.to_string()) }
     }
     pub fn resume_network_commands(&self) { self.shutting_down.store(false, Ordering::Release); }
     pub async fn shutdown_network(&self) -> Result<(), String> {

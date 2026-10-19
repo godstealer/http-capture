@@ -25,6 +25,7 @@ assert.equal(ui.t('请求头'), '请求头');
 assert.equal(ui.resolveLanguage('system','zh-TW'),'zh-CN');
 assert.equal(ui.resolveLanguage('system','fr-FR'),'en');
 ui.setLanguage('en'); assert.equal(ui.t('请求头'), 'Request headers'); assert.equal(document.documentElement.lang,'en');
+storage.set('http-capture.language','zh-CN');ui.reloadLanguagePreference();assert.equal(ui.currentLanguage(),'zh-CN');assert.equal(ui.t('请求头'),'请求头');assert.equal(storage.get('http-capture.language'),'zh-CN');ui.setLanguage('en');
 assert.equal(ui.t('已删除 {v0} 条记录',{v0:3}),'Deleted 3 records');
 assert.equal(ui.t('constructor'),'constructor');
 assert.equal(load().currentLanguage(),'en', 'preference survives reload');

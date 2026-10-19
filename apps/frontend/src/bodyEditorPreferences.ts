@@ -4,6 +4,7 @@ const listeners = new Set<() => void>();
 function read() { try { return localStorage.getItem(storageKey) === 'true'; } catch { return false; } }
 let enabled = read();
 export function autoFormatPasteEnabled() { return enabled; }
+export function reloadBodyEditorPreferences(){enabled=read();listeners.forEach(listener=>listener())}
 export function setAutoFormatPaste(value: boolean) {
   enabled = value;
   try { localStorage.setItem(storageKey, String(value)); } catch { /* Retain this session's choice. */ }

@@ -9,10 +9,14 @@ use std::{path::Path, sync::Mutex};
 pub struct FlowChange {pub position:i64,pub flow:Flow}
 #[derive(Serialize,Deserialize)]
 pub struct FlowChanges {pub revision:String,pub reset:bool,pub rows:Vec<FlowChange>,pub deleted:Vec<String>}
-pub struct Store(Mutex<Connection>, String);
+pub struct Store(Mutex<Connection>, String, std::sync::atomic::AtomicBool,Option<String>);
 #[path = "store_mcp.rs"]
 mod mcp;
 pub use mcp::{McpBodyChunk, McpRequestFilter, McpRequestPage};
+#[path = "store_mcp_workflows.rs"]
+mod mcp_workflows;
+#[path = "store_config_migration.rs"]
+mod config_migration;
 
 impl Store {
     pub fn backup(&self) -> Result<String> {
@@ -103,7 +107,8 @@ impl Store {
         conn.execute_batch("CREATE TABLE IF NOT EXISTS flow_bodies(flow_id TEXT NOT NULL, slot TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(flow_id,slot));
           CREATE TRIGGER IF NOT EXISTS flow_bodies_delete AFTER DELETE ON flows BEGIN DELETE FROM flow_bodies WHERE flow_id=old.id; END;")?;
         conn.execute("UPDATE flows SET data=json_set(data,'$.state','interrupted') WHERE json_extract(data,'$.state') IN ('sending','receiving')", [])?;
-        Ok(Self(Mutex::new(conn), uuid::Uuid::new_v4().to_string()))
+        let migration_epoch:Option<String>=conn.query_row("SELECT value FROM settings WHERE key='config-migration.epoch.v1'",[],|row|row.get(0)).optional()?;
+        Ok(Self(Mutex::new(conn), uuid::Uuid::new_v4().to_string(),std::sync::atomic::AtomicBool::new(false),migration_epoch))
     }
     pub fn insert(&self, flow: &Flow) -> Result<()> {
         let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
@@ -271,6 +276,7 @@ impl Store {
   for script in &value.scripts {script.scripts.validate()?;}
   let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
   let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+  self.configuration_ready_in(&tx)?;
   let raw:Option<String>=tx.query_row("SELECT value FROM settings WHERE key='library.v1'",[],|r|r.get(0)).optional()?;
   let previous:Library=raw.map(|s|serde_json::from_str(&s)).transpose()?.unwrap_or_default();
   anyhow::ensure!(previous.revision==value.revision,"Library changed in another window; export local edits before reloading");
@@ -285,7 +291,10 @@ impl Store {
  }
  pub fn save_setting<T:Serialize>(&self,key:&str,value:&T)->Result<()> {
   let raw=serde_json::to_string(value)?;
-  self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,raw])?;Ok(())
+  let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
+  let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+  self.configuration_ready_in(&tx)?;
+  tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,raw])?;tx.commit()?;Ok(())
  }
  pub fn workspace(&self)->Result<Workspace>{Ok(self.setting("workspace.v1")?.unwrap_or_default())}
  pub fn save_workspace(&self,mut value:Workspace)->Result<u64>{
@@ -298,6 +307,7 @@ impl Store {
   anyhow::ensure!(value.active_editor.is_empty()||ids.contains(&value.active_editor),"当前请求标签不存在");
   let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
   let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+  self.configuration_ready_in(&tx)?;
   let raw:Option<String>=tx.query_row("SELECT value FROM settings WHERE key='workspace.v1'",[],|r|r.get(0)).optional()?;
   let previous:Workspace=raw.map(|s|serde_json::from_str(&s)).transpose()?.unwrap_or_default();
   anyhow::ensure!(previous.revision==value.revision,"请求工作区已在其他窗口修改；请保留当前内容后刷新，避免覆盖其他窗口");
