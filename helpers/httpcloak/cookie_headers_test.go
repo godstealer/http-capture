@@ -238,6 +238,7 @@ func h2CookieWireServer(t *testing.T) (string, *x509.CertPool, <-chan h2CookieWi
 	t.Cleanup(func() { listener.Close() })
 	received := make(chan h2CookieWireResult, 1)
 	go func() {
+		resultSent := false
 		fields, err := func() ([]hpack.HeaderField, error) {
 			connection, err := listener.Accept()
 			if err != nil {
@@ -282,12 +283,25 @@ func h2CookieWireServer(t *testing.T) (string, *x509.CertPool, <-chan h2CookieWi
 					if err := encoder.WriteField(hpack.HeaderField{Name: ":status", Value: "200"}); err != nil {
 						return nil, err
 					}
-					err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: frame.StreamID, BlockFragment: block.Bytes(), EndHeaders: true, EndStream: true})
-					return fields, err
+					if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: frame.StreamID, BlockFragment: block.Bytes(), EndHeaders: true, EndStream: true}); err != nil {
+						return fields, err
+					}
+					received <- h2CookieWireResult{fields: fields}
+					resultSent = true
+					// Keep the fixture alive until the client closes its transport.
+					// Closing with unread SETTINGS/WINDOW_UPDATE frames can reset
+					// the TCP connection on Windows and discard our response.
+					for {
+						if _, err := framer.ReadFrame(); err != nil {
+							return nil, nil
+						}
+					}
 				}
 			}
 		}()
-		received <- h2CookieWireResult{fields: fields, err: err}
+		if !resultSent {
+			received <- h2CookieWireResult{fields: fields, err: err}
+		}
 	}()
 	return "https://" + listener.Addr().String() + "/cookie-test", roots, received
 }
