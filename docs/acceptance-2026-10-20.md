@@ -2,27 +2,30 @@
 
 本轮对 TODO 修复及同批 MCP/审计/故障模拟/范围读取进行自动化与隔离验证。不同层次的证据分别记录；上一版[目标机器待验项](acceptance-2026-10-19.md)继续保留。
 
+正式版 [0.1.31 / build-da127ea9ba1a](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`；[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 三系统及前端全部通过，[Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 四平台构建、各平台 10 项桌面更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。
+
 ## 已完成本地验证
 
 - [x] `transport-api`、`transport-httpcloak`、`capture-core`、`capture-mcp`、`capture-service` 的完整回归，包括真实 stdio 子进程；系统凭据库写入与可选 TUN helper 的既有 ignored 项不计为通过。
 - [x] 来源识别 22 项单元和 5 项集成，包括 16 条连接突发、IPv4/IPv6、H2 多路流、WebSocket、取消及不冒认 TUN helper。
 - [x] Go helper 完整 20 项；此前定向 100 轮通过。覆盖 H1/H2、无 ALPN、HTTP CONNECT/SOCKS5、证书拒绝、Cookie、长度头和取消，不以任意错误重发 POST。
-- [x] 独立 helper 只读 GET ANA 公开 JS：200 / HTTP/2 / ALPN h2 / TLS 1.3，正文 4659 字节且长度、编码一致；不是业务 POST 或订票流程验收。
+- [x] 独立 helper 使用 Chrome 和 Firefox 预设分别只读 GET 用户提供的 ANA 公开 JavaScript 链接，两次均为 200 / HTTP/2 / ALPN h2 / TLS 1.3；正文均为 4659 字节且 SHA256 一致。未重放原业务 POST，不代表鉴权或订票搜索验收通过。
+- [x] 外部 Node stdio 夹具在固定 Node 环境下连续 30 轮、共 90 次子进程用例通过；不把本地重复回归替代跨平台 CI。
 - [x] 完整前端 36 个回归脚本、TypeScript、国际化和生产构建。独立审查后补修窄屏详情工具栏换行，相关定向回归和构建通过。
 - [x] 桌面及控制服务含测试代码编译通过。
 - [x] 发布签名、不可变附件、版本来源及兼容更新频道 fixtures 34 项通过。
 
 ## 发布门禁与原生验证
 
-本机桌面 updater 的 10 项测试程序编译和链接成功，但被 Windows 拒绝启动（os error 5，never executed）。没有修改系统安全设置，也不将未执行记为通过。仓库现有 Release 工作流在每组安装包构建后执行 `cargo test --release --locked -p http-capture-desktop --bin http-capture app_update::tests`；成功后才收集附件并公开发布。
+本机桌面 updater 的 10 项测试程序编译和链接成功，但曾被 Windows 拒绝启动（os error 5，never executed）；没有修改系统安全设置，该本地尝试不计通过。随后 Release #26 在 Windows、Linux、macOS Intel / ARM 各自执行 `cargo test --release --locked -p http-capture-desktop --bin http-capture app_update::tests`，每组 10 项全部通过；四组安装包均在测试通过后才收集并公开发布。
 
 首次源 Check #29 的 Windows、Linux、前端全部通过，macOS 的新增审计分类测试在故障端点等待超过 SDK 的 5 秒预算，因此没有发布该候选。原用例使用绑定但未监听的 socket，不能保证各平台立即拒绝连接。已改为测试持有本地监听器，确认接收完整 GET 后明确返回畸形 HTTP 响应，稳定验证真实发送失败及其审计分类；不增加 SDK 超时、不修改生产逻辑，原断言保留并补充没有有效响应的检查。修复后的定向测试及完整 MCP 43 项通过，使用新来源提交重新进行完整 CI。
 
-第二次 Check #30 的 macOS、Linux、前端全部通过，包括上述审计测试；Windows 的既有外部 Node stdio 用例在首次初始化超过 15 秒，仍未发布。此超时在本地未复现，不能据此声称已确定生产管道或某个 Node 版本的问题。Rust 检查原先依赖 runner 预装 Node，现显式使用与前端/发布相同的 Node 22 并输出版本；测试补充有界、仅包含启动和协议方法/ID 的诊断文件，协议 stdout 不混入诊断，生产逻辑、无 shell 调用和原 15 秒预算不变。最终是否通过以新提交的三平台检查为准。
+第二次 Check #30 的 macOS、Linux、前端全部通过，包括上述审计测试；Windows 的既有外部 Node stdio 用例在首次初始化超过 15 秒，仍未发布。此超时在本地未复现，不能据此声称已确定生产管道或某个 Node 版本的问题。Rust 检查原先依赖 runner 预装 Node，现显式使用与前端/发布相同的 Node 22 并输出版本；测试补充有界、仅包含启动和协议方法/ID 的诊断文件，协议 stdout 不混入诊断，生产逻辑、无 shell 调用和原 15 秒预算不变。外部 Node stdio 夹具本地连续 30 轮、90 次子进程用例通过，最终 Check #31 的 Windows、Linux、macOS 和前端均通过；前两次未通过候选仍未发布。
 
-- [ ] 同一来源提交的三系统 Check 和前端 Check。
-- [ ] Windows、Linux、macOS Intel / ARM 的桌面更新生命周期测试全部通过。
-- [ ] 四组构建和公开发布完成，下载 22 个附件独立校验 17 项 SHA256、五个更新包签名/版本注释及兼容频道。
+- [x] 同一来源提交 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1` 的[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 三系统和前端全部通过。
+- [x] [Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 的 Windows、Linux、macOS Intel / ARM 四组桌面更新生命周期测试各 10 项全部通过。
+- [x] 四组构建和[0.1.31 正式发布](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)完成；公开 22 个附件已独立下载，17 项 SHA256、五个更新包正文/版本注释签名及兼容频道一致性核验通过。
 
 ## 隔离浏览器检查
 

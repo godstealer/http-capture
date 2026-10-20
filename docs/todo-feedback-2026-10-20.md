@@ -1,13 +1,13 @@
 # 使用反馈修复清单（2026-10-20）
 
-来源：用户提供的两页 TODO.pdf。截图包含 Linux 便携版 0.1.19；当前正式版为 0.1.28。以下按当前工作区复核，不把旧截图直接视为新版已经修复。
+来源：用户提供的两页 TODO.pdf。截图包含 Linux 便携版 0.1.19；当前正式版为 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)。以下按实际发布来源和验证证据复核，不把旧截图直接视为新版已经修复。
 
-本轮五项代码修复已纳入发版候选，尚未发布，也不包含在 0.1.28 安装包中。按用户“验收一下，没问题就发版”的最新安排，已补本地完整回归和隔离界面检查，待四平台原生测试门禁通过后发布。eCapture 只是另外的可行性评估；同批 MCP 契约、操作审计、故障模拟和正文范围读取改动一并验收。
+本轮五项代码修复已随 0.1.31 正式发布，0.1.28 安装包不包含这些修复。正式版 [0.1.31 / build-da127ea9ba1a](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`；[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 三系统及前端全部通过，[Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 四平台构建、各平台 10 项桌面更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。eCapture 只是另外的可行性评估；同批 MCP 契约、操作审计、故障模拟和正文范围读取改动一并交付。
 
 | 项目 | 用户反馈 | 当前进度 |
 | --- | --- | --- |
 | 来源应用 | 同一网页的部分请求显示 chrome，部分显示“未识别应用” | 已修复：超过 4 个并发查询时在总计 1 秒内排队，不再立即放弃；连接分类共用有界策略 |
-| ANA 请求 | httpcloak Firefox 发送时报 ALPN mismatch: expected h2, got http/1.1 | 已修复默认协议选择：服务端协商 H1 时，在发送 HTTP 数据前移交同一条已验证 TLS 连接；ANA 实站待复验 |
+| ANA 请求 | httpcloak Firefox 发送时报 ALPN mismatch: expected h2, got http/1.1 | 已修复默认协议选择：服务端协商 H1 时，在发送 HTTP 数据前移交同一条已验证 TLS 连接；Chrome/Firefox 对 ANA 公开 JS 各 200/H2/TLS1.3；原业务 POST 待验 |
 | 响应替换 | 找不到替换响应功能 | 已新增抓包详情“拦截替换响应”按钮，保留右键入口；提交按钮明确为“替换响应并放行” |
 | 小屏代理入口 | 小屏幕不显示上游代理按钮 | 已修复：窄屏压缩为图标按钮，保留点击、状态提示及无障碍名称 |
 | 便携版更新 | 手动更新提示需要一个下载链接 | 已补下载最新版与失败后的复制地址；区分“此安装方式需手动更新”和“更新源未配置” |
@@ -28,7 +28,7 @@
 - Go helper 完整 20 项测试；协商、Cookie、代理及取消等定向用例连续 100 轮通过。覆盖 Chrome/Firefox 的 H1/无 ALPN 单次握手与 POST、H2 字段边界、HTTP CONNECT/SOCKS5、证书拒绝、压缩字节与头部一致、读取错误不跨协议重发及 Content-Length 大小写。
 - 完整前端回归、TypeScript、国际化检查和生产构建。新增组件回归覆盖响应替换入口不重发历史请求、360–1440 px 上游入口规则、下载链接的浏览器/原生边界、失败复制、键盘焦点和更新忙碌状态。
 
-桌面 `cargo check --locked --offline -p http-capture-desktop --tests` 通过，包含更新模块的 10 项测试代码。`cargo test ... app_update::tests` 编译及链接成功，但 Windows 两次拒绝启动生成的测试程序（`never executed / os error 5`），因此 **10 项原生测试未执行，仍待验证**。没有更改系统安全设置，也不把编译成功当作测试通过。
+桌面 `cargo check --locked --offline -p http-capture-desktop --tests` 通过，包含更新模块的 10 项测试代码。本机 `cargo test ... app_update::tests` 曾编译及链接成功但被 Windows 拒绝启动（`never executed / os error 5`）；该本地结果仍不计通过，也没有更改系统安全设置。随后同一发布来源在 Windows、Linux、macOS Intel / ARM 四个平台的 Release runner 中各自执行并通过全部 10 项原生更新生命周期测试，发布门禁已补齐。
 
 待目标环境人工验收（延续用户暂缓安排）：
 
@@ -37,6 +37,6 @@
 - [ ] 安装版的小屏上游按钮、抓包详情入口、后续响应替换操作。
 - [ ] Linux 解包 portable 的手动更新提示、默认浏览器下载链接及失败后的复制；AppImage/Deb 更新方式不被误标。
 
-追加验收：完整内核/传输/MCP/控制服务及真实 stdio 子进程回归通过。独立 helper 对 ANA 公开 JS 只读 GET 返回 200 / HTTP/2 / ALPN h2 / TLS 1.3，正文 4659 字节；业务 POST 和订票搜索仍未验收。隔离生产界面已点击响应替换、修改后放行、360/600px 上游入口、审计结果、故障规则保存及模拟规则迁移预览；便携版更新使用模拟原生 driver 检查下载和失败恢复，不等于 Linux 默认浏览器实测。细节见[本次验收](acceptance-2026-10-20.md)。
+追加验收：完整内核/传输/MCP/控制服务及真实 stdio 子进程回归通过。独立 helper 使用 Chrome 和 Firefox 预设分别只读 GET 用户提供的 ANA 公开 JavaScript 链接，两次均为 200 / HTTP/2 / ALPN h2 / TLS 1.3；正文均为 4659 字节且 SHA256 一致。未重放原业务 POST，不代表鉴权或订票搜索验收通过。外部 Node stdio 夹具在固定 Node 环境下连续 30 轮、共 90 次子进程用例通过；不把本地重复回归替代跨平台 CI。隔离生产界面已点击响应替换、修改后放行、360/600px 上游入口、审计结果、故障规则保存及模拟规则迁移预览；便携版更新使用模拟原生 driver 检查下载和失败恢复，不等于 Linux 默认浏览器实测。细节见[本次验收](acceptance-2026-10-20.md)。
 
-本轮没有重启用户正在调试的旧内核。发布状态将按同一来源提交的 CI 与公开附件独立核验结果更新。
+本轮没有重启用户正在调试的旧内核。正式发布状态以同一来源提交的 Check #31、Release #26 和公开附件独立核验为据；上方人工验收项继续保留。

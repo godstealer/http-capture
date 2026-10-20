@@ -1,6 +1,6 @@
 # 独立发送引擎与 httpcloak
 
-当前状态（2026-10-08）：wreq/httpcloak 已接入 HTTP/SOCKS5；原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 已实测成功。TUN H3 接管未验收且暂缓，三平台安装包未完成。以下按日期保留历史验证；早期失败或不支持项以文末后续记录更新，不代表当前能力。
+当前状态（2026-10-20）：[0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a) 已完成四平台正式发布与公开附件核验；wreq/httpcloak 已接入 HTTP/SOCKS5，httpcloak 默认浏览器预设按 ALPN 兼容 H2/H1。原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 有既有实测，TUN H3 接管仍未验收且暂缓。以下按日期保留历史验证；早期失败或不支持项不代表当前能力，真实安装和业务流程仍分别验收。
 
 
 ## 已完成的拆分
@@ -18,21 +18,48 @@ Windows：运行 `scripts/build-httpcloak.ps1`（Go 1.26+，优先使用项目�
 
 其他系统可以在 helpers/httpcloak 下执行 `go build -mod=readonly -o http-capture-httpcloak .`，然后执行 `./http-capture-httpcloak --capabilities > http-capture-httpcloak.json`。
 
-用 `HTTP_CAPTURE_HTTPCLOAK` 指定辅助程序的绝对路径；旁边必须有同名 .json 能力清单。桌面打包时可置于主程序旁。开发环境自动发现 `.local/httpcloak/`。本轮未重新生成桌面安装包，也未配置跨平台自动打包辅助程序。
+用 `HTTP_CAPTURE_HTTPCLOAK` 指定辅助程序的绝对路径；旁边必须有同名 .json 能力清单。桌面打包时可置于主程序旁。开发环境自动发现 `.local/httpcloak/`。正式发布已在 Windows、Linux、macOS Intel / ARM 的原生 runner 构建并随安装包打包辅助程序及能力清单，不依赖用户源码目录。
 
 重启服务后，在请求 TLS 页选择 httpcloak、Chrome、浏览器 TLS 版本。默认跟随 UA，无对应 UA 时选择当前引擎可用最大版本；明确指定 150 不会修改 UA 152。当前清单 Chrome 143–152，Firefox 133、148，使用 Windows 平台预设，未按本机操作系统自动切换预设。
+
+## 更新 httpcloak
+
+普通用户通过更新 HTTP Capture 安装包获得新版 helper，无需单独安装 Go 库。当前项目锁定 `httpcloak v1.7.2`，没有独立自动更新库的功能。上游 [v1.7.3 固定版本更新记录](https://github.com/sardanioss/httpcloak/blob/v1.7.3/CHANGELOG.md) 可供评估；本项目尚未升级，需另行完成兼容回归。
+
+维护者在 `helpers/httpcloak` 中检查可用版本，再固定目标版本升级。例如以下 `v1.7.3` 是待验证的升级目标，命令说明不表示当前构建已经使用它：
+
+```sh
+cd helpers/httpcloak
+go list -m -versions github.com/sardanioss/httpcloak
+go get github.com/sardanioss/httpcloak@v1.7.3
+go mod tidy
+go mod verify
+go test -mod=readonly ./...
+```
+
+检查并提交 `go.mod`、`go.sum` 的依赖变化；流程见 [Go 官方升级依赖说明](https://go.dev/doc/modules/managing-dependencies#upgrading-or-downgrading-a-dependency)。回归重点包括 TLS/ALPN 的 H2/H1 协商与导入 ClientHello 严格约束、ExactHeaders 的顺序及重复字段、H2 Cookie 边界与 H1 合并、HTTP CONNECT/SOCKS5 不绕过代理、取消释放连接，以及压缩或二进制正文的字节与头部一致性。网络或响应错误不得导致 POST 跨协议重发。
+
+回归通过后，停止使用该 helper 的内核，按上节方式重建 helper 并重新生成同名 `.json` 能力清单，再重启内核读取新清单；不要只替换二进制或只编辑 JSON。正式发布 CI 在 Windows、Linux、macOS Intel / ARM 分别测试、构建并随安装包打包二者。浏览器预设来自编译后的库；`latest` 只代表该库支持的最新版本，修改 User-Agent 不会下载或生成新的浏览器指纹。
 
 ## 边界与后续任务
 
 原生 h3 引擎更新（2026-10-01）：已支持 SOCKS5 UDP ASSOCIATE 出站及代理端目标 DNS，外部 cloudflare-quic.com 经本机 SOCKS5 返回 200 / HTTP3 / TLS1.3。HTTP CONNECT 不支持此路径；httpcloak 的 H3 能力仍未接入。详情见 [实测记录](tls-components-test.md)。
 
-- 已发布的 0.1.28 中 HTTPS 默认强制 HTTP/2，明文 HTTP 使用 HTTP/1.1。2026-10-20 工作区修复（未发布）为默认浏览器预设补充 ALPN 协商：服务端选择 H1 或无 ALPN 时，在发送 HTTP 数据前将同一已验证 TLS 连接交给 H1，沿用原 HTTP CONNECT/SOCKS5 隧道，不重新握手或因普通网络/响应错误跨协议重发。显式 H2 和包含 H2 的导入 ClientHello 保持严格约束；不启用库的 Auto/H3 路径，HTTP/3 仍未接入此适配器。详见 [TODO 修复记录](todo-feedback-2026-10-20.md)。
+- 已发布的 0.1.28 中 HTTPS 默认强制 HTTP/2，明文 HTTP 使用 HTTP/1.1。0.1.31 已发布修复，为默认浏览器预设补充 ALPN 协商：服务端选择 H1 或无 ALPN 时，在发送 HTTP 数据前将同一已验证 TLS 连接交给 H1，沿用原 HTTP CONNECT/SOCKS5 隧道，不重新握手或因普通网络/响应错误跨协议重发。显式 H2 和包含 H2 的导入 ClientHello 保持严格约束；不启用库的 Auto/H3 路径，HTTP/3 仍未接入此适配器。详见 [TODO 修复记录](todo-feedback-2026-10-20.md)。
 - 使用 ExactHeaders 保留常规字段的有序列表，包括交错同名字段。Host 和正文长度仍由 core 根据 URL/正文规范化，协议伪头使用预设。
 - 响应不自动跟随重定向，不使用浏览器预设替换 UA；不共享请求之间的 Cookie 或连接。
-- 响应字段为协议库解析结果，不标记为原始线上顺序。库的常规路径解压常见压缩响应，适配器移除已解码的 Content-Encoding 并更新长度；此路径不保留原压缩字节。上述工作区新增的同连接 H1 移交路径则返回原编码字节，保留相应 Content-Encoding 和长度头，不声明已经解压。
+- 响应字段为协议库解析结果，不标记为原始线上顺序。库的常规路径解压常见压缩响应，适配器移除已解码的 Content-Encoding 并更新长度；此路径不保留原压缩字节。0.1.31 新增的同连接 H1 移交路径则返回原编码字节，保留相应 Content-Encoding 和长度头，不声明已经解压。
 - httpcloak 支持按请求选择 HTTP / SOCKS5 上游代理，凭据通过 stdin 传递，不写入请求记录或命令行；拒绝后不回退直连，并校验代理解析地址避免监听回环。自定义 TLS 高级覆盖、显式伪头列表暂不支持，明确报错。
 - TLS 版本、协商密码套件、证书链来自验证回调，保持默认信任校验。握手广告字段未采集的值不伪造。
 - 自定义 JSON 预设编辑/导入尚未接入；当前支持库内已实现的 Chrome 152，不以改版本名冒充新版本。
+
+## 0.1.31 验证补充（2026-10-20）
+
+正式版 [0.1.31 / build-da127ea9ba1a](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`；[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 三系统及前端全部通过，[Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 四平台构建、各平台 10 项桌面更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。
+
+独立 helper 使用 Chrome 和 Firefox 预设分别只读 GET 用户提供的 ANA 公开 JavaScript 链接，两次均为 200 / HTTP/2 / ALPN h2 / TLS 1.3；正文均为 4659 字节且 SHA256 一致。未重放原业务 POST，不代表鉴权或订票搜索验收通过。
+
+本版仍锁定 httpcloak v1.7.2，未升级到上游 v1.7.3；后续升级需要独立兼容回归。实际 ANA 业务 POST、完整浏览器行为保真和四平台安装体验仍保留待验，不以只读公开 JS 或构建成功代替。
 
 ## 验证（2026-09-29）
 

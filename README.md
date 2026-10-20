@@ -2,7 +2,7 @@
 
 跨平台 HTTP/HTTPS 调试代理。Rust/Tokio 内核，React 界面，Tauri 桌面外壳。
 
-状态更新：2026-10-20。正式版 [0.1.28](https://github.com/godstealer/http-capture/releases/tag/build-19095a086601) 已发布为 Latest，四平台构建和公开更新包验签通过，改动见 [正式版更新说明](docs/release-2026-10-19.md)。开发状态见 [路线图](docs/roadmap.md)，协议边界见 [协议说明](docs/protocols.md)。按用户要求暂缓手工实机验收，独立记录在 [验收清单](docs/acceptance-2026-10-19.md)；TUN H3 实机排查继续暂停。
+状态更新：2026-10-20。正式版 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a) 已发布，四平台构建、原生更新测试及公开更新包验签通过，改动见 [正式版更新说明](docs/release-2026-10-20.md)。来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`，[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 与 [Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 均成功；公开 22 个附件、17 项 SHA256 和五个更新目标签名已核验。上一正式版 [0.1.28](https://github.com/godstealer/http-capture/releases/tag/build-19095a086601) 的说明与历史证据继续保留。开发状态见 [路线图](docs/roadmap.md)，协议边界见 [协议说明](docs/protocols.md)，实际安装、跨设备及业务流程待验项见 [本轮验收](docs/acceptance-2026-10-20.md)；TUN H3 实机排查继续暂停。
 
 公开源码：[godstealer/http-capture](https://github.com/godstealer/http-capture)。功能实现、自动化验证和实机验收分别记录，不以编译通过代替跨平台可用。
 
@@ -14,11 +14,15 @@
 
 0.1.28 已发布：MCP 客户端接入向导、应用内离线说明、stdio 桥接、AI 请求/集合工作流、断点响应替换及全局脚本工具；新增标准 JSON 全局配置导出、预览导入和导入前恢复点，以及 Cookie 行旁的拆分/合并按钮。0.1.23 已有的双向 MCP、插件管理、集合保存及共享正文引用继续保留。详见 [本轮说明](docs/release-2026-10-19.md)、[MCP 使用](docs/mcp.md)、[配置迁移说明](docs/config-migration.md) 和 [本轮验收](docs/acceptance-2026-10-19.md)。配置迁移入口在 **代理设置 → 配置迁移**，首版按类别替换、导入后需要重启，加密迁移与自动合并仍未实现。
 
+0.1.31 新增 MCP 工具输出契约、结构化结果、只读资源和本地写操作审计，交付请求延迟/频率限制与 64 KiB 正文范围读取；同时修复来源识别排队、httpcloak ALPN 协商、响应替换入口、窄屏上游按钮及 Linux portable 下载链接。完整大文件低内存、真实跨设备迁移与安装升级仍按清单继续处理。
+
 ## MCP 从哪里开始
 
 想让 AI 查看或操作抓包，打开 **MCP → AI 接入**并启动服务。0.1.28 提供 **AI 客户端接入向导**，可生成 Codex、Cursor、VS Code 的 HTTP/stdio 配置；stdio 通过本机桥接连接正在运行的应用，不会启动第二个抓包内核。0.1.23 安装包可手动填写复制出的 URL 和 Authorization。想手动调用其他 MCP 工具，打开 **MCP → 外部服务**。
 
 0.1.28 还增加按能力分组授权的请求/集合管理、断点响应替换和全局脚本工具，全部权限开启时共 26 个工具，默认仅显示四个查询工具。配置修改使用版本保护；脚本先编译保存为禁用，再单独确认启用。接入步骤、全部工具、版本冲突示例及排错见 [MCP 新手使用说明](docs/mcp.md)，也可在页面右上角 **使用说明** 离线查看。最近客户端列表只表示 5 分钟内活动，不代表持续在线；真实 AI 客户端接入仍待实机验收。
+
+0.1.31 为这 26 个工具补充输出 schema、structuredContent 和效果注解；HTTP/stdio 可列出和读取受权限约束的资源，不提供订阅。“MCP → 操作审计”只记录认证后写工具的固定元数据与结果，不保存参数、正文或凭据，也不等同于全部界面操作日志。
 
 ## 项目结构
 
@@ -88,6 +92,7 @@ curl --noproxy "" -x http://127.0.0.1:8080 --cacert .local/capture/certificates/
 | 代理 | HTTP/SOCKS5 列表、认证、系统凭据库；手动请求独立选择 | H3 支持 SOCKS5 UDP，不支持普通 HTTP 上游/CONNECT-UDP；失败不回退直连 |
 | 查看和编辑 | 请求/响应正文格式化；SVG/图片适应窗口、缩放和双向滚动；清晰输入框；规则拦截和文件替换响应，右键可建立响应拦截 | HTML 静态预览禁用脚本与外部资源；响应文件替换界面当前限制 8 MiB；原始字节与解码展示区分 |
 | 阻止请求 | URL 包含/正则、精确域名及可选方法；抓包/全部范围；本地 403、规则落盘、右键添加 | 不终止已建立的 WS/流式会话；未解密 CONNECT 只能按不限定方法的精确域名阻止；不是系统防火墙 |
+| 故障模拟 | 请求延迟、每规则固定窗口频率限制、本地 429/Retry-After、版本保护及迁移后禁用 | 仅第一匹配规则；不限制正文带宽，不处理 WS、CONNECT 直通或系统级流量 |
 | 流式查看 | 原生 Auto/H1/H2 SSE 实时转发/事件查看；WS/WSS 双向帧查看，Native H1 主动消息发送 | H3/浏览器引擎 SSE、压缩 SSE 增量事件解析、WS 脚本/断点和完整大文件流式链路待补 |
 | 会话 | SQLite、工作区恢复、会话 JSON 保存/导入、HAR 导入、Ctrl/Command+A 和批量删除 | 首次全量读取，不分页；后续增量同步；HAR 导出、全库 SQLite 备份及虚拟列表已支持，大正文流式存储待完善 |
 | 界面 | 主题切换、中英文及跟随系统、可拖动分栏、虚拟列表；输入框/下拉框边界及焦点状态统一 | 部分桌面 WebView 和跨平台实际 GUI 回归待补 |

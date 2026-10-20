@@ -1,6 +1,6 @@
 # 桌面正式版发布
 
-当前候选版本的更新内容、验证记录和剩余工作见 [2026-10-20 更新说明](release-2026-10-20.md)。GitHub Release 正文直接读取该文档，应用内更新说明读取其中“更新内容”章节，避免发布后只显示通用安装说明。修改下一版时须同步 `scripts/release-updater.mjs` 中的说明文件路径和对应文档。上一正式版见 [0.1.28 更新说明](release-2026-10-19.md)，此前的预览版范围保留在 [2026-10-16 更新说明](release-2026-10-16.md)。
+当前正式版更新内容、验证记录和剩余工作见 [2026-10-20 更新说明](release-2026-10-20.md)。正式版 [0.1.31 / build-da127ea9ba1a](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`；[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 三系统及前端全部通过，[Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 四平台构建、各平台 10 项桌面更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。GitHub Release 正文读取该说明，应用内更新说明读取其中“更新内容”章节。修改下一版时须同步 `scripts/release-updater.mjs` 中的说明文件路径和对应文档。上一正式版见 [0.1.28 更新说明](release-2026-10-19.md)，此前预览版范围保留在 [2026-10-16 更新说明](release-2026-10-16.md)。真实安装与跨版本更新不由构建和验签推导为已完成。
 
 `main` 的 push 对应 Check 全部通过后，Release 工作流检出同一提交，构建以下安装包。全部构建成功、签名更新包完整性检查通过后，创建 `build-<提交前12位>` 正式版本并上传安装包、更新包与 SHA256 校验文件，按版本顺序推进应用更新清单及 GitHub Latest。PR 检查不会触发发布；已公开的 build 资产重跑时不覆盖。
 

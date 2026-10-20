@@ -4,9 +4,9 @@
 
 执行顺序（2026-10-16 用户确认）：先完成本版全部平台发布，再按优先级继续开发未完成项；安装、跨版本更新、系统集成与桌面等实机验收先暂缓，保留未完成状态。发布后的首项开发为 P0 大文件低内存链路；代码改动所需的自动化回归仍须执行。
 
-## 本次候选：使用反馈与 MCP 增强（2026-10-20）
+## 本次正式发布：0.1.31，使用反馈与 MCP 增强（2026-10-20）
 
-本次将下方 TODO 修复和 RelayCore 借鉴增量合并交付，已完成本地回归与隔离浏览器检查，按用户“验收后发版”要求进入三系统 Check、四组安装包及桌面更新测试门禁。完整更新内容见[发布说明](release-2026-10-20.md)，独立验收证据和目标机器边界见[验收记录](acceptance-2026-10-20.md)。正式版本、源码与公开附件验证待门禁通过后补充；此时最新正式版仍为 0.1.28。
+本次将下方 TODO 修复和 RelayCore 借鉴增量合并交付，已完成本地回归、隔离浏览器检查和正式发布。正式版 [0.1.31 / build-da127ea9ba1a](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`；[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 三系统及前端全部通过，[Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 四平台构建、各平台 10 项桌面更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。完整更新内容见[发布说明](release-2026-10-20.md)，独立验收证据和目标机器边界见[验收记录](acceptance-2026-10-20.md)；实际安装、跨设备及业务流程未因构建或验签而勾选。
 
 ## 上一正式发布：0.1.28，MCP、配置迁移与 Cookie（2026-10-20）
 
@@ -27,11 +27,11 @@
 
 httpcloak 发送修复通过完整 Go 11 项顶层回归，包含 Chrome/Firefox 的单条/多条 Cookie 实际 HPACK 字段、H1 原始请求收包、导入 ClientHello 后继承及并发隔离；验证预设除 Cookie 策略与内部标识外保持相同，未信任证书仍拒绝。此证据不替代安装版网站业务验收。 0.1.28 另外修复 Windows 测试服务器提前关闭 HTTP/2 连接的竞态，本地连续 100 轮（400 子例）及四平台 CI helper 回归均通过；生产 TLS 信任与发送逻辑未因该测试修复改变。
 
-## 用户 TODO 反馈修复（2026-10-20，已纳入本次候选）
+## 用户 TODO 反馈修复（2026-10-20，已随 0.1.31 发布）
 
-用户 PDF 中五项均已落实代码修改：来源进程查询超过并发名额时有界排队、httpcloak 默认预设按 ALPN 兼容 H1/H2、抓包详情响应替换按钮、窄屏保留上游入口、Linux portable 手动更新下载与复制链接。它们不在 0.1.28 中；修复细节、自动验证及待验项见 [反馈清单](todo-feedback-2026-10-20.md)。
+用户 PDF 中五项均已落实代码修改：来源进程查询超过并发名额时有界排队、httpcloak 默认预设按 ALPN 兼容 H1/H2、抓包详情响应替换按钮、窄屏保留上游入口、Linux portable 手动更新下载与复制链接。五项已随 0.1.31 交付，0.1.28 不包含这些修复；修复细节、自动验证及待验项见 [反馈清单](todo-feedback-2026-10-20.md)。
 
-来源识别 22 项单元/5 项集成、Go helper 20 项及定向 100 轮、完整前端回归/TypeScript/国际化/生产构建已通过。ANA 公开 JS 只读 GET 返回 200 / HTTP/2 / TLS 1.3；隔离生产界面验证响应替换、360/600px 上游入口、审计、故障规则保存及迁移类别。桌面含测试代码编译通过；本机 10 项更新模块测试被 Windows 拒绝启动，必须通过四平台发布门禁补齐。Linux 实际权限、ANA 业务请求、安装版操作与 portable 默认浏览器仍保留目标机器验收，不由模拟结果推导为完成。eCapture 尚仅完成可行性评估，没有接入。
+来源识别 22 项单元/5 项集成、Go helper 20 项及定向 100 轮、完整前端回归/TypeScript/国际化/生产构建已通过。独立 helper 使用 Chrome 和 Firefox 预设分别只读 GET 用户提供的 ANA 公开 JavaScript 链接，两次均为 200 / HTTP/2 / ALPN h2 / TLS 1.3；正文均为 4659 字节且 SHA256 一致。未重放原业务 POST，不代表鉴权或订票搜索验收通过。外部 Node stdio 夹具在固定 Node 环境下连续 30 轮、共 90 次子进程用例通过；不把本地重复回归替代跨平台 CI。隔离生产界面验证响应替换、360/600px 上游入口、审计、故障规则保存及迁移类别。本机 Windows 曾拒绝启动更新测试；同一发布来源的四个平台 runner 已各自执行并通过全部 10 项更新模块测试。Linux 实际权限、ANA 业务请求、安装版操作与 portable 默认浏览器仍保留目标机器验收，不由模拟结果推导为完成。eCapture 尚仅完成可行性评估，没有接入。
 
 ## 上一正式版（2026-10-19，0.1.23）
 
@@ -48,16 +48,18 @@ httpcloak 发送修复通过完整 Go 11 项顶层回归，包含 Chrome/Firefox
 - [x] 向导真实组件自动验证：不自动调用 API、四客户端 HTTP/stdio 格式、JSON/TOML 与 Windows 路径转义、复制/重新生成失败保留内容；规则权限、CAS、脚本和退出保护定向测试通过。
 - [ ] Codex/Cursor/VS Code 真实账户连接和工具确认、原生桌面剪贴板、各平台桥接退出与安装升级继续待用户验收，不以本地自动测试代替。
 
-## RelayCore 借鉴开发（2026-10-20，未包含在 0.1.28）
+## RelayCore 借鉴增量（2026-10-20，已随 0.1.31 交付）
 
-按用户提供的 [relaycraft/relay-core](https://github.com/relaycraft/relay-core) 审阅固定提交 `89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196`，只读取源码，未安装或执行外部项目。此前按“先发布个版本”先交付 0.1.28；现在下列增量已完成本地回归并纳入本次候选，等待正式门禁。它们不在 0.1.28 安装包中，既有 P0 大正文工作顺序保持不变。
+按用户提供的 [relaycraft/relay-core](https://github.com/relaycraft/relay-core) 审阅固定提交 `89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196`，只读取源码，未安装或执行外部项目。此前按“先发布个版本”先交付 0.1.28；下列四项增量已随 0.1.31 正式交付，通过本地回归、CI 和公开附件核验。它们不在 0.1.28 安装包中，既有 P0 大正文工作顺序保持不变。
 
-- [ ] 待后续发布：工作区已为 26 个 MCP 工具补输出 schema、structuredContent、效果注解及受权限约束的 HTTP/stdio 资源列表和读取；不提供订阅，保留权限分组、CAS 和原子保存。[参考工具定义](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-probe/src/tools/mod.rs#L198)。
-- [ ] 待后续发布：工作区已实现 12 个认证后 MCP 写操作的本地审计和只读分页界面，保留 10000 条；不记录参数、正文、凭据或源码，自报客户端分类不是个人身份。操作前落库失败不执行，完成回写失败保留原结果并提示，pending 表示结果未确认。[参考事件结构](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-runtime/src/audit.rs#L114)。
-- [ ] 工作区已实现阻止页的“故障模拟”选项卡：延迟 0–30000 ms、每规则固定窗口次数限制及本地 429/Retry-After，第一匹配规则、版本保护、取消等待和全局迁移初始禁用；等待后续发布。统一多阶段规则和正文带宽限速仍未实现。[参考动作实现](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-lib/src/rule/engine/actions/common.rs#L82)。
-- [ ] 工作区已补 64 KiB 有界正文范围计划并接入 MCP，Spool 有界读取接口尚待预览入口；完整保存/转发保持全量。P0 仍需文件引用贯穿历史、脚本、IPC 和前端，不能用有限前缀替代完整保存。回归覆盖恰好预算、后续帧、trailers、取消和流控。[参考设计](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/docs/decisions/0009-daemon-observes-body-prefix.md)。
+- [x] 0.1.31 已交付：为 26 个 MCP 工具补输出 schema、structuredContent、效果注解及受权限约束的 HTTP/stdio 资源列表和读取；不提供订阅，保留权限分组、CAS 和原子保存。[参考工具定义](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-probe/src/tools/mod.rs#L198)。
+- [x] 0.1.31 已交付：12 个认证后 MCP 写操作的本地审计和只读分页界面，保留 10000 条；不记录参数、正文、凭据或源码，自报客户端分类不是个人身份。操作前落库失败不执行，完成回写失败保留原结果并提示，pending 表示结果未确认。[参考事件结构](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-runtime/src/audit.rs#L114)。
+- [x] 0.1.31 已交付阻止页的“故障模拟”选项卡：延迟 0–30000 ms、每规则固定窗口次数限制及本地 429/Retry-After，第一匹配规则、版本保护、取消等待和全局迁移初始禁用。统一多阶段规则和正文带宽限速另列待办。[参考动作实现](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-lib/src/rule/engine/actions/common.rs#L82)。
+- [x] 0.1.31 已交付 64 KiB 有界正文范围计划并接入 MCP，以及 Spool 有界读取接口；完整保存/转发保持全量。界面预览入口与 P0 全链路文件引用另列待办。回归覆盖恰好预算、后续帧、trailers、取消和流控。[参考设计](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/docs/decisions/0009-daemon-observes-body-prefix.md)。
+- [ ] 后续：统一多阶段规则、正文带宽限速，以及 Spool 范围读取接入界面预览。
+- [ ] P0 全链路仍未完成：文件引用需贯穿历史、脚本、IPC 和前端，并测量并发峰值内存；不能用有限前缀替代完整保存。
 
-本次最终本地验证：内核/传输层完整回归、MCP 全量 43 项、服务接口 9 项和生产 stdio 子进程 3 项通过，包含正文范围、审计、故障模拟、迁移与来源识别。完整前端 36 个脚本、翻译、TypeScript、生产构建、服务/桌面含测试编译和发布验签 fixtures 34 项通过；隔离浏览器已检查新入口和保存流程。正式构建和安装版/真实 AI 客户端验收仍分别记录，不以此清单表示已经发布。
+本次最终本地验证：内核/传输层完整回归、MCP 全量 43 项、服务接口 9 项和生产 stdio 子进程 3 项通过，包含正文范围、审计、故障模拟、迁移与来源识别。完整前端 36 个脚本、翻译、TypeScript、生产构建、服务/桌面含测试编译和发布验签 fixtures 34 项通过；隔离浏览器已检查新入口和保存流程。0.1.31 的三系统 Check、四平台原生更新测试、构建和公开附件核验均已通过；安装版、跨设备和真实 AI 客户端仍单独待验。
 
 参考边界：其 Windows WinDivert feature 默认未启用，PID 来源和真实接管链路仍缺验证；H3 降级主要移除 Alt-Svc，不是 H3 MITM。源码静态发现 `buffer_body_within_budget` 在累计恰好预算且仍有后续帧时会把前缀作为 Full 返回，存在丢正文问题；未执行该项目测试，采用相关实现前需要独立回归。[Windows 路径](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-lib/src/capture/windows.rs#L214)、[正文边界](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-lib/src/proxy/body_plan.rs#L67)。
 
@@ -193,9 +195,11 @@ H1 Reqable 对照包含用户 Raw 截图及源站记录，固定样例一致；H
 
 ## 下次从哪里开始
 
+- [ ] httpcloak 依赖仍锁定 v1.7.2；上游 v1.7.3 升级后续单独安排兼容回归，覆盖 TLS/ALPN、ExactHeaders/Cookie、代理、取消及二进制正文，不宣称本版已经升级。
+
 **当前：R2 数据管理、R3 集合/环境及部分 R4/R6 已落地，继续处理下方未勾选项。** 首次读取全部记录，之后同步变更；不分页、不截断历史。完整用法及边界见 [会话与工作区](sessions-workspaces.md)。TUN H3 已有流级拒绝与超时修复，实机接管验收暂停；历史权限及 UDP 80/443 问题尚未完成定位。
 
-最近已核实的正式发布为 `build-19095a086601`（0.1.28），包括 MCP 增量、标准 JSON 全局配置迁移和 Cookie 拆分/合并，以及 Windows、Linux deb/AppImage/portable、两种 Mac DMG 和五个签名更新目标。后续仍有全链路大正文低内存、协议兼容边界、加密迁移与自动合并等待处理。下方日期记录保留历史，当时的失败/未支持结论不覆盖上方现状；实机验收继续暂缓。
+最近已核实的正式发布为 [build-da127ea9ba1a / 0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，包括上述 TODO 修复、MCP 契约/资源与审计、故障模拟和有界正文读取；沿用 0.1.28 的 MCP 工作流、标准 JSON 全局配置迁移与 Cookie 拆分/合并。Windows、Linux deb/AppImage/portable、两种 Mac DMG 和五个签名更新目标均已核验。后续仍有全链路大正文低内存、协议兼容边界、加密迁移与自动合并等待处理。下方日期记录保留历史，当时的失败/未支持结论不覆盖上方现状；实机验收继续暂缓。
 
 1. 先读本文件、[架构说明](architecture.md)和相关模块代码，核对工作区是否有新的改动。
 2. 当前继续 R2 大正文存储、R4 桌面生命周期和 R5/R6 协议能力，R4 保留实机验收工作；一次完成一个可验证的阶段。用户的新要求优先，并在这里记录顺序调整。
