@@ -116,7 +116,7 @@ export function InterceptionEditor({item, onDone}: {item: Item; onDone: () => Pr
       </div>
       {editingResponse ? <label className="interception-status">{t('状态码')}<input aria-label={t('拦截响应状态码')} type="number" min="100" max="599" value={response.status} onChange={e => { const status = Number(e.target.value); setResponse(current => ({...current, status})); }}/></label>
         : <div className="request-bar"><input aria-label={t('拦截请求方法')} value={request.method} onChange={e => { const method = e.target.value; setRequest(current => ({...current, method})); }}/><input aria-label={t('拦截请求 URL')} value={request.url} onChange={e => { const url = e.target.value; setRequest(current => ({...current, url})); }}/></div>}
-      <div className="interception-section"><OrderedHeaders key={`${editingResponse}-${editorEpoch}`} headers={message.headers} onChange={setHeaders}/></div>
+      <div className="interception-section"><OrderedHeaders key={`${editingResponse}-${editorEpoch}`} context={editingResponse ? 'response' : 'request'} headers={message.headers} onChange={setHeaders}/></div>
       <section className="interception-section interception-body">
         <div className="interception-controls">
           <strong>{t('正文')}</strong>

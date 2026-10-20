@@ -17,7 +17,8 @@ function replaceEnabled(current: Header[], incoming: Header[]): Header[] {
   return [...result, ...incoming.slice(index)];
 }
 
-export default function OrderedHeaders({ headers, onChange }: { headers: Header[]; onChange: (headers: Header[]) => void }) {
+export default function OrderedHeaders({ headers, onChange, context = 'request' }: { headers: Header[]; onChange: (headers: Header[]) => void; context?: 'request' | 'response' }) {
+  const response = context === 'response';
   const textId = useId();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
@@ -27,7 +28,7 @@ export default function OrderedHeaders({ headers, onChange }: { headers: Header[
   const [busy, setBusy] = useState(false);
   const enabled = headers.filter(header => !header.disabled).length;
   function message(error: unknown) {
-    if (error instanceof HeaderTextError) return t('第 {v0} 行请求头格式无效，请检查字段名、值或换行。', { v0: error.line });
+    if (error instanceof HeaderTextError) return response ? t('第 {v0} 行响应头格式无效，请检查字段名、值或换行。', { v0: error.line }) : t('第 {v0} 行请求头格式无效，请检查字段名、值或换行。', { v0: error.line });
     return String(error);
   }
   function currentText() { return serializeHeaders(headers.filter(header => header.name || header.value)); }
@@ -39,12 +40,12 @@ export default function OrderedHeaders({ headers, onChange }: { headers: Header[
   async function paste() {
     setError(''); setNotice(''); setBusy(true); setEditing(true); setMode('replace');
     try { setText(await readClipboard()); }
-    catch { setError(t('无法读取剪贴板，请在下方编辑框中手动粘贴请求头。')); }
+    catch { setError(response ? t('无法读取剪贴板，请在下方编辑框中手动粘贴响应头。') : t('无法读取剪贴板，请在下方编辑框中手动粘贴请求头。')); }
     finally { setBusy(false); }
   }
   async function copy() {
     setError(''); setNotice('');
-    try { await writeClipboard(currentText()); setNotice(t('已复制启用的请求头')); }
+    try { await writeClipboard(currentText()); setNotice(response ? t('已复制启用的响应头') : t('已复制启用的请求头')); }
     catch (error) { setError(error instanceof HeaderTextError ? message(error) : t('当前环境无法访问剪贴板')); }
   }
   function apply() {
@@ -53,7 +54,7 @@ export default function OrderedHeaders({ headers, onChange }: { headers: Header[
       const parsed = parseHeaderText(text);
       onChange(mode === 'append' ? [...headers, ...parsed.headers] : replaceEnabled(headers, parsed.headers));
       setEditing(false);
-      setNotice(t('已应用 {v0} 个请求头', { v0: parsed.headers.length }) + (parsed.pseudoHeaders.length ? t('；已忽略 {v0} 个 HTTP/2 伪头，URL 和方法保持当前设置。', { v0: parsed.pseudoHeaders.length }) : ''));
+      setNotice((response ? t('已应用 {v0} 个响应头', { v0: parsed.headers.length }) : t('已应用 {v0} 个请求头', { v0: parsed.headers.length })) + (parsed.pseudoHeaders.length ? response ? t('；已忽略 {v0} 个 HTTP/2 伪头，状态码保持当前设置。', { v0: parsed.pseudoHeaders.length }) : t('；已忽略 {v0} 个 HTTP/2 伪头，URL 和方法保持当前设置。', { v0: parsed.pseudoHeaders.length }) : ''));
     } catch (error) { setError(message(error)); }
   }
   function update(index: number, patch: Partial<Header>) { onChange(headers.map((header, i) => i === index ? { ...header, ...patch } : header)); }
@@ -78,15 +79,15 @@ export default function OrderedHeaders({ headers, onChange }: { headers: Header[
       <div className="headers-toolbar-actions">
         <button type="button" aria-expanded={editing} onClick={openText}><FileText size={14} />{t('文本编辑')}</button>
         <button type="button" disabled={busy} onClick={() => void paste()}><ClipboardPaste size={14} />{t('粘贴导入')}</button>
-        <button type="button" onClick={() => void copy()}><Copy size={14} />{t('复制请求头')}</button>
+        <button type="button" onClick={() => void copy()}><Copy size={14} />{response ? t('复制响应头') : t('复制请求头')}</button>
       </div>
     </div>
     {editing && <div className="headers-text-editor">
-      <label htmlFor={textId}>{t('请求头文本')}</label>
+      <label htmlFor={textId}>{response ? t('响应头文本') : t('请求头文本')}</label>
       <p>{t('支持 Name: value 和浏览器复制的名称、值分行格式；保留重复字段与顺序。')}</p>
-      <textarea id={textId} aria-label={t('请求头文本')} disabled={busy} value={text} onChange={event => { setText(event.target.value); setError(''); }} spellCheck={false} wrap="off" placeholder={'Accept: application/json\nUser-Agent: Mozilla/5.0\nX-Test: value'} />
+      <textarea id={textId} aria-label={response ? t('响应头文本') : t('请求头文本')} disabled={busy} value={text} onChange={event => { setText(event.target.value); setError(''); }} spellCheck={false} wrap="off" placeholder={response ? 'Content-Type: application/json\nCache-Control: no-cache\nX-Test: value' : 'Accept: application/json\nUser-Agent: Mozilla/5.0\nX-Test: value'} />
       <div className="headers-text-actions">
-        <select aria-label={t('请求头导入方式')} value={mode} onChange={event => setMode(event.target.value)}>
+        <select aria-label={response ? t('响应头导入方式') : t('请求头导入方式')} value={mode} onChange={event => setMode(event.target.value)}>
           <option value="replace">{t('替换启用项，保留禁用项')}</option>
           <option value="append">{t('追加到列表')}</option>
         </select>
@@ -121,7 +122,7 @@ export default function OrderedHeaders({ headers, onChange }: { headers: Header[
         </div>
       </div>})}</div>
     </div>
-    <button type="button" className="add-header" onClick={() => onChange([...headers, { name: '', value: '' }])}><Plus size={13} />{t('添加请求头')}</button>
+    <button type="button" className="add-header" onClick={() => onChange([...headers, { name: '', value: '' }])}><Plus size={13} />{response ? t('添加响应头') : t('添加请求头')}</button>
     <div className="field-note"><Check size={12} />{t('保留顺序、重复字段和原始大小写；禁用字段不发送。')}</div>
     {headers.some(header => header.name.toLowerCase() === 'cookie') && <div className="field-note cookie-header-note">{t('Cookie 可拆分或合并；合并仅处理相同启用状态。')}</div>}
   </div>;

@@ -9,6 +9,8 @@ use std::{path::PathBuf, sync::Arc};
 
 mod mcp_routes;
 mod config_migration_routes;
+mod response_rewrite_routes;
+mod body_routes;
 struct Service { runtime: Arc<CaptureRuntime>, mcp_server: Arc<ServerManager>, mcp_clients: Arc<ClientManager>, token: String }
 impl std::ops::Deref for Service {
     type Target = CaptureRuntime;
@@ -253,6 +255,8 @@ fn router(state:Shared)->Router {
         .route("/scripts", get(capture_scripts).post(set_capture_scripts))
         .route("/blocking", get(blocking).post(configure_blocking))
         .route("/fault-rules",get(fault_rules).post(configure_fault_rules))
+        .merge(response_rewrite_routes::router())
+        .merge(body_routes::router())
         .route("/mcp/audit",post(mcp_audit))
         .route("/interception", get(interception).post(configure_interception)).route("/interception/resolve", post(resolve_interception).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/certificate", get(certificate)).route("/upstream", post(set_upstream))

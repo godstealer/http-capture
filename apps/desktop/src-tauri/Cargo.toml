@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 time = { version = "0.3", features = ["formatting"] }
 tokio.workspace = true
+uuid = { version = "1", features = ["v4"] }
 
 [[bin]]
 name = "http-capture"

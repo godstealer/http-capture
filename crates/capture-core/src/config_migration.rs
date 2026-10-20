@@ -6,12 +6,15 @@ use serde::{Deserialize,Serialize};
 use serde_json::{json,Value};
 use std::{collections::{BTreeMap,BTreeSet},io::Write,time::{SystemTime,UNIX_EPOCH}};
 use crate::{store::{Store,Library,Workspace},scripts::Scripts,plugins::Plugin};
-pub(crate) const CONFIG_KEYS:&[&str]=&["library.v1","workspace.v1","interception.v1","blocking.v1","fault-rules.v1","capture-scripts.v1","plugins.v1","decryption.bypass.v1","upstream.profiles.v1","mcp.server.v1","mcp.clients.v1","ui.preferences.v1"];
+#[cfg(test)]
+#[path="config_migration_response_rewrite_tests.rs"]
+mod response_rewrite_tests;
+pub(crate) const CONFIG_KEYS:&[&str]=&["library.v1","workspace.v1","interception.v1","blocking.v1","fault-rules.v1","response-rewrite.v1","capture-scripts.v1","plugins.v1","decryption.bypass.v1","upstream.profiles.v1","mcp.server.v1","mcp.clients.v1","ui.preferences.v1"];
 pub(crate) struct Snapshot {pub revision:String,pub settings:BTreeMap<String,Value>}
 
 pub const MAX_DOCUMENT_BYTES:usize=16*1024*1024;
 const PREF_KEY:&str="ui.preferences.v1";
-const SECTION_KEYS:&[(&str,&str)]=&[("preferences",PREF_KEY),("library","library.v1"),("workspace","workspace.v1"),("interception","interception.v1"),("blocking","blocking.v1"),("faults","fault-rules.v1"),("scripts","capture-scripts.v1"),("plugins","plugins.v1"),("decryption","decryption.bypass.v1"),("upstream","upstream.profiles.v1")];
+const SECTION_KEYS:&[(&str,&str)]=&[("preferences",PREF_KEY),("library","library.v1"),("workspace","workspace.v1"),("interception","interception.v1"),("blocking","blocking.v1"),("faults","fault-rules.v1"),("responseRewrite","response-rewrite.v1"),("scripts","capture-scripts.v1"),("plugins","plugins.v1"),("decryption","decryption.bypass.v1"),("upstream","upstream.profiles.v1")];
 const PREF_KEYS:&[&str]=&["http-capture.theme","http-capture.language","http-capture.zoom","http-capture.listener.v1","http-capture.body-editor.auto-format-paste.v1","http-capture.capture.columns.v1","http-capture.capture.column-widths","http-capture.capture.id-sort","http-capture.layout.inspector-direction","http-capture.layout.composer-columns","http-capture.layout.capture-list","http-capture.layout.capture-messages-row","http-capture.layout.capture-messages-column","http-capture.code-target","http-capture.clienthello-templates.v1","http-capture.grpc.proto.v1","http-capture.request-modes"];
 
 #[derive(Clone,Default,Deserialize)]
@@ -63,7 +66,7 @@ fn strict_json(text:&str)->Result<Value>{Ok(serde_json::from_str::<Strict>(text)
 fn now()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64}
 fn section(data:Value)->Section{Section{version:1,data}}
 fn warning(warnings:&mut Vec<String>,value:&str){if !warnings.iter().any(|v|v==value){warnings.push(value.into());}}
-fn count(id:&str,data:&Value)->usize {match id {"library"=>data["requests"].as_array().map_or(0,Vec::len),"workspace"=>data["editors"].as_array().map_or(0,Vec::len),"interception"|"blocking"|"faults"=>data["rules"].as_array().map_or(0,Vec::len),"preferences"=>data.as_object().map_or(0,serde_json::Map::len),"mcp"=>data["clients"].as_array().map_or(0,Vec::len),_=>data.as_array().map_or(1,Vec::len)}}
+fn count(id:&str,data:&Value)->usize {match id {"library"=>data["requests"].as_array().map_or(0,Vec::len),"workspace"=>data["editors"].as_array().map_or(0,Vec::len),"interception"|"blocking"|"faults"|"responseRewrite"=>data["rules"].as_array().map_or(0,Vec::len),"preferences"=>data.as_object().map_or(0,serde_json::Map::len),"mcp"=>data["clients"].as_array().map_or(0,Vec::len),_=>data.as_array().map_or(1,Vec::len)}}
 fn summary(package:&Package)->Summary {Summary{sections:package.sections.iter().map(|(id,s)|SectionSummary{id:id.clone(),count:count(id,&s.data)}).collect(),warnings:package.warnings.clone()}}
 fn serialize(package:Package)->Result<Exported>{let result=Exported{summary:summary(&package),document:serde_json::to_string_pretty(&package)?};ensure!(result.document.len()<=MAX_DOCUMENT_BYTES,"Configuration file exceeds 16 MiB; exclude request bodies or workspace");Ok(result)}
 
@@ -154,6 +157,7 @@ fn validate_section(id:&str,data:&Value)->Result<()> {
         "interception"=>crate::intercept::validate_config(&serde_json::from_value(data.clone())?)?,
         "blocking"=>crate::blocking::validate_config(&serde_json::from_value(data.clone())?)?,
         "faults"=>crate::fault_rules::validate_config(&serde_json::from_value(data.clone())?)?,
+        "responseRewrite"=>crate::response_rewrite::validate_config(&serde_json::from_value(data.clone())?)?,
         "scripts"=>validate_script(&serde_json::from_value(data.clone())?)?,
         "plugins"=>{let plugins:Vec<Plugin>=serde_json::from_value(data.clone())?;ensure!(plugins.len()<=32,"At most 32 plugins can be imported");let mut ids=BTreeSet::new();for plugin in plugins{ensure!(ids.insert(plugin.id.clone()),"Duplicate plugin ID");crate::plugins::validate_plugin(&plugin)?;}},
         "decryption"=>{let hosts:Vec<String>=serde_json::from_value(data.clone())?;ensure!(hosts.len()<=256,"Too many passthrough hosts");for host in hosts{let domain=host.strip_prefix("*.").unwrap_or(&host);ensure!(!domain.is_empty()&&domain.len()<=253&&domain.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'.'||b==b'-'),"Invalid passthrough host");}},
@@ -168,7 +172,7 @@ fn parse_document(document:&str)->Result<Package> {
     ensure!(package.format=="http-capture-config"&&package.schema_version==1,"Unsupported configuration format/version; update the application before importing");
     uuid::Uuid::parse_str(&package.export_id).context("Invalid configuration export ID")?;
     ensure!(!package.source_version.is_empty()&&package.source_version.len()<=64&&package.warnings.len()<=256&&package.warnings.iter().all(|v|v.len()<=2048),"Invalid source version or warnings");
-    ensure!(!package.sections.is_empty()&&package.sections.len()<=11,"Invalid configuration categories");
+    ensure!(!package.sections.is_empty()&&package.sections.len()<=12,"Invalid configuration categories");
     for (id,section) in &package.sections {ensure!(section.version==1,"Unsupported {id} category version");validate_section(id,&section.data).with_context(||format!("Invalid {id} configuration"))?;}
     Ok(package)
 }
@@ -220,6 +224,14 @@ fn make_package(snapshot:&Snapshot,mut preferences:BTreeMap<String,String>,optio
     sections.insert("interception".into(),section(serde_json::to_value(interception)?));
     let mut blocking:crate::blocking::Config=saved(snapshot,"blocking.v1")?;blocking.enabled=false;sections.insert("blocking".into(),section(serde_json::to_value(blocking)?));
     let mut faults:crate::fault_rules::Config=saved(snapshot,"fault-rules.v1")?;faults.enabled=false;sections.insert("faults".into(),section(serde_json::to_value(faults)?));
+    let mut rewrites:crate::response_rewrite::Config=saved(snapshot,"response-rewrite.v1")?;
+    rewrites.enabled=false;
+    for rule in &mut rewrites.rules {rule.enabled=false;}
+    if !options.include_request_data {
+        rewrites.rules.clear();
+        warning(&mut warnings,"响应重写规则可能包含响应正文、头部或匹配凭据；未包含请求内容时不导出这些规则。");
+    }
+    sections.insert("responseRewrite".into(),section(serde_json::to_value(rewrites)?));
     let hosts:Vec<String>=saved(snapshot,"decryption.bypass.v1")?;sections.insert("decryption".into(),section(json!(hosts)));
     let profiles:Vec<Value>=saved(snapshot,"upstream.profiles.v1")?;
     let profiles=profiles.into_iter().map(|p|PortableProxy{id:p["id"].as_str().unwrap_or_default().into(),name:p["name"].as_str().unwrap_or_default().into(),url:p["url"].as_str().unwrap_or_default().into(),username:if options.include_proxy_usernames{p["username"].as_str().unwrap_or_default().into()}else{String::new()},auth_enabled:p["authEnabled"].as_bool().unwrap_or(false)}).collect::<Vec<_>>();
@@ -265,7 +277,7 @@ fn remap_proxy(draft:&mut crate::model::RequestDraft,ids:&BTreeMap<String,String
 pub fn prepare_import(store:&Store,document:&str,selected:&[String],expected:&str,current_preferences:BTreeMap<String,String>,source_version:&str)->Result<PreparedImport>{
     store.configuration_ready()?;validate_preferences(&current_preferences)?;let package=parse_document(document)?;let snapshot=store.configuration_snapshot()?;
     ensure!(snapshot.revision==expected,"Configuration changed after preview; preview the file again before importing");
-    ensure!(!selected.is_empty()&&selected.len()<=11,"Choose at least one configuration category");let chosen=selected.iter().map(String::as_str).collect::<BTreeSet<_>>();ensure!(chosen.len()==selected.len()&&chosen.iter().all(|id|package.sections.contains_key(*id)),"Invalid or duplicate import category");
+    ensure!(!selected.is_empty()&&selected.len()<=12,"Choose at least one configuration category");let chosen=selected.iter().map(String::as_str).collect::<BTreeSet<_>>();ensure!(chosen.len()==selected.len()&&chosen.iter().all(|id|package.sections.contains_key(*id)),"Invalid or duplicate import category");
     let restore_preferences=if current_preferences.is_empty(){saved(&snapshot,PREF_KEY)?}else{current_preferences};
     let recovery_package=make_package(&snapshot,restore_preferences,&ExportOptions{include_request_data:true,include_code:true,include_workspace:true,include_proxy_usernames:true},source_version)?;
     let recovery_export=serialize(recovery_package.clone())?;
@@ -305,6 +317,7 @@ pub fn prepare_import(store:&Store,document:&str,selected:&[String],expected:&st
         match *id {
             "interception"=>{value["request"]=json!(false);value["response"]=json!(false);},
             "blocking"|"faults"|"scripts"=>value["enabled"]=json!(false),
+            "responseRewrite"=>{value["enabled"]=json!(false);for rule in value["rules"].as_array_mut().context("Invalid response rewrite rules")? {rule["enabled"]=json!(false);}},
             "plugins"=>{for plugin in value.as_array_mut().context("Invalid plugins")?{plugin["enabled"]=json!(false);}},_=>{}
         }updates.insert((*key).into(),value);
     }

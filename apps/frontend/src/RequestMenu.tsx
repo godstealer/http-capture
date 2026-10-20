@@ -7,9 +7,10 @@ import { cssZoomFactor, menuPosition, UI_ZOOM_EVENT } from './uiZoom';
 import { headerLines } from './messageText';
 
 export interface MenuTarget { flow: Flow; x: number; y: number; anchor: HTMLElement }
-export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy, replayDisabled, onSave, onDelete, onInterceptResponse, onBlock, selectionCount = 1 }: {
+export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy, replayDisabled, onSave, onDelete, onInterceptResponse, onRewriteResponse, onBlock, selectionCount = 1 }: {
   onBlock?: (flow: Flow, kind: 'url' | 'host') => void;
   onInterceptResponse?: (flow: Flow) => void;
+  onRewriteResponse?: (flow: Flow, action:'replace'|'modify') => void;
   selectionCount?: number; onSave?: (flow: Flow) => void; onDelete?: (flow: Flow) => void;
   target: MenuTarget; onClose: () => void; onEdit: (flow: Flow) => void;
   onReplay: (flow: Flow) => void; onCopy: (text: string) => void; replayDisabled: boolean;
@@ -54,7 +55,8 @@ export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy,
     {onDelete && <button role="menuitem" onClick={() => run(() => onDelete(target.flow))}>{t("删除选中（")}{selectionCount}）</button>}
     <button role="menuitem" onClick={() => run(() => onEdit(target.flow))}>{t("编辑")}<span>Ctrl+Shift+Enter</span></button>
     <button role="menuitem" disabled={replayDisabled} onClick={() => run(() => onReplay(target.flow))}>{t("直接 Replay")}<span>{t("立即发送")}</span></button>
-    {onInterceptResponse && <button role="menuitem" disabled={!!target.flow.websocket} onClick={() => run(() => onInterceptResponse(target.flow))}>{t('拦截替换响应')}<span>{t('下次请求生效')}</span></button>}
+    {onRewriteResponse && <><button role="menuitem" disabled={!!target.flow.websocket || request.method === 'CONNECT'} onClick={() => run(() => onRewriteResponse(target.flow,'replace'))}>{t('自动替换响应')}<span>{t('创建重写规则')}</span></button><button role="menuitem" disabled={!!target.flow.websocket || request.method === 'CONNECT'} onClick={() => run(() => onRewriteResponse(target.flow,'modify'))}>{t('自动修改响应')}<span>{t('文本 / 正则')}</span></button></>}
+    {onInterceptResponse && <button role="menuitem" disabled={!!target.flow.websocket} onClick={() => run(() => onInterceptResponse(target.flow))}>{t('手动响应断点')}<span>{t('命中后暂停')}</span></button>}
     {onBlock && <><button role="menuitem" disabled={request.method === 'CONNECT'} title={request.method === 'CONNECT' ? t('HTTPS 直通请求请使用域名阻止') : undefined} onClick={() => run(() => onBlock(target.flow, 'url'))}>{t('阻止此 URL')}<span>{t('下次请求生效')}</span></button><button role="menuitem" onClick={() => run(() => onBlock(target.flow, 'host'))}>{t('阻止此域名')}<span>{t('下次请求生效')}</span></button></>}
     <div role="separator" />
     <button role="menuitem" title="Bash / Git Bash" onClick={() => run(() => onCopy(toCurl(request)))}>{t("复制 cURL")}<span>Ctrl+Shift+C</span></button>

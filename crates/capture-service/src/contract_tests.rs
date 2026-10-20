@@ -3,6 +3,35 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use serde_json::{json, Value};
 
 #[tokio::test]
+async fn response_rewrite_api_authenticates_before_payload_and_preserves_conflicts() {
+ tokio::time::timeout(std::time::Duration::from_secs(15),async {
+  let directory=tempfile::tempdir().unwrap();let engine=Engine::open(directory.path()).unwrap();
+  let state=Service::new(engine.clone(),"contract-test".into()).unwrap();
+  let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+  let server=tokio::spawn(async move{axum::serve(listener,router(state)).await.unwrap()});
+  let original=engine.response_rewrite.snapshot().version;
+  let config=json!({"enabled":true,"scope":"capture","rules":[{"id":"saved-response","name":"Saved response","enabled":true,"matchType":"urlContains","pattern":"/api","method":"GET","action":"replace","replacement":{"status":202,"headers":[{"name":"Content-Type","value":"application/json"}],"bodyBase64":"e30="},"modifications":[]}]});
+  let update=json!({"config":config,"expectedVersion":original});
+  assert_eq!(call(address,"/response-rewrite",update.clone(),false).await.0,401);
+  assert!(!engine.response_rewrite.snapshot().config.enabled);
+  // Neither malformed JSON nor a deliberately oversized declared body may
+  // consume an unauthenticated upload before the authorization decision.
+  let mut socket=tokio::net::TcpStream::connect(address).await.unwrap();
+  socket.write_all(b"POST /response-rewrite HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 999999999\r\nConnection: close\r\n\r\n{").await.unwrap();
+  let mut head=[0;1024];let count=tokio::time::timeout(std::time::Duration::from_secs(2),socket.read(&mut head)).await.unwrap().unwrap();
+  assert!(std::str::from_utf8(&head[..count]).unwrap().starts_with("HTTP/1.1 401"));
+  let (status,saved)=call(address,"/response-rewrite",update.clone(),true).await;
+  assert_eq!(status,200);assert_eq!(saved["config"],config);assert_ne!(saved["version"],original);
+  assert_eq!(call(address,"/response-rewrite",update,true).await.0,400);
+  let mut invalid=config.clone();invalid["rules"][0]["matchType"]=json!("urlRegex");invalid["rules"][0]["pattern"]=json!("[");
+  assert_eq!(call(address,"/response-rewrite",json!({"config":invalid,"expectedVersion":saved["version"]}),true).await.0,400);
+  assert_eq!(engine.response_rewrite.snapshot().version,saved["version"].as_str().unwrap());
+  assert_eq!(serde_json::to_value(engine.response_rewrite.snapshot().config).unwrap(),config);
+  server.abort();let _=server.await;
+ }).await.expect("Response rewrite API contract stalled");
+}
+
+#[tokio::test]
 async fn blocking_api_requires_auth_and_rejects_invalid_updates_atomically() {
  let temp=tempfile::tempdir().unwrap();let engine=Engine::open(temp.path()).unwrap();
  let state=Service::new(engine.clone(),"contract-test".into()).unwrap();

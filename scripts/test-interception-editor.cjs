@@ -184,6 +184,7 @@ function mount(stage = 'request') {
 }
 (async () => {
   const response = mount('response');
+  assert.equal(response.headers().context, 'response');
   response.body().onChange('{"replacement":true}');
   response.render();
   response.button('替换响应并放行').onClick();
@@ -197,7 +198,9 @@ function mount(stage = 'request') {
   assert.deepEqual(response.calls[1][1].decision, {id:'one',action:'continue',request:null,response:null});
   response.unmount();
   const direct = mount();
+  assert.equal(direct.headers().context, 'request');
   direct.replace(true);
+  assert.equal(direct.headers().context, 'response', 'request-stage custom response uses response header labels');
   direct.button('返回自定义响应').onClick();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(direct.calls[0][1].decision.action, 'replace', 'request-stage direct replacement remains available');

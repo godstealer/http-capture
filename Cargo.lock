@@ -713,6 +713,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "base64 0.22.1",
+ "brotli 8.0.4",
  "browser-profiles",
  "bytes",
  "flate2",
@@ -749,6 +750,7 @@ dependencies = [
  "webpki-roots",
  "windows-sys 0.61.2",
  "x509-parser",
+ "zstd",
 ]
 
 [[package]]
@@ -782,6 +784,7 @@ dependencies = [
  "base64 0.22.1",
  "capture-core",
  "capture-mcp",
+ "futures-util",
  "serde",
  "serde_json",
  "tempfile",
@@ -2314,6 +2317,7 @@ dependencies = [
  "tauri-plugin-updater",
  "time",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -95,11 +95,16 @@ function cssFor(selector,width) {
   assert.deepEqual(destinations,['upstream','upstream']);
   for(const width of [360,700,1000,1250,1440]){const style=cssFor('.app-shell .upstream-chip',width);assert.notEqual(style.display,'none',`upstream remains visible at ${width}px`);if(width<=1250){assert.equal(style['min-width'],'34px');assert.equal(cssFor('.app-shell .upstream-chip span',width).display,'none');}}
   for(const width of [360,600,700]){const style=cssFor('.app-shell .inspector-heading',width);assert.equal(style.height,'auto');assert.equal(style['flex-wrap'],'wrap','inspector actions wrap instead of clipping new response replacement controls');}
-  const flow={request:{method:'GET',url:'https://example.invalid/'},notes:[]},intercepted=[],replayed=[];
+  const flow={request:{method:'GET',url:'https://example.invalid/'},notes:[]},intercepted=[],replayed=[],rewritten=[];
   for(const [connected,websocket] of [[true,false],[false,false],[true,true]]){
     const item={...flow,...(websocket?{websocket:{}}:{})};
-    const heading=shippedJsx('apps/frontend/src/CaptureView.tsx','inspector-heading',{t,flow:item,desktop:connected,Replace:icon,Send:icon,X:icon,onInterceptResponse:f=>intercepted.push(f),onReplay:f=>replayed.push(f),direction:'row',setDirection(){},setSelected(){}});
-    const button=nodes(heading).find(n=>n.type==='button'&&text(n)==='拦截替换响应');assert.equal(button.props.disabled,!connected||websocket);
+    const heading=shippedJsx('apps/frontend/src/CaptureView.tsx','inspector-heading',{t,flow:item,desktop:connected,Replace:icon,Send:icon,X:icon,onInterceptResponse:f=>intercepted.push(f),onRewriteResponse:(f,action)=>rewritten.push({flow:f,action}),onReplay:f=>replayed.push(f),direction:'row',setDirection(){},setSelected(){}});
+    const button=nodes(heading).find(n=>n.type==='button'&&text(n)==='手动响应断点');assert.equal(button.props.disabled,!connected||websocket);
+    for(const [label,action] of [['自动替换响应','replace'],['自动修改响应','modify']]) {
+      const rewrite=nodes(heading).find(n=>n.type==='button'&&text(n)===label);
+      assert.equal(rewrite.props.disabled,!connected||websocket);
+      if(!rewrite.props.disabled){rewrite.props.onClick();assert.equal(rewritten.at(-1).flow,item);assert.equal(rewritten.at(-1).action,action);}
+    }
     if(connected&&!websocket){assert.match(button.props.title,/后续匹配请求/);button.props.onClick();assert.equal(intercepted.at(-1),item);}else assert.match(button.props.title,connected?/WebSocket/:/连接内核/);
   }
   assert.equal(intercepted.length,1);assert.equal(replayed.length,0,'configuring interception never resends a historical request');

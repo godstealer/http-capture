@@ -6,6 +6,7 @@ pub mod body_export;
 pub mod body_read;
 pub mod audit;
 pub mod fault_rules;
+pub mod response_rewrite;
 mod body_spool;
 mod capture_tls;
 mod traffic_origin;
@@ -57,6 +58,7 @@ pub struct Engine {
     pub intercept: intercept::Interceptor,
     pub blocking: blocking::Blocking,
     pub fault_rules: fault_rules::FaultRules,
+    pub response_rewrite: response_rewrite::ResponseRewrite,
     pub upstream: upstream::UpstreamState,
     pub store: Arc<store::Store>,
     pub ca: ca::CertificateAuthority,
@@ -98,7 +100,7 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { fault_rules:fault_rules::FaultRules::open(store.clone())?, blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open_with_store(data_dir,store.clone())?, store,
+        Ok(Arc::new(Self { response_rewrite:response_rewrite::ResponseRewrite::open(store.clone())?, fault_rules:fault_rules::FaultRules::open(store.clone())?, blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open_with_store(data_dir,store.clone())?, store,
             ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
             send_engines, upstream_roots }))
     }
@@ -157,6 +159,9 @@ impl Engine {
             if script.enabled && !script.after.trim().is_empty() && (source != "capture" || crate::intercept::matches_rules(&rules,&flow)) {
                 self.apply_script(&mut flow, &mut script, revision, true).await?;
             }
+            // Saved response rewrites run automatically; manual response
+            // breakpoints remain a separate final review/override step.
+            self.response_rewrite.apply(&mut flow);
             if let Some(d) = if flow.notes.iter().any(|n| n == "SSE 接收中") { None } else { self.intercept.pause(&flow, "response").await? } {
                 if d.action == "modify" || d.action == "replace" { if flow.original_response.is_none() { flow.original_response = flow.response.clone(); } flow.response = d.response; flow.notes.push("响应已通过拦截修改或替换；原始响应另行保留。".into()); }
             }

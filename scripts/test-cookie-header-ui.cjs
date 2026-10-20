@@ -26,9 +26,9 @@ async function load(){
   new Function('module','exports','require',output.outputFiles[0].text)(module,module.exports,name=>name==='react'?react:name==='react/jsx-runtime'?{jsx,jsxs:jsx}:name==='lucide-react'?new Proxy({},{get:()=>()=>null}):require(name));
   return module.exports.default;
 }
-function harness(Component,headers){
+function harness(Component,headers,context){
   const h={index:0,slots:[],tree:null,changes:[]};
-  const props={headers:structuredClone(headers),onChange(next){h.changes.push(next);props.headers=next}};
+  const props={headers:structuredClone(headers),context,onChange(next){h.changes.push(next);props.headers=next}};
   h.render=()=>{current=h;h.index=0;h.tree=Component(props);return h.tree};
   h.headers=()=>props.headers;
   h.find=predicate=>find(h.tree,predicate);
@@ -98,5 +98,24 @@ function noChange(h,action,row){const before=h.headers(),count=h.changes.length;
   editing.name(1,'Set-Cookie');assert.equal(editing.find(node=>node.type==='button'&&/^(拆分|合并) Cookie /.test(node.props['aria-label']??'')).length,0);
   assert.equal(editing.changes.length,7,'each ordinary input change emits exactly once, and unavailable actions emit nothing');
   assert.deepEqual(sideEffects,{network:0,clipboard:0,invoke:0},'Cookie split/merge is a local edit, with no request, clipboard access or host invocation');
+  const button=(ui,label)=>ui.find(node=>node.type==='button'&&text(node)===label)[0];
+  assert(button(h,'复制请求头'));assert(button(h,'添加请求头'),'request context remains the default');
+  assert(!button(h,'复制响应头'));
+  const response=harness(Component,[{name:'Set-Cookie',value:'a=1'},{name:'set-cookie',value:'b=2'},{name:'X-Disabled',value:'keep',disabled:true}],'response');
+  assert(button(response,'复制响应头'));assert(button(response,'添加响应头'));assert(!button(response,'复制请求头'));
+  const copied=[];global.__cookieClipboard=async value=>{copied.push(value)};
+  button(response,'复制响应头').props.onClick();await new Promise(resolve=>setImmediate(resolve));response.render();
+  assert.deepEqual(copied,['Set-Cookie: a=1\r\nset-cookie: b=2'],'response context retains duplicate/case/disabled copy semantics');
+  assert(text(response.tree).includes('已复制启用的响应头'));
+  button(response,'文本编辑').props.onClick();response.render();
+  assert(response.find(node=>node.type==='textarea'&&node.props['aria-label']==='响应头文本').length);
+  assert(response.find(node=>node.type==='select'&&node.props['aria-label']==='响应头导入方式').length);
+  response.find(node=>node.type==='textarea')[0].props.onChange({target:{value:':status: 201\nX-Response: updated'}});response.render();
+  button(response,'应用到列表').props.onClick();response.render();
+  assert.deepEqual(response.headers(),[{name:'X-Response',value:'updated'},{name:'X-Disabled',value:'keep',disabled:true}]);
+  assert(text(response.tree).includes('已应用 1 个响应头'));assert(text(response.tree).includes('状态码保持当前设置'));
+  button(response,'添加响应头').props.onClick();response.render();assert.deepEqual(response.headers().at(-1),{name:'',value:''});
+  button(response,'文本编辑').props.onClick();response.render();response.find(node=>node.type==='textarea')[0].props.onChange({target:{value:'Bad header: value'}});response.render();button(response,'应用到列表').props.onClick();response.render();assert(text(response.tree).includes('第 1 行响应头格式无效'));
   console.log('Cookie header UI: real component, visible accessible row actions, split/merge order and duplicates, disabled groups, Set-Cookie exclusion, live input availability, exact single updates and no external side effects passed.');
+  console.log('Header context UI: default request labels, response copy/add/import/errors, exact enabled duplicate headers and unchanged field behavior passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

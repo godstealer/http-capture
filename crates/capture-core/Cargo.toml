@@ -10,6 +10,8 @@ browser-replay = ["dep:transport-wreq", "browser-profiles/browser-replay"]
 
 [dependencies]
 flate2 = "1"
+brotli = "8.0.4"
+zstd = "0.13.3"
 transport-api = { path = "../transport-api" }
 transport-httpcloak = { path = "../transport-httpcloak" }
 browser-profiles = { path = "../browser-profiles" }

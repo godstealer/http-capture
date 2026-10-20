@@ -36,6 +36,7 @@ import OrderedHeaders from './OrderedHeaders';
 import { type BlockConfig } from './RequestBlocking';
 import RequestPolicies from './RequestPolicies';
 import Interception, { type InterceptSnapshot } from './Interception';
+import ResponseRewrite from './ResponseRewrite';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Ban, Check, ChevronDown, CircleHelp, Code2, Copy, FileJson, FolderOpen, Globe2, Layers3, LockKeyhole, Play, Plus, Puzzle, Radio, RotateCw, Save, Search, Send, Settings2, ShieldCheck, Square, Terminal, Trash2, X } from 'lucide-react';
 import { isTauri } from '@tauri-apps/api/core';
@@ -64,6 +65,11 @@ type RequestSaveTarget = SavedRequestContext & { editorId: string; draft: Reques
 export default function App({initialImportStatus}:{initialImportStatus?:ConfigurationImportStatus}={}) {
   useLanguage();
   const [interception, setInterception] = useState<InterceptSnapshot>({config:{request:false,response:false,scope:'all'},items:[]});
+  const [rewriteSeed, setRewriteSeed] = useState<{key:string;flow:Flow;action:'replace'|'modify'}>();
+  function rewriteResponse(flow:Flow,action:'replace'|'modify') {
+    setRewriteSeed({key:crypto.randomUUID(),flow,action});
+    setView('rewrite');
+  }
   async function interceptResponse(flow: Flow) {
     try {
       const latest = await invoke<InterceptSnapshot>('interception');
@@ -516,6 +522,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
         <button className={view === 'capture' || view === 'replay' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'capture' || view === 'replay' ? 'page' : undefined} onClick={() => setView('capture')}><Radio size={21}/><span>{t('抓包')}</span></button>
         <button className={view === 'interception' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'interception' ? 'page' : undefined} title={t('拦截') + (interception.config.request || interception.config.response ? ' · ' + t('已开启') : '')} onClick={() => setView('interception')}><Square size={20}/><span>{t('拦截')}</span>{interception.items.length > 0 ? <b className="sidebar-badge">{interception.items.length}</b> : (interception.config.request || interception.config.response) && <i className="sidebar-indicator is-enabled"/>}</button>
         <button className={view === 'blocking' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'blocking' ? 'page' : undefined} onClick={() => setView('blocking')}><Ban size={21}/><span>{t('阻止请求')}</span>{blocking.enabled && <i className="sidebar-indicator"/>}</button>
+        <button className={view === 'rewrite' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'rewrite' ? 'page' : undefined} onClick={() => setView('rewrite')}><RotateCw size={21}/><span>{t('响应重写')}</span></button>
         <div className="sidebar-divider"/>
         <button className={view === 'library' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'library' ? 'page' : undefined} title={t('集合与环境')} aria-label={t('集合与环境')} onClick={() => { setView('library'); if (!libraryReady) void loadLibrary(); }}><FolderOpen size={21}/><span>{t('集合')}</span></button>
         <button className={view === 'plugins' ? 'sidebar-item active' : 'sidebar-item'} aria-current={view === 'plugins' ? 'page' : undefined} onClick={() => setView('plugins')}><Puzzle size={21}/><span>{t('插件')}</span></button>
@@ -525,7 +532,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
     </aside>
     <div className="workspace">
       <header className="proxy-toolbar">
-        <div className="workspace-heading"><span>HTTP CAPTURE</span><strong>{view === 'capture' ? t('流量捕获') : view === 'replay' ? t('请求重放') : view === 'interception' ? t('拦截') : view === 'blocking' ? t('阻止请求') : view === 'library' ? t('集合与环境') : view === 'mcp' ? 'MCP' : t('插件')}</strong></div>
+        <div className="workspace-heading"><span>HTTP CAPTURE</span><strong>{view === 'capture' ? t('流量捕获') : view === 'replay' ? t('请求重放') : view === 'interception' ? t('拦截') : view === 'rewrite' ? t('响应重写') : view === 'blocking' ? t('阻止请求') : view === 'library' ? t('集合与环境') : view === 'mcp' ? 'MCP' : t('插件')}</strong></div>
         <div className="proxy-address"><span className={status.running ? 'dot green' : 'dot'}/><div><span>{!connected ? t('内核未连接') : status.running ? t('代理已就绪') : t('代理已停止')}</span><code>{listenAddress}</code></div><button className="icon-button" title={wildcard ? t('所有网卡监听：客户端请填写本机局域网 IP 和端口') : t('复制代理地址')} disabled={wildcard} onClick={() => void copy(listenAddress)}><Copy size={14}/></button></div>
         <button className="upstream-chip" aria-label={t('上游代理设置')} title={t('上游代理设置') + ' · ' + (status.upstream?.enabled ? t('上游：{v0}', {v0: status.upstream.profileName ?? status.upstream.url}) : t('上游：直连'))} onClick={() => openSettings('upstream')}><Globe2 size={14}/><span>{status.upstream?.enabled ? t('上游：{v0}', {v0: status.upstream.profileName ?? status.upstream.url}) : t('上游：直连')}</span></button>
         <div className="toolbar-actions"><AppUpdater beforeInstall={beforeUpdateInstall} onBusyChange={value => { updateInProgress.current = value; }}/><SystemProxyToggle running={status.running} connected={connected} locked={proxyBusy} preferred={useSystemProxy} onPreference={setUseSystemProxy} onError={notify}/><ThemeSelector value={theme} onChange={value => { setTheme(value); applyTheme(value); }}/><button className="proxy-settings-button" aria-label={t('代理设置')} title={t('修改监听端口、配置上游代理')} onClick={() => openSettings()}><Settings2 size={17}/><span>{t('代理设置')}</span></button><button className={'capture-switch' + (status.running ? ' is-running' : '')} disabled={proxyBusy} onClick={() => void capture()}>{status.running ? <Square size={15}/> : <Play size={15}/>}<span>{proxyBusy ? t('处理中…') : status.running ? t('停止') : t('开始捕获')}</span></button></div>
@@ -549,9 +556,10 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
       {view === 'plugins' && <Plugins />}
       {view === 'mcp' && <McpPage />}
       {view === 'interception' && <Interception snapshot={interception} onUpdate={setInterception} />}
+      <ResponseRewrite active={view === 'rewrite'} connected={connected} seed={rewriteSeed} />
       {view === 'blocking' && <RequestPolicies key={blockingEditorVersion} connected={connected} onSaved={loadBlocking} />}
       {view==='library'&&<RequestLibrary value={library} onChange={v=>{if(!libraryOperation.current){setLibrary(v);setLibraryMessage(t('有未保存的修改'));}}} onSave={()=>void saveLibrary()} onReload={()=>void loadLibrary()} onOpen={v=>openEditor(undefined,'draft',v.draft,v)} draft={editor?.draft} draftContext={currentRequestContext(editor)} message={libraryMessage} busy={libraryBusy||!libraryReady}/>}
-      <div className="capture-page" hidden={view !== 'capture'}><CaptureView onBlock={connected?(flow,kind)=>void blockRequest(flow,kind):undefined} onInterceptResponse={f => void interceptResponse(f)} onFlowsChanged={replaceFlows} active={view === 'capture'} busy={false} onReplayNow={f => void replayCaptured(f)} flows={flows} desktop={connected} running={status.running} address={clientAddress} onCopy={value => void copy(value)} onReplay={f => openEditor(f)} /></div>
+      <div className="capture-page" hidden={view !== 'capture'}><CaptureView onRewriteResponse={connected ? rewriteResponse : undefined} onBlock={connected?(flow,kind)=>void blockRequest(flow,kind):undefined} onInterceptResponse={f => void interceptResponse(f)} onFlowsChanged={replaceFlows} active={view === 'capture'} busy={false} onReplayNow={f => void replayCaptured(f)} flows={flows} desktop={connected} running={status.running} address={clientAddress} onCopy={value => void copy(value)} onReplay={f => openEditor(f)} /></div>
       <div className="composer-page" hidden={view !== 'replay'}>
         <section className="detail-panel panel">
           <div className="library-toolbar composer-library-toolbar"><label>{t('发送环境')} <select value={environmentId} onChange={e=>setEnvironmentId(e.target.value)}><option value="">{t('无环境')}</option>{library.environments.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></label><select aria-label={t('应用脚本模板')} value="" onChange={e=>{const saved=library.scripts.find(v=>v.id===e.target.value);if(saved)setDraft({...draft,scripts:structuredClone(saved.scripts)});}}><option value="">{t('应用脚本模板')}</option>{library.scripts.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select>{savedRequest && <button disabled={libraryBusy||!connected} onClick={()=>void saveRequest(true)}>{t('另存为')}</button>}{savedCollection && <button className="request-save-location" onClick={()=>setView('library')} title={t('查看集合')}><FolderOpen size={14}/><span>{savedCollection.name} / {savedRequest?.name}</span></button>}<div className="composer-toolbar-actions"><button disabled={!editor||requestMode!=='http'} title={requestMode!=='http'?t('当前支持导出 HTTP 请求代码。'):undefined} onClick={openCodeExport}><Code2 size={15}/>{t('导出代码')}</button><button className="request-save-button" disabled={libraryBusy||!connected||!editor} aria-keyshortcuts="Control+s Meta+s" onClick={()=>void saveRequest()}><Save size={15}/>{libraryBusy?t('正在保存…'):t('保存请求')}</button></div></div>

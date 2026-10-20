@@ -21,6 +21,13 @@ mod config_migration;
 mod audit;
 #[path = "store_fault_rules.rs"]
 mod fault_rules;
+#[path = "store_body_views.rs"]
+mod body_views;
+pub use body_views::{BodyReference, FlowMetadata, FlowMetadataChange, FlowMetadataChanges};
+#[path = "store_body_export.rs"]
+mod body_export;
+#[path = "store_response_rewrite.rs"]
+mod response_rewrite;
 
 impl Store {
     pub fn backup(&self) -> Result<String> {
