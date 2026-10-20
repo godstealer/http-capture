@@ -1,12 +1,12 @@
 # 功能状态与开发路线图
 
-更新时间：2026-10-19。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
+更新时间：2026-10-20。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
 
 执行顺序（2026-10-16 用户确认）：先完成本版全部平台发布，再按优先级继续开发未完成项；安装、跨版本更新、系统集成与桌面等实机验收先暂缓，保留未完成状态。发布后的首项开发为 P0 大文件低内存链路；代码改动所需的自动化回归仍须执行。
 
-## 本轮发布准备：MCP 与全局配置迁移（2026-10-19）
+## 本轮正式发布：0.1.28，MCP、配置迁移与 Cookie（2026-10-20）
 
-最新执行顺序按用户确认：先完成 MCP，再完成全局配置导出/导入，自动验证通过后用 CLI 提交并发布正式版，更新本清单。手工验收继续暂缓。本轮发布说明见 [更新内容](release-2026-10-19.md)；0.1.23 的公开附件与历史验证记录保留在该文档的上一版记录中。
+本轮已按用户确认的顺序完成 MCP、全局配置导出/导入及追加的 Cookie 拆分/合并，通过自动验证后使用 CLI 正式发布。手工验收继续暂缓。本轮发布说明见 [更新内容](release-2026-10-19.md)；0.1.23 的公开附件与历史验证记录保留在该文档的上一版记录中。
 
 - [x] MCP 离线新手帮助、客户端接入向导、入站 stdio、请求/集合工作流、断点响应替换、全局脚本及独立权限，详见下方 MCP 增量。
 - [x] 设置新增配置迁移页，导出选项、文件/粘贴导入、离线预览、选择类别、当前版本保护与导入前恢复点。
@@ -17,17 +17,17 @@
 - [ ] 加密迁移与自动合并尚未实现；首版是未加密 JSON、按类别替换，16 MiB 上限，需要重启。
 - [ ] 安装版 AI 连接、跨设备迁移、原生保存/重启和真实升级等手工验收仍保留在[验收清单](acceptance-2026-10-19.md)。
 
-本轮本地自动验证已通过：内核单元/集成回归（既有系统凭据/TUN 实机项仍忽略）、MCP 37 项、传输层 12 项、服务接口 9 项、真实 stdio 子进程 3 项、桌面和服务编译、完整前端套件/TypeScript/生产构建及发布验签 34 项。跨平台源检查与安装包发布证据将在完成后补入，手工验收仍不勾选。
+本轮本地自动验证已通过：内核单元/集成回归（既有系统凭据/TUN 实机项仍忽略）、MCP 37 项、传输层 12 项、服务接口 9 项、真实 stdio 子进程 3 项、桌面和服务编译、完整前端套件/TypeScript/生产构建及发布验签 34 项。本轮已发布为 [0.1.28 / build-19095a086601](https://github.com/godstealer/http-capture/releases/tag/build-19095a086601)，来源 `19095a0866018d48ea1e67f8781c9596c7b4032d`。[Check #28](https://github.com/godstealer/http-capture/actions/runs/39347505042)、四组安装包构建及 [publish](https://github.com/godstealer/http-capture/actions/runs/39347861336) 全部成功；正式版为非预发布 Latest。公开 22 个附件已下载核对，17 项 SHA256 匹配，五个更新包的正文及版本注释公钥验签通过，兼容更新清单一致。 手工验收仍不勾选。
 
 追加的 Cookie 拆分/合并已通过纯函数与真实组件回归，完整前端套件、TypeScript 和生产构建通过；隔离浏览器已点击验证拆分、合并及窄窗口排版，未操作用户现有抓包工作区。安装版真实发送与跨平台交互继续按验收清单保留。
 
-httpcloak 发送修复通过完整 Go 11 项顶层回归，包含 Chrome/Firefox 的单条/多条 Cookie 实际 HPACK 字段、H1 原始请求收包、导入 ClientHello 后继承及并发隔离；验证预设除 Cookie 策略与内部标识外保持相同，未信任证书仍拒绝。此证据不替代安装版网站业务验收。
+httpcloak 发送修复通过完整 Go 11 项顶层回归，包含 Chrome/Firefox 的单条/多条 Cookie 实际 HPACK 字段、H1 原始请求收包、导入 ClientHello 后继承及并发隔离；验证预设除 Cookie 策略与内部标识外保持相同，未信任证书仍拒绝。此证据不替代安装版网站业务验收。 0.1.28 另外修复 Windows 测试服务器提前关闭 HTTP/2 连接的竞态，本地连续 100 轮（400 子例）及四平台 CI helper 回归均通过；生产 TLS 信任与发送逻辑未因该测试修复改变。
 
 ## 上一正式版（2026-10-19，0.1.23）
 
 本版已合并前一阶段共享正文引用，以及 MCP 双向接入、插件文档/示例/在线编辑/语法检查/紧凑列表、集合新增入口、工作区冲突恢复和 httpcloak 捕获伪头重放修复。当时配置迁移只有设计；本轮后续实现见下文及[配置迁移说明](config-migration.md)。[0.1.23 / build-9ffa695d0667](https://github.com/godstealer/http-capture/releases/tag/build-9ffa695d0667) 发布时为非预发布 Latest；源 Check #23、四组构建和 publish 全通过，22 个公开附件完整，17 项 SHA256 与五个更新包签名核对通过，兼容入口一致。手工验收继续 [保留待办](acceptance-2026-10-19.md)。
 
-## MCP 开发增量（0.1.23 之后，尚未发布）
+## MCP 增量（已随 0.1.28 发布）
 
 - [x] [MCP 新手文档](mcp.md)、离线使用说明及接入向导：生成 Codex/Cursor/VS Code 的 HTTP 或 stdio 配置；Token 仅在用户点击生成/复制时读取，不改写客户端配置文件。
 - [x] 入站 stdio 桥接复用正在运行的应用和 HTTP MCP 服务，不新建内核；主服务关闭或客户端断开后结束，Token 通过环境变量传递。
@@ -37,6 +37,19 @@ httpcloak 发送修复通过完整 Go 11 项顶层回归，包含 Chrome/Firefox
 - [x] 独立授权的 5 个全局脚本工具，框架/模板、只编译不执行、强制禁用保存、按审阅版本单独确认启用；这是单份全局抓包配置，不新增按 URL 的脚本表或持久重写引擎。
 - [x] 向导真实组件自动验证：不自动调用 API、四客户端 HTTP/stdio 格式、JSON/TOML 与 Windows 路径转义、复制/重新生成失败保留内容；规则权限、CAS、脚本和退出保护定向测试通过。
 - [ ] Codex/Cursor/VS Code 真实账户连接和工具确认、原生桌面剪贴板、各平台桥接退出与安装升级继续待用户验收，不以本地自动测试代替。
+
+## RelayCore 借鉴开发（2026-10-20，未包含在 0.1.28）
+
+按用户提供的 [relaycraft/relay-core](https://github.com/relaycraft/relay-core) 审阅固定提交 `89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196`，只读取源码，未安装或执行外部项目。按用户“先发布个版本”的最新安排，本轮先交付 0.1.28；下列增量保留在未提交工作区，等待下一批收口和发布。它们不在 0.1.28 安装包中，既有 P0 大正文工作顺序保持不变。
+
+- [ ] 待后续发布：工作区已为 26 个 MCP 工具补输出 schema、structuredContent、效果注解及受权限约束的 HTTP/stdio 资源列表和读取；不提供订阅，保留权限分组、CAS 和原子保存。[参考工具定义](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-probe/src/tools/mod.rs#L198)。
+- [ ] 待后续发布：工作区已实现 12 个认证后 MCP 写操作的本地审计和只读分页界面，保留 10000 条；不记录参数、正文、凭据或源码，自报客户端分类不是个人身份。操作前落库失败不执行，完成回写失败保留原结果并提示，pending 表示结果未确认。[参考事件结构](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-runtime/src/audit.rs#L114)。
+- [ ] 工作区已实现阻止页的“故障模拟”选项卡：延迟 0–30000 ms、每规则固定窗口次数限制及本地 429/Retry-After，第一匹配规则、版本保护、取消等待和全局迁移初始禁用；等待后续发布。统一多阶段规则和正文带宽限速仍未实现。[参考动作实现](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-lib/src/rule/engine/actions/common.rs#L82)。
+- [ ] 工作区已补 64 KiB 有界正文范围计划并接入 MCP，Spool 有界读取接口尚待预览入口；完整保存/转发保持全量。P0 仍需文件引用贯穿历史、脚本、IPC 和前端，不能用有限前缀替代完整保存。回归覆盖恰好预算、后续帧、trailers、取消和流控。[参考设计](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/docs/decisions/0009-daemon-observes-body-prefix.md)。
+
+工作区自动验证：正文相关 15 项、审计 6 项、故障模拟真实代理/并发/取消/迁移 7 项、MCP 全量 42 项及追加契约定向 2 项、MCP 存储范围 4 项通过；审计/故障模拟组件状态、既有前端套件、翻译、TypeScript、生产构建与服务/桌面编译通过，服务接口 9 项和生产 stdio 子进程 3 项也通过。新能力仍需独立正式构建与安装版/真实 AI 客户端验收，不以此清单表示已发布。
+
+参考边界：其 Windows WinDivert feature 默认未启用，PID 来源和真实接管链路仍缺验证；H3 降级主要移除 Alt-Svc，不是 H3 MITM。源码静态发现 `buffer_body_within_budget` 在累计恰好预算且仍有后续帧时会把前缀作为 Full 返回，存在丢正文问题；未执行该项目测试，采用相关实现前需要独立回归。[Windows 路径](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-lib/src/capture/windows.rs#L214)、[正文边界](https://github.com/relaycraft/relay-core/blob/89dcbc0b1fe9ac856aede38bdc05f70dbfa7e196/relay-core-lib/src/proxy/body_plan.rs#L67)。
 
 ## 上轮正式发布批次（2026-10-18）
 
@@ -172,7 +185,7 @@ H1 Reqable 对照包含用户 Raw 截图及源站记录，固定样例一致；H
 
 **当前：R2 数据管理、R3 集合/环境及部分 R4/R6 已落地，继续处理下方未勾选项。** 首次读取全部记录，之后同步变更；不分页、不截断历史。完整用法及边界见 [会话与工作区](sessions-workspaces.md)。TUN H3 已有流级拒绝与超时修复，实机接管验收暂停；历史权限及 UDP 80/443 问题尚未完成定位。
 
-最近已核实的正式发布为 `build-c65e4d49b4d9`（0.1.19），包括 Windows、Linux deb/AppImage/portable、两种 Mac DMG 和五个签名更新目标。发布后新增开发不自动视为已在该包中。下方日期记录保留历史，当时的失败/未支持结论不覆盖上方现状；实机验收继续暂缓。
+最近已核实的正式发布为 `build-19095a086601`（0.1.28），包括 MCP 增量、标准 JSON 全局配置迁移和 Cookie 拆分/合并，以及 Windows、Linux deb/AppImage/portable、两种 Mac DMG 和五个签名更新目标。后续仍有全链路大正文低内存、协议兼容边界、加密迁移与自动合并等待处理。下方日期记录保留历史，当时的失败/未支持结论不覆盖上方现状；实机验收继续暂缓。
 
 1. 先读本文件、[架构说明](architecture.md)和相关模块代码，核对工作区是否有新的改动。
 2. 当前继续 R2 大正文存储、R4 桌面生命周期和 R5/R6 协议能力，R4 保留实机验收工作；一次完成一个可验证的阶段。用户的新要求优先，并在这里记录顺序调整。
