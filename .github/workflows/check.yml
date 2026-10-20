@@ -10,6 +10,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # Rust integration tests launch a real Node MCP stdio peer.
+      # Use the same runtime as frontend/release instead of the runner image's PATH.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify MCP fixture runtime
+        run: node --version
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux build dependencies

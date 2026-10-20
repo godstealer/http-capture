@@ -590,34 +590,61 @@ mod tests {
         manager.shutdown().await.unwrap();source.abort();target.abort();
     }
 
-    // A tiny deterministic stdio peer exercises real argv and pipe ownership.
-    // Node is already required by this repository's frontend/build workflow.
+    // A tiny stdio peer exercises real argv and pipe ownership. The Rust CI
+    // job must install its Node dependency explicitly, just as the frontend
+    // job does. A separate test-only file diagnoses startup vs pipe stalls;
+    // protocol stdout remains JSON-RPC only, and production stderr stays private.
     const STDIO_FIXTURE:&str=r#"
+const fs = require('node:fs');
 const readline = require('node:readline');
+const diagnostic = process.argv[1];
+const args = process.argv.slice(2);
+let traceCount = 0;
+const trace = (event, fields = {}) => {
+  if(traceCount++ < 64) fs.appendFileSync(diagnostic, JSON.stringify({event,pid:process.pid,...fields})+'\n');
+};
+trace('startup', {node:process.version,executable:process.execPath});
+process.stdin.on('error', error => trace('stdin-error', {code:error.code || ''}));
+process.stdout.on('error', error => trace('stdout-error', {code:error.code || ''}));
+process.on('uncaughtException', error => {trace('uncaught', {name:error.name});process.exit(1);});
+process.on('exit', code => trace('exit', {code}));
 const rl = readline.createInterface({input:process.stdin});
 rl.on('line', line => {
-  const m = JSON.parse(line); if(m.id === undefined) return;
+  const m = JSON.parse(line);
+  trace('received', {method:m.method,id:m.id ?? null});
+  if(m.id === undefined) return;
   let result;
   if(m.method === 'initialize') result={protocolVersion:m.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'stdio-fixture',version:'1'}};
   else if(m.method === 'tools/list') result={tools:[{name:'echo',inputSchema:{type:'object'}}]};
   else if(m.method === 'tools/call') {
     if(m.params.arguments.wait) return;
-    result={content:[{type:'text',text:JSON.stringify({args:process.argv.slice(1),input:m.params.arguments})}]};
+    result={content:[{type:'text',text:JSON.stringify({args,input:m.params.arguments})}]};
   } else if(m.method === 'ping') result={};
   else { process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Unknown method'}})+'\n'); return; }
-  process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\n');
+  trace('reply-enqueued', {method:m.method,id:m.id});
+  process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\n', () => trace('reply-flushed', {method:m.method,id:m.id}));
 });
-process.stdin.on('end',()=>process.exit(0));
+process.stdin.on('end',()=>{trace('stdin-end');process.exit(0);});
+trace('ready');
 "#;
+
+    async fn connect_stdio_fixture(manager:&ClientManager,id:&str,diagnostic:&std::path::Path,phase:&str)->ClientStatus {
+        let started=std::time::Instant::now();
+        manager.connect(id.to_owned()).await.unwrap_or_else(|error| {
+            let trace=std::fs::read_to_string(diagnostic).map(|trace|trace.chars().take(32768).collect::<String>()).unwrap_or_else(|read_error|format!("No fixture trace: {read_error}"));
+            panic!("stdio {phase} failed after {:?}: {error}\nTest-only startup/pipe trace:\n{trace}",started.elapsed());
+        })
+    }
 
     #[tokio::test]
     async fn stdio_argv_is_literal_and_disconnect_cancels_calls() {
-        let (_directory, store) = store();
+        let (directory, store) = store();
         let manager=ClientManager::new(store).unwrap();
+        let diagnostic=directory.path().join("stdio fixture 中文.jsonl");
         let literal="spaces 中文 ; $(no_shell) & | > file";
-        let saved=manager.save(ClientInput{id:None,name:"stdio fixture".into(),transport:"stdio".into(),url:String::new(),command:"node".into(),args:vec!["-e".into(),STDIO_FIXTURE.into(),literal.into()],bearer_token:None}).await.unwrap();
+        let saved=manager.save(ClientInput{id:None,name:"stdio fixture".into(),transport:"stdio".into(),url:String::new(),command:"node".into(),args:vec!["-e".into(),STDIO_FIXTURE.into(),diagnostic.to_str().unwrap().into(),literal.into()],bearer_token:None}).await.unwrap();
         assert!(!saved.connected);
-        assert!(manager.connect(saved.id.clone()).await.unwrap().connected);
+        assert!(connect_stdio_fixture(&manager,&saved.id,&diagnostic,"initial connect").await.connected);
         assert_eq!(manager.tools(saved.id.clone()).await.unwrap()[0]["name"],"echo");
         let result=manager.call(saved.id.clone(),"echo".into(),json!({"message":"hello"})).await.unwrap();
         let echoed:Value=serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
@@ -631,13 +658,17 @@ process.stdin.on('end',()=>process.exit(0));
         manager.disconnect(saved.id.clone()).await.unwrap();
         assert!(tokio::time::timeout(Duration::from_secs(7),running).await.unwrap().unwrap().is_err());
         assert!(!manager.list().await[0].connected);
-        assert!(manager.connect(saved.id.clone()).await.unwrap().connected);
+        assert!(connect_stdio_fixture(&manager,&saved.id,&diagnostic,"reconnect after disconnect").await.connected);
         manager.shutdown().await.unwrap();
         assert!(!manager.list().await[0].connected);
         assert!(manager.connect(saved.id.clone()).await.is_err());
         manager.resume().await.unwrap();
         assert!(!manager.list().await[0].connected,"resume must not reconnect automatically");
-        assert!(manager.connect(saved.id).await.unwrap().connected);
+        assert!(connect_stdio_fixture(&manager,&saved.id,&diagnostic,"connect after resume").await.connected);
         manager.shutdown().await.unwrap();
+        let trace=std::fs::read_to_string(&diagnostic).unwrap();
+        let events=trace.lines().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        assert_eq!(events.iter().filter(|event|event["event"]=="startup").count(),3,"each explicit reconnect must launch its own real stdio child");
+        assert_eq!(events.iter().filter(|event|event["event"]=="reply-flushed"&&event["method"]=="initialize").count(),3,"every child must receive and flush the real initialization response");
     }
 }
