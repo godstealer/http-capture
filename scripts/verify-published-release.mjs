@@ -15,6 +15,17 @@ function requireCondition(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+/** Extract a literal document path without evaluating committed JavaScript. */
+export function releaseNotesDocumentPath(source) {
+  requireCondition(typeof source === 'string', 'Cannot identify the committed release notes document');
+  const declarations = [...source.matchAll(/\bexport\s+const\s+releaseNotesPath\s*=\s*(['"])([^'"\r\n]*)\1\s*;/g)];
+  requireCondition(declarations.length === 1, 'Cannot identify the committed release notes document');
+  const document = declarations[0][2];
+  requireCondition(/^docs\/release-\d{4}-\d{2}-\d{2}(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.md$/.test(document),
+    'Unsupported committed release notes document path');
+  return document;
+}
+
 /** Read only public trust material from the exact published source commit. */
 export function committedReleaseTrust(sourceSha) {
   assertSourceSha(sourceSha);
@@ -29,8 +40,7 @@ export function committedReleaseTrust(sourceSha) {
   }
   const key = publicKey(JSON.parse(committed('apps/desktop/src-tauri/tauri.conf.json')));
   const releaseScript = committed('scripts/release-updater.mjs');
-  const notesPath = /export\s+const\s+releaseNotesPath\s*=\s*(['"])(docs\/release-\d{4}-\d{2}-\d{2}\.md)\1\s*;/.exec(releaseScript)?.[2];
-  requireCondition(notesPath, 'Cannot identify the committed release notes document');
+  const notesPath = releaseNotesDocumentPath(releaseScript);
   const notes = committed(notesPath).trim().split(/^## 更新内容\r?$/m)[1]?.split(/^## /m)[0].trim();
   requireCondition(notes, 'Committed release notes require a non-empty 更新内容 section');
   return { publicKey: key, notes };

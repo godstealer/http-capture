@@ -5,12 +5,42 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, 
 import path from 'node:path';
 import { collectRelease } from './collect-release.mjs';
 import { generateUpdater } from './generate-updater.mjs';
-import { platforms, projectRoot, readReleaseNotes } from './release-updater.mjs';
-import { verifyPublishedRelease } from './verify-published-release.mjs';
+import { platforms, projectRoot, readReleaseNotes, releaseNotesPath } from './release-updater.mjs';
+import { releaseNotesDocumentPath, verifyPublishedRelease } from './verify-published-release.mjs';
 
 const version = '0.1.19', sourceSha = 'a'.repeat(40), repository = 'godstealer/http-capture';
 const publishedAt = '2026-10-18T14:49:43Z';
 const sha256 = file => createHash('sha256').update(readFileSync(file)).digest('hex');
+
+test('committed release notes paths accept dated documents with restricted lowercase suffixes', () => {
+  for (const document of ['docs/release-2026-10-20.md', 'docs/release-2026-10-20-response-rewrite.md', 'docs/release-2026-10-20-p0.md']) {
+    for (const quote of ["'", '"']) {
+      assert.equal(releaseNotesDocumentPath(`export const releaseNotesPath = ${quote}${document}${quote};`), document);
+    }
+  }
+  assert.equal(releaseNotesDocumentPath(readFileSync(path.join(projectRoot, 'scripts/release-updater.mjs'), 'utf8')), releaseNotesPath);
+  assert.ok(readReleaseNotes().summary);
+});
+
+test('committed release notes extraction rejects traversal, dynamic paths and ambiguous declarations', () => {
+  for (const document of [
+    '../docs/release-2026-10-20.md', 'docs/../release-2026-10-20.md', '/docs/release-2026-10-20.md',
+    'docs/release-2026-10-20-../private.md', 'docs/release-2026-10-20-response/rewrite.md',
+    'docs/release-2026-10-20-response%2frewrite.md', 'docs/release-2026-10-20-Response.md',
+    'docs/release-2026-10-20-response_rewrite.md', 'docs/release-2026-10-20--response.md',
+    'docs/release-2026-10-20-.md', 'docs/release-2026-10-20-response.md.backup',
+    'https://example.invalid/docs/release-2026-10-20.md', 'docs\\release-2026-10-20.md',
+    'docs/release-2026-10-20\u0000.md',
+  ]) {
+    assert.throws(() => releaseNotesDocumentPath(`export const releaseNotesPath = '${document}';`), /document/);
+  }
+  const valid = "export const releaseNotesPath = 'docs/release-2026-10-20.md';";
+  for (const source of [undefined, '', 'const releaseNotesPath = "docs/release-2026-10-20.md";',
+    'export const releaseNotesPath = `docs/release-2026-10-20.md`;',
+    'export const releaseNotesPath = "docs/release-2026-10-20" + ".md";', valid + '\n' + valid]) {
+    assert.throws(() => releaseNotesDocumentPath(source), /document/);
+  }
+});
 
 function fixture(t) {
   const parent = path.join(projectRoot, '.local'); mkdirSync(parent, { recursive: true });
