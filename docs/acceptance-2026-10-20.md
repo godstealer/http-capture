@@ -16,6 +16,8 @@
 
 本机桌面 updater 的 10 项测试程序编译和链接成功，但被 Windows 拒绝启动（os error 5，never executed）。没有修改系统安全设置，也不将未执行记为通过。仓库现有 Release 工作流在每组安装包构建后执行 `cargo test --release --locked -p http-capture-desktop --bin http-capture app_update::tests`；成功后才收集附件并公开发布。
 
+首次源 Check #29 的 Windows、Linux、前端全部通过，macOS 的新增审计分类测试在故障端点等待超过 SDK 的 5 秒预算，因此没有发布该候选。原用例使用绑定但未监听的 socket，不能保证各平台立即拒绝连接。已改为测试持有本地监听器，确认接收完整 GET 后明确返回畸形 HTTP 响应，稳定验证真实发送失败及其审计分类；不增加 SDK 超时、不修改生产逻辑，原断言保留并补充没有有效响应的检查。修复后的定向测试及完整 MCP 43 项通过，使用新来源提交重新进行完整 CI。
+
 - [ ] 同一来源提交的三系统 Check 和前端 Check。
 - [ ] Windows、Linux、macOS Intel / ARM 的桌面更新生命周期测试全部通过。
 - [ ] 四组构建和公开发布完成，下载 22 个附件独立校验 17 项 SHA256、五个更新包签名/版本注释及兼容频道。

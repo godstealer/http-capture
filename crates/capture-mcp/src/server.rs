@@ -522,9 +522,24 @@ mod tests {
         let (_dir,runtime,manager)=fixture();
         manager.configure(ServerConfig{enabled:true,port:free_port().await,allow_send:true,..Default::default()}).await.unwrap();
         let client=modern_http(&manager).await;
-        let closed=tokio::net::TcpSocket::new_v4().unwrap();closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        let failure=payload(client.call_tool(CallToolRequestParams::new("send_request").with_arguments(json!({"method":"GET","url":format!("http://{}/",closed.local_addr().unwrap()),"engine":"native"}).as_object().unwrap().clone())).await.unwrap());
+        // A bound socket that never listens is not a portable immediate-refusal
+        // fixture: macOS can leave connect pending past the MCP client's budget.
+        // Own a live listener instead, observe the actual native HTTP request,
+        // and deterministically fail response parsing without a port/DNS race.
+        let origin=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url=format!("http://{}/audit-failure",origin.local_addr().unwrap());
+        let failing_peer=tokio::spawn(async move {
+            let (stream,_)=tokio::time::timeout(Duration::from_secs(2),origin.accept()).await.unwrap().unwrap();
+            let mut stream=tokio::io::BufReader::new(stream);
+            let head=tokio::time::timeout(Duration::from_secs(2),capture_core::http1::read_head(&mut stream)).await.unwrap().unwrap();
+            assert!(head.starts_with(b"GET /audit-failure HTTP/1.1\r\n"));
+            stream.write_all(b"HTTP/1.1 not-a-status\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let failure=payload(client.call_tool(CallToolRequestParams::new("send_request").with_arguments(json!({"method":"GET","url":url,"engine":"native"}).as_object().unwrap().clone())).await.unwrap());
+        failing_peer.await.unwrap();
         assert_eq!(failure["state"],"failed");crate::contracts::assert_matches("send_request",&failure);
+        assert!(failure["response"].is_null());
         runtime.engine.blocking.configure(serde_json::from_value(json!({"enabled":true,"scope":"all","rules":[{"id":"local-block","enabled":true,"matchType":"urlContains","pattern":"locally-blocked.invalid"}]})).unwrap()).unwrap();
         let blocked=payload(client.call_tool(CallToolRequestParams::new("send_request").with_arguments(json!({"method":"GET","url":"http://locally-blocked.invalid/","engine":"native"}).as_object().unwrap().clone())).await.unwrap());
         assert_eq!(blocked["state"],"blocked");assert!(blocked["response"].is_object());
