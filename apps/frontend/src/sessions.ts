@@ -1,7 +1,8 @@
 import { t } from './i18n';
 import { serializeHar } from './har';
 import {chooseSave,saveText} from './saveFile';
-import { encodeText, type Flow, type Header } from './types';
+import { encodeText, type Flow, type FlowRecord, type Header } from './types';
+import { loadCompleteFlow } from './flowRecords';
 
 // HAR headers are arrays: keep duplicate names and their recorded order.
 export function readSession(text: string): Flow[] {
@@ -38,12 +39,16 @@ export function readSession(text: string): Flow[] {
       notes: ['HAR 导入：头部顺序仅代表文件中的顺序，无法证明线上顺序；未提供 TLS 握手和原始报文字节。', rawResponse ? 'HAR 已恢复扩展字段中的原始正文及编码头。' : 'HAR 响应正文按解码内容读取，已移除响应的编码和长度头。', ...(content.text === undefined && !rawResponse ? ['HAR 未包含响应正文。'] : [])] };
   });
 }
-export async function saveSession(flows: Flow[], format: 'json' | 'har' = 'json', progress:(message:string)=>void=()=>{}, rawHar = true): Promise<string> {
+export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 'json', progress:(message:string)=>void=()=>{}, rawHar = true): Promise<string> {
   progress('选择保存位置…');
   const name=`capture-${new Date().toISOString().replace(/[:.]/g, '-')}.${format}`;
   const handle=await chooseSave(name);if(handle===null)return t('已取消保存');
+  // A preview/metadata DTO is never a complete export. Resolve exact recorded
+  // versions only after the save picker; one failed read aborts the export.
+  const complete:Flow[]=[];
+  for(const flow of flows){progress('正在读取完整记录…');complete.push(await loadCompleteFlow(flow));}
   progress('正在生成导出文件…');await new Promise(resolve=>setTimeout(resolve,0));
-  const content = format === 'har' ? await serializeHar(flows, rawHar) : JSON.stringify({ format: 'http-capture-session', version: 1, flows });
+  const content = format === 'har' ? await serializeHar(complete, rawHar) : JSON.stringify({ format: 'http-capture-session', version: 1, flows:complete });
   progress('正在保存文件…');
   return saveText(content,name,format,handle);
 }

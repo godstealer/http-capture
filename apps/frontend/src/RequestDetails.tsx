@@ -1,5 +1,6 @@
 import { t, currentLanguage } from './i18n';
-import type { Flow, Header, RequestDraft, TlsDetailsData } from './types';
+import type { FlowRecord, Header, RequestDraft, RequestMetadata, TlsDetailsData } from './types';
+import { flowBodyLength } from './flowRecords';
 import { Copy } from 'lucide-react';
 import { headerLines } from './messageText';
 import { describeTrafficOrigin } from './trafficOrigin';
@@ -17,8 +18,8 @@ export function MessageHeaders({ headers, onCopy }: { headers: Header[]; onCopy:
 export function PropertyTable({ rows }: { rows: Array<[string, string | number]> }) {
   return <table className="property-table"><thead><tr><th>{t("名称")}</th><th>{t("值")}</th></tr></thead><tbody>{rows.map(([name, value]) => <tr key={name}><td>{name}</td><td>{value}</td></tr>)}</tbody></table>;
 }
-function size(body: string) { return `${body.length * 3 / 4 - (body.endsWith('==') ? 2 : body.endsWith('=') ? 1 : 0)} B`; }
-export function TrafficOriginDetails({ flow }: { flow: Flow }) {
+function size(length: number | undefined) { return length === undefined ? t('未加载') : `${length} B`; }
+export function TrafficOriginDetails({ flow }: { flow: FlowRecord }) {
   const origin = describeTrafficOrigin(flow);
   return <details open className="traffic-origin-details"><summary>{t('流量来源')}{origin.imported && <span className="traffic-origin-file-badge">{t('文件记录')}</span>}</summary>
     <PropertyTable rows={[
@@ -28,7 +29,8 @@ export function TrafficOriginDetails({ flow }: { flow: Flow }) {
     {origin.provenance && <p className="traffic-origin-provenance">{origin.provenance}</p>}
   </details>;
 }
-export function RequestOverview({ request, flow }: { request: RequestDraft; flow?: Flow }) {
+export function RequestOverview({ request, flow }: { request: RequestDraft | RequestMetadata; flow?: FlowRecord }) {
+  const requestLength = 'bodyBase64' in request ? request.bodyBase64.length * 3 / 4 - (request.bodyBase64.endsWith('==') ? 2 : request.bodyBase64.endsWith('=') ? 1 : 0) : flow ? flowBodyLength(flow, request === flow.originalRequest ? 'originalRequest' : 'request') : undefined;
   return <div className="request-details">
     <PropertyTable rows={[
       ['URL', request.url || t("未填写")], [t("状态"), flow?.state === 'blocked' ? t('已阻止') : flow ? flow.error ? t("失败") : flow.response ? t("已完成") : t("处理中") : t("未发送")],
@@ -41,7 +43,7 @@ export function RequestOverview({ request, flow }: { request: RequestDraft; flow
       [t("开始时间"), flow ? new Date(flow.startedAt).toLocaleString(currentLanguage()) : t("未发送")], [t("总时长"), flow ? `${flow.durationMs} ms` : '—'],
     ]} /></details>
     <details open><summary>{t("正文大小")}</summary><PropertyTable rows={[
-      [t("请求"), size(request.bodyBase64)], [t("响应"), flow?.response ? size(flow.response.bodyBase64) : '—'],
+      [t("请求"), size(requestLength)], [t("响应"), flow?.response ? size(flowBodyLength(flow, 'response')) : '—'],
     ]} /></details>
     {flow?.error && <p className="error-box">{flow.error}</p>}
   </div>;
@@ -69,7 +71,7 @@ function TlsConnection({ data, title, empty }: { data?: TlsDetailsData | null; t
     </details>
   </>}</details>;
 }
-export function TlsDetails({ flow }: { flow?: Flow }) {
+export function TlsDetails({ flow }: { flow?: FlowRecord }) {
   const secure = flow?.request.url.startsWith('https:');
   const empty = !flow ? t("尚未发送") : !secure ? t("HTTP 明文连接，无 TLS 握手") : t("此记录没有握手详情，请重新发送或捕获。");
   return <div className="request-details">

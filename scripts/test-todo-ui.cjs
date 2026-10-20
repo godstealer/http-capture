@@ -98,7 +98,7 @@ function cssFor(selector,width) {
   const flow={request:{method:'GET',url:'https://example.invalid/'},notes:[]},intercepted=[],replayed=[],rewritten=[];
   for(const [connected,websocket] of [[true,false],[false,false],[true,true]]){
     const item={...flow,...(websocket?{websocket:{}}:{})};
-    const heading=shippedJsx('apps/frontend/src/CaptureView.tsx','inspector-heading',{t,flow:item,desktop:connected,Replace:icon,Send:icon,X:icon,onInterceptResponse:f=>intercepted.push(f),onRewriteResponse:(f,action)=>rewritten.push({flow:f,action}),onReplay:f=>replayed.push(f),direction:'row',setDirection(){},setSelected(){}});
+    const heading=shippedJsx('apps/frontend/src/CaptureView.tsx','inspector-heading',{t,flow:item,desktop:connected,Replace:icon,Send:icon,X:icon,onInterceptResponse:f=>intercepted.push(f),onRewriteResponse:(f,action)=>rewritten.push({flow:f,action}),rewrite:(f,action)=>rewritten.push({flow:f,action}),complete:(f,action)=>action(f),onReplay:f=>replayed.push(f),direction:'row',setDirection(){},setSelected(){}});
     const button=nodes(heading).find(n=>n.type==='button'&&text(n)==='手动响应断点');assert.equal(button.props.disabled,!connected||websocket);
     for(const [label,action] of [['自动替换响应','replace'],['自动修改响应','modify']]) {
       const rewrite=nodes(heading).find(n=>n.type==='button'&&text(n)===label);

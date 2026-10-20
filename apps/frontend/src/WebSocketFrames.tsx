@@ -2,7 +2,7 @@ import "./websocket.css";
 import { useState } from "react";
 import { t } from "./i18n";
 import { invoke } from "./api";
-import { encodeText, type Flow } from "./types";
+import { encodeText, type Flow, type FlowRecord } from "./types";
 
 export default function WebSocketFrames({
   flow,
@@ -14,7 +14,7 @@ export default function WebSocketFrames({
   onMessageDraftChange?: (
     patch: Partial<{ body: string; opcode: string }>,
   ) => void;
-  flow: Flow;
+  flow: FlowRecord;
   onCopy: (value: string) => void;
 }) {
   const [messages, setMessages] = useState(false);

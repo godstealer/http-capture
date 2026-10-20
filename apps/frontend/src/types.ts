@@ -30,6 +30,19 @@ export interface Flow {
   response: { trailers?: Header[]; status: number; version: string; tlsVersion?: string | null; upstreamTls?: TlsDetailsData | null; sentRequestHeaders?: Header[] | null; headers: Header[]; bodyBase64: string; rawHeadBase64?: string | null } | null;
   error: string | null; rawRequestHeadBase64?: string | null; notes: string[];
 }
+export type BodyVariant = 'request' | 'response' | 'originalRequest' | 'originalResponse';
+export type RequestMetadata = Omit<RequestDraft, 'bodyBase64'>;
+export type ResponseMetadata = Omit<NonNullable<Flow['response']>, 'bodyBase64'>;
+/** History projection only: missing bodies are references, never empty strings. */
+export interface FlowMetadata extends Omit<Flow, 'request' | 'response' | 'originalRequest' | 'originalResponse'> {
+  request: RequestMetadata;
+  response: ResponseMetadata | null;
+  originalRequest?: RequestMetadata | null;
+  originalResponse?: ResponseMetadata | null;
+  bodyRevision: string;
+  bodyReferences: Partial<Record<BodyVariant, {byteLength: number}>>;
+}
+export type FlowRecord = Flow | FlowMetadata;
 export interface EngineInfo { browserVersions?: Record<string, number[]>; id: string; available: boolean; profiles: string[]; reason: string | null }
 export interface UpstreamProfile {id:string;name:string;url:string;username:string;authEnabled:boolean;needsPassword:boolean;rememberPassword:boolean;credentialError?:string|null}
 export interface UpstreamStatus {profileId?:string|null;profileName?:string|null; enabled: boolean; url: string; username: string; authEnabled: boolean }

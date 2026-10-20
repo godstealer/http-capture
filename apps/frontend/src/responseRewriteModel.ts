@@ -1,4 +1,4 @@
-import type {Flow, Header} from './types';
+import type {FlowRecord, Header} from './types';
 import {bytesBase64, rawBodyParser, textBody, utf8Body, utf8ContentType} from './requestBody';
 
 export type RewriteAction = 'replace' | 'modify';
@@ -13,7 +13,7 @@ export interface RewriteRule {
 }
 export interface RewriteConfig {enabled:boolean;scope:'all'|'capture'|'replay';rules:RewriteRule[]}
 export interface RewriteSnapshot {config:RewriteConfig;version:string;hits:number[]}
-export interface RewriteSeed {key:string;flow:Flow;action:RewriteAction}
+export interface RewriteSeed {key:string;flow:FlowRecord;action:RewriteAction;responseBodyBase64?:string}
 export const MAX_REWRITE_BODY_BYTES=8*1024*1024;
 export const MAX_REWRITE_RULES=32;
 export class RewriteValidationError extends Error {}
@@ -49,14 +49,16 @@ export function replacementParser(rule:RewriteRule) {
   const mime=rule.replacement?.headers.find(h=>!h.disabled&&h.name.toLowerCase()==='content-type')?.value??'';
   return rawBodyParser(mime);
 }
-export function seedRewriteRule(flow:Flow,action:RewriteAction,id=crypto.randomUUID()):RewriteRule {
+export function seedRewriteRule(flow:FlowRecord,action:RewriteAction,id=crypto.randomUUID(),responseBodyBase64?:string):RewriteRule {
   requireValue(!!flow.response&&!flow.websocket,'此记录没有可用的普通 HTTP 响应。');
   const rule=newRewriteRule(action,id),url=flow.request.url.split('#')[0];
   rule.name=(action==='replace'?'替换响应':'修改响应')+' · '+flow.request.method;
   rule.matchType='urlRegex';rule.pattern='^'+url.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$';rule.method=flow.request.method;
   if(action==='replace'){
-    rewriteBodyLength(flow.response.bodyBase64);
-    rule.replacement={status:flow.response.status,headers:structuredClone(flow.response.headers),bodyBase64:flow.response.bodyBase64};
+    const body=responseBodyBase64??('bodyBase64' in flow.response?flow.response.bodyBase64:undefined);
+    requireValue(typeof body==='string','整份替换需要先读取完整响应正文。');
+    rewriteBodyLength(body);
+    rule.replacement={status:flow.response.status,headers:structuredClone(flow.response.headers),bodyBase64:body};
   }
   return rule;
 }

@@ -15,7 +15,9 @@ const m={exports:{}};new Function('module','exports',bundle.outputFiles[0].text)
   revision='b:2';await refresh(apply);assert.equal(reads,5); // service restart
   revision='b:3';await assert.rejects(()=>refresh(()=>{throw Error('apply failed');}));await refresh(apply);assert.equal(reads,7);
   let legacyReads=0;
-  const legacy=m.exports.createFlowRefresh(async()=>{throw Error('404');},async()=>{legacyReads++;return [];});
+  const legacy=m.exports.createFlowRefresh(async()=>{throw Error('HTTP 404: endpoint absent');},async()=>{legacyReads++;return [];});
   await legacy(()=>{});await legacy(()=>{});assert.equal(legacyReads,2);
+  const failed=m.exports.createFlowRefresh(async()=>{throw Error('HTTP 503: unavailable');},()=>assert.fail('a failed revision read is not an older endpoint'));
+  await assert.rejects(()=>failed(()=>{}),/503/);
   console.log('Flow refresh: full history, idle reads skipped, failed read/apply retries, concurrent writes, restart and legacy fallback passed.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

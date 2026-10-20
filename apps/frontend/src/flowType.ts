@@ -1,7 +1,7 @@
-import type { Flow } from './types';
+import type { FlowRecord } from './types';
 
 /** Classify from response metadata; URL suffixes are not authoritative. */
-export function flowType(flow: Flow): string {
+export function flowType(flow: FlowRecord): string {
   if (flow.websocket) return flow.request.url.startsWith('https:') || flow.request.url.startsWith('wss:') ? 'WSS' : 'WS';
   const mime = flow.response?.headers.find(h => h.name.toLowerCase() === 'content-type')?.value.split(';')[0].trim().toLowerCase();
   if (!mime) return '—';

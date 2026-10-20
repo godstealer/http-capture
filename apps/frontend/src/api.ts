@@ -1,4 +1,5 @@
 import { invoke as tauriInvoke, isTauri } from '@tauri-apps/api/core';
+import type {BodyVariant} from './types';
 
 export async function invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return tauriInvoke<T>(command, args);
@@ -41,4 +42,72 @@ export async function invoke<T = unknown>(command: string, args?: Record<string,
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
   return command === 'export_certificate' ? await response.text() as T : response.json();
+}
+
+export interface FlowBodyDownload {id:string;variant:BodyVariant;expectedVersion:string}
+export interface FlowBodyDownloadResult {kind:'saved'|'browser'|'cancelled';name?:string;buffered:boolean}
+interface BodyFileHandle {
+  name:string;
+  createWritable():Promise<{write(data:Uint8Array):Promise<void>;close():Promise<void>;abort():Promise<void>}>;
+}
+const MAX_BODY_DOWNLOAD=256*1024*1024;
+
+/** Download the selected immutable entity, never the currently visible prefix.
+ * File System Access writes with backpressure. The Blob compatibility path is
+ * explicitly reported because that browser still buffers the complete file. */
+export async function downloadFlowBody(args:FlowBodyDownload,options:{signal?:AbortSignal;expectedBytes?:number}={}):Promise<FlowBodyDownloadResult> {
+  if(typeof args.id!=='string'||!args.id||args.id.length>128||typeof args.expectedVersion!=='string'||!args.expectedVersion||args.expectedVersion.length>128
+    ||!['request','response','originalRequest','originalResponse'].includes(args.variant))throw Error('Invalid recorded body reference');
+  if(options.expectedBytes!==undefined&&(!Number.isSafeInteger(options.expectedBytes)||options.expectedBytes<0||options.expectedBytes>MAX_BODY_DOWNLOAD))throw Error('Body download exceeds 256 MiB limit');
+  const checkCancelled=()=>{if(options.signal?.aborted)throw new DOMException('Download cancelled','AbortError')};
+  checkCancelled();
+  if(isTauri()) {
+    const name=await tauriInvoke<string>('save_flow_body',{id:args.id,variant:args.variant,expectedVersion:args.expectedVersion});
+    checkCancelled();return {kind:'saved',name,buffered:false};
+  }
+  const filename=`http-capture-${args.variant}.bin`;
+  const picker=(window as unknown as {showSaveFilePicker?:(options:{suggestedName:string})=>Promise<BodyFileHandle>}).showSaveFilePicker;
+  let handle:BodyFileHandle|undefined;
+  if(picker) {
+    try {handle=await picker.call(window,{suggestedName:filename})}
+    catch(error) {if((error as DOMException).name==='AbortError')return {kind:'cancelled',buffered:false};throw error}
+  }
+  checkCancelled();
+  const controller=new AbortController(),abort=()=>controller.abort(options.signal?.reason);
+  options.signal?.addEventListener('abort',abort,{once:true});
+  const timeout=setTimeout(()=>controller.abort(new DOMException('Download timed out','TimeoutError')),300000);
+  let response:Response|undefined;
+  try {
+    response=await fetch('/__capture/flows/body/download',{method:'POST',redirect:'error',headers:{'X-Capture-UI':'1','Content-Type':'application/json'},
+      body:JSON.stringify({id:args.id,variant:args.variant,expectedVersion:args.expectedVersion}),signal:controller.signal});
+    if(!response.ok)throw Error(`HTTP ${response.status}: ${(await response.text()).slice(0,2048)}`);
+    const declared=response.headers.get('content-length');
+    const total=declared!==null&&/^\d+$/.test(declared)?Number(declared):NaN;
+    if(!Number.isSafeInteger(total)||total<0||total>MAX_BODY_DOWNLOAD||options.expectedBytes!==undefined&&total!==options.expectedBytes)throw Error('Recorded body download length differs from its metadata');
+    if(handle) {
+      if(!response.body)throw Error('Recorded body download stream is unavailable');
+      const reader=response.body.getReader();let writer:Awaited<ReturnType<BodyFileHandle['createWritable']>>|undefined;
+      try {
+        writer=await handle.createWritable();let received=0;
+        while(true) {
+          checkCancelled();const {done,value}=await reader.read();if(done)break;
+          received+=value.byteLength;
+          if(received>total)throw Error('Recorded body download exceeds its declared length');
+          await writer.write(value);
+        }
+        if(received!==total)throw Error('Incomplete recorded body download');
+        checkCancelled();await writer.close();
+        return {kind:'saved',name:handle.name,buffered:false};
+      } catch(error) {await reader.cancel().catch(()=>{});await writer?.abort().catch(()=>{});throw error}
+      finally {reader.releaseLock()}
+    }
+    const blob=await response.blob();checkCancelled();
+    if(blob.size!==total)throw Error('Incomplete recorded body download');
+    const url=URL.createObjectURL(blob);
+    try {const link=document.createElement('a');link.href=url;link.download=filename;link.click()}
+    finally {setTimeout(()=>URL.revokeObjectURL(url),30000)}
+    return {kind:'browser',buffered:true};
+  } catch(error) {
+    controller.abort();await response?.body?.cancel().catch(()=>{});throw error;
+  } finally {clearTimeout(timeout);options.signal?.removeEventListener('abort',abort)}
 }

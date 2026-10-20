@@ -1,6 +1,6 @@
-# HTTP Capture 0.1.32 发布说明（2026-10-20，自动响应重写）
+# HTTP Capture 0.1.32 候选记录（2026-10-20，未发布）
 
-**发布准备中，最终版本以 CI 为准。** 本轮计划发布 0.1.32，包含基于 `7054061` 完成的自动响应重写、编辑一致性修复及正文读取基础接口；正式来源提交、构建和公开附件核验结果将在发布后补记。当前已发布版本仍为 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，历史说明见[上一版记录](release-2026-10-20.md)。
+**本候选未发布，已并入下一批候选。** 原 0.1.32 候选来源 `d2d1ed74bf96b21cc650b3229d0077e7cf48f4e5` 的 [Check #32 attempt 3](https://github.com/godstealer/http-capture/actions/runs/39441172083/attempts/3) 最终失败，macOS 托管 runner 未获分配，对应 Release #29 已跳过；没有正式发布或推进 Latest。该候选的自动响应重写与 P0 后端接口现与前端阶段合并，见[本轮候选说明](release-2026-10-20-body-preview.md)。原七条更新摘要保留为来源记录。 当前正式 Latest 仍为 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，历史说明见[上一版记录](release-2026-10-20.md)。
 
 ## 更新内容
 
@@ -20,7 +20,7 @@
 
 ## 验证与边界
 
-本地完整 capture-core、capture-service、MCP 和传输层回归、前端 38 项回归、TypeScript、国际化、Vite 生产构建及桌面端含测试代码的编译检查已通过。摘要头修复后，模型与组件定向回归和生产构建再次通过；内置浏览器隔离检查覆盖两种规则编辑、保存启用和窄窗口布局。最终跨平台 CI、安装包构建、签名及公开附件核验仍待本次发布流程确认，不把本地通过写成已经发布。
+本地完整 capture-core、capture-service、MCP 和传输层回归、前端 38 项回归、TypeScript、国际化、Vite 生产构建及桌面端含测试代码的编译检查已通过。摘要头修复后，模型与组件定向回归和生产构建再次通过；内置浏览器隔离检查覆盖两种规则编辑、保存启用和窄窗口布局。该来源最终 Check 未通过，Release #29 已跳过；本节只保留当时的本地验证，不代表已发布。后续前端接入和最终发布核验统一记入新的合并候选说明。
 
 自动响应重写最多 32 条规则、每条最多 32 个修改项。整份替换最多 8 MiB；文本修改的输入、每步解压和替换结果也受 8 MiB 限制。这是重写功能的限制，不重新限制普通 HTTP 抓包正文。文本必须是有效 UTF-8 且不含 NUL，显式非 UTF-8 字符集和二进制类型不做局部正文修改；可使用整份文件/Base64 替换。
 

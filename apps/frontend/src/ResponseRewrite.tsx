@@ -63,7 +63,7 @@ export default function ResponseRewrite({connected,seed,active=true}:{connected:
   useEffect(()=>{
     if(!seed||seed.key===seedKey.current||!snapshot||busy||!active)return;
     seedKey.current=seed.key;
-    try{if(append(seedRewriteRule(seed.flow,seed.action)))setNotice(t('已创建禁用的捕获模板草稿；请填写内容、保存规则并确认开关后使用。'))}
+    try{if(append(seedRewriteRule(seed.flow,seed.action,undefined,seed.responseBodyBase64)))setNotice(t('已创建禁用的捕获模板草稿；请填写内容、保存规则并确认开关后使用。'))}
     catch(error){setError(errorText(error))}
   },[seed?.key,snapshot,busy,active]);
   async function save(enableRuleId?:string) {

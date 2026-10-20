@@ -1,6 +1,6 @@
-import type {Flow, Header} from './types';
+import type {FlowRecord, Header} from './types';
 /** Raw H1 fields take precedence over an edited or normalized RequestDraft. */
-export function headerOrderSource(flow:Flow):{headers:Header[];original:boolean} {
+export function headerOrderSource(flow:FlowRecord):{headers:Header[];original:boolean} {
  if(flow.rawRequestHeadBase64){
   try{
    const lines=atob(flow.rawRequestHeadBase64).split('\r\n');

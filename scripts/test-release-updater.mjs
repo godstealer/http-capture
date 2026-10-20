@@ -12,6 +12,41 @@ const publicBytes = Buffer.alloc(42, 1); publicBytes.write('Ed');
 const key = Buffer.from(`untrusted comment: fixture public key\n${publicBytes.toString('base64')}\n`).toString('base64');
 const config = { version: '0.1.0', plugins: { updater: { pubkey: key, requireSignedVersion: true, endpoints: ['https://github.com/godstealer/http-capture/releases/download/updater-preview/latest.json'] } } };
 const env = { SOURCE_CHECK_RUN_NUMBER: '42', SOURCE_SHA: sourceSha };
+
+function assertNativeReleaseWorkflows(checkText, releaseText) {
+  const check=checkText.replace(/\r\n/g,'\n'),release=releaseText.replace(/\r\n/g,'\n');
+  const checkRunners=check.match(/^        os: \[([^\]\n]+)\]$/m)?.[1].split(',').map(value=>value.trim());
+  assert.deepEqual(checkRunners,['ubuntu-latest','windows-latest','macos-26'],'source Check retains native ARM testing');
+  const matrix=release.match(/^      matrix:\n        include:\n([\s\S]+?)^    runs-on:/m)?.[1];
+  assert(matrix,'explicit native packaging matrix is required');
+  const rows=[...matrix.matchAll(/^          - os: (\S+)\n            label: (\S+)\n            bundles: (\S+)$/gm)].map(([,os,label,bundles])=>({os,label,bundles}));
+  assert.deepEqual(rows,[
+    {os:'windows-latest',label:'windows-x64',bundles:'nsis'},
+    {os:'ubuntu-22.04',label:'linux-x64',bundles:'deb,appimage'},
+    {os:'macos-26',label:'macos-arm64',bundles:'app,dmg'},
+    {os:'macos-15-intel',label:'macos-x64',bundles:'app,dmg'},
+  ],'four native packaging runners and architecture labels must agree');
+  assert.deepEqual(rows.map(row=>row.label).sort(),Object.keys(platforms).sort());
+  const arm=rows.find(row=>row.label==='macos-arm64');
+  assert(checkRunners.includes(arm.os),'Check and packaging must share their ARM image');
+  assert.match(release,/^    runs-on: \$\{\{ matrix\.os \}\}$/m);
+  const build=release.match(/^  build:\n([\s\S]+?)^  publish:/m)?.[1];
+  assert(build,'packaging must remain a publication prerequisite');
+  assert.doesNotMatch(build,/continue-on-error:/,'native build and updater failures cannot be ignored');
+  assert.match(build,/^      - name: Verify updater lifecycle\n        run: cargo test --release --locked -p http-capture-desktop --bin http-capture app_update::tests$/m,'every packaging runner runs the real native updater suite');
+  assert.match(release,/^  publish:\n    needs: \[preflight, build\]$/m);
+}
+
+test('workflows preserve four native builds, matching ARM checks and mandatory updater lifecycle tests', () => {
+  const check=readFileSync(path.join(projectRoot,'.github/workflows/check.yml'),'utf8');
+  const release=readFileSync(path.join(projectRoot,'.github/workflows/release.yml'),'utf8');
+  assertNativeReleaseWorkflows(check,release);
+  assert.throws(()=>assertNativeReleaseWorkflows(check,release.replace('os: macos-26','os: macos-15-intel')),/architecture labels/);
+  assert.throws(()=>assertNativeReleaseWorkflows(check,release.replace(/          - os: macos-15-intel\r?\n            label: macos-x64\r?\n            bundles: app,dmg\r?\n/,'')),/four native/);
+  assert.throws(()=>assertNativeReleaseWorkflows(check,release.replace('Verify updater lifecycle','Skip updater lifecycle')),/native updater/);
+  assert.throws(()=>assertNativeReleaseWorkflows(check,release.replace('    runs-on: ${{ matrix.os }}','    continue-on-error: true\n    runs-on: ${{ matrix.os }}')),/cannot be ignored/);
+});
+
 function signature(signedVersion = version, keyId = 1) {
   const payload = Buffer.alloc(74, 2); payload.write('ED'); payload.fill(keyId, 2, 10);
   return Buffer.from(`untrusted comment: fixture signature\n${payload.toString('base64')}\ntrusted comment: timestamp:1\tfile:fixture${signedVersion == null ? '' : `\tversion:${signedVersion}`}\n${Buffer.alloc(64, 3).toString('base64')}\n`).toString('base64');

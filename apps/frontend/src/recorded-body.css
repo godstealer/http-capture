@@ -1,0 +1,39 @@
+.recorded-body.formatted-response {
+  min-width: 0;
+  overflow: auto;
+}
+.recorded-body > .format-toolbar {
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.recorded-body > .format-note,
+.recorded-body > p {
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
+}
+.recorded-body > .formatted-response {
+  flex: 1 0 280px;
+  height: auto;
+  min-height: 280px;
+  min-width: 0;
+  overflow: auto;
+}
+.recorded-body > .formatted-scroll,
+.recorded-body > .formatted-response > .formatted-scroll {
+  flex: 1 0 160px;
+  min-height: 160px;
+  min-width: 0;
+}
+.recorded-body > .formatted-response > .response-preview {
+  flex: 1 0 200px;
+  min-height: 200px;
+}
+.recorded-body-jump {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.recorded-body-jump input { width: 8ch; min-width: 5ch; }

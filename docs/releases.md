@@ -2,6 +2,8 @@
 
 当前正式版更新内容、验证记录和剩余工作见 [2026-10-20 更新说明](release-2026-10-20.md)。正式版 [0.1.31 / build-da127ea9ba1a](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`；[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 三系统及前端全部通过，[Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 四平台构建、各平台 10 项桌面更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。GitHub Release 正文读取该说明，应用内更新说明读取其中“更新内容”章节。修改下一版时须同步 `scripts/release-updater.mjs` 中的说明文件路径和对应文档。上一正式版见 [0.1.28 更新说明](release-2026-10-19.md)，此前预览版范围保留在 [2026-10-16 更新说明](release-2026-10-16.md)。真实安装与跨版本更新不由构建和验签推导为已完成。
 
+**下一候选尚未发布。** [自动响应重写与按需正文预览候选说明](release-2026-10-20-body-preview.md) 合并自动响应重写、P0 历史/正文后端接口和本轮前端接入；`scripts/release-updater.mjs` 当前指向该文档，更新提示摘要取其“更新内容”。最终版本与来源由成功的源 Check 确认，尚未把本地通过写成发布成功。原 `d2d1ed7` 来源的 Check #32 attempt 3 因 macOS runner 未分配最终失败，Release #29 已跳过；[原七条摘要](release-2026-10-20-response-rewrite.md) 保留为未发布来源记录。当前正式 Latest 仍为上述 0.1.31。
+
 `main` 的 push 对应 Check 全部通过后，Release 工作流检出同一提交，构建以下安装包。全部构建成功、签名更新包完整性检查通过后，创建 `build-<提交前12位>` 正式版本并上传安装包、更新包与 SHA256 校验文件，按版本顺序推进应用更新清单及 GitHub Latest。PR 检查不会触发发布；已公开的 build 资产重跑时不覆盖。
 
 | 系统 | 架构 | 安装包 |
@@ -11,7 +13,7 @@
 | macOS Intel | x64 | `.dmg`，文件名前缀 `macos-x64` |
 | macOS Apple Silicon（M 系列） | arm64 | `.dmg`，文件名前缀 `macos-arm64` |
 
-两种 Mac 分别使用 `macos-15-intel` 和 `macos-15` runner 原生编译，包括 httpcloak Go 辅助程序；当前不生成 Universal 二合一安装包。在 Mac 的“关于本机”查看芯片类型后选择对应文件。
+两种 Mac 分别使用 `macos-15-intel` 和 `macos-26` runner 原生编译，包括 httpcloak Go 辅助程序；Check 与 Release 的 ARM 标签保持一致，四个平台的原生更新测试门槛继续保留。这里的标签表示构建宿主，不把宿主版本等同于应用最低支持版本，也不据此认定目标 Mac 已验收。当前不生成 Universal 二合一安装包；在 Mac 的“关于本机”查看芯片类型后选择对应文件。
 
 安装包包含原生发送引擎及 httpcloak 和其能力清单，通过 Tauri 资源目录定位辅助程序，不依赖源码目录。wreq 可选引擎和 TUN 辅助程序暂不包含。TUN H3 排查仍暂停。
 
