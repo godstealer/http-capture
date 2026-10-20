@@ -6,6 +6,7 @@ import {t} from './i18n';
 import McpClients from './McpClients';
 import McpHelp from './McpHelp';
 import McpSetup from './McpSetup';
+import AuditPage from './AuditPage';
 import './mcp-page.css';
 
 interface Config {enabled:boolean;port:number;allowSend:boolean;allowCaptureControl:boolean;includeSensitiveHeaders:boolean;allowWorkspaceWrite:boolean;allowRulesWrite:boolean;allowScriptsWrite:boolean}
@@ -58,13 +59,13 @@ export default function McpPage() {
   const running=!!status?.running, locked=busy||running||!status;
   return <main className="mcp-page">
     <header className="mcp-page-heading"><div><h1><Cable size={23}/>MCP</h1><p>{t('让 AI 操作当前抓包工具，或连接外部 MCP 服务。')}</p></div><button type="button" className="button" onClick={()=>setHelpOpen(true)}><BookOpen size={16}/>{t('使用说明')}</button></header>
-    <nav className="mcp-page-tabs" aria-label={t('MCP 功能')}><button aria-current={tab==='server'?'page':undefined} className={tab==='server'?'active':''} onClick={()=>setTab('server')}>{t('AI 接入')}</button><button aria-current={tab==='client'?'page':undefined} className={tab==='client'?'active':''} onClick={()=>setTab('client')}>{t('外部服务')}</button></nav>
-    <aside className="mcp-quick-start" aria-label={t('MCP 快速入门')}>
+    <nav className="mcp-page-tabs" aria-label={t('MCP 功能')}><button aria-current={tab==='server'?'page':undefined} className={tab==='server'?'active':''} onClick={()=>setTab('server')}>{t('AI 接入')}</button><button aria-current={tab==='client'?'page':undefined} className={tab==='client'?'active':''} onClick={()=>setTab('client')}>{t('外部服务')}</button><button aria-current={tab==='audit'?'page':undefined} className={tab==='audit'?'active':''} onClick={()=>setTab('audit')}>{t('操作审计')}</button></nav>
+    {tab!=='audit'&&<aside className="mcp-quick-start" aria-label={t('MCP 快速入门')}>
       <div><BookOpen size={18}/><strong>{tab==='server'?t('让 AI 帮你分析抓包，只需三步'):t('手动使用外部工具，只需三步')}</strong></div>
       {tab==='server'?<ol><li>{t('先启动 MCP，再在下方接入向导选择 AI 客户端和 HTTP / stdio，生成配置。')}</li><li>{t('将生成的配置合并到指定文件，保留其他服务，再重新连接 AI 客户端。')}</li><li>{t('让 AI「查看抓包状态，列出最近 5 条请求」，确认连接成功。')}</li></ol>:<ol><li>{t('点击「添加服务」，填写 HTTP 地址或本地 stdio 程序并保存。')}</li><li>{t('点击「连接」→「工具目录」，选择要使用的工具。')}</li><li>{t('按参数 Schema 填写 JSON 对象，再点击「手动调用工具」。')}</li></ol>}
       <p>{tab==='server'?t('MCP 默认端口是 1422，抓包代理默认端口是 8080；不要填混。'):t('本页不会自动调用工具。HTTP Token 只保留本次会话，重启后需要补填。')}</p>
-    </aside>
-    {tab==='client'?<McpClients/>:<section className="mcp-server-panel">
+    </aside>}
+    {tab==='audit'?<AuditPage/>:tab==='client'?<McpClients/>:<section className="mcp-server-panel">
       <div className="mcp-server-heading"><div><h2>{t('AI 操作抓包工具')}</h2><p>{t('使用同一个抓包内核，查询记录、读取正文，并按授权发送请求或启停抓包。')}</p></div><span className={'mcp-running'+(running?' is-running':'')}>{running?t('运行中'):t('未启动')}</span></div>
       {error&&<p className="mcp-page-error" role="alert">{error}</p>}
       {status?.lastError&&status.lastError!==error&&<p className="mcp-page-error" role="alert">{status.lastError}</p>}

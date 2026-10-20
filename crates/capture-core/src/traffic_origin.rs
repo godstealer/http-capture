@@ -25,10 +25,9 @@ pub(crate) async fn tcp(peer: SocketAddr, local: SocketAddr, transparent: bool) 
         process: None, process_status: "unknown".into(),
     };
     let local_peer = if peer.ip().to_canonical().is_loopback() { true } else {
-        let Ok(permit) = CLASSIFIERS.try_acquire() else { return origin; };
         let ip = peer.ip();
-        let work = tokio::task::spawn_blocking(move || { let _permit = permit; crate::traffic_process::is_local(ip) });
-        let Ok(Ok(value)) = tokio::time::timeout(std::time::Duration::from_secs(1), work).await else { return origin; };
+        let Some(value) = crate::traffic_process::run_bounded(&CLASSIFIERS, std::time::Duration::from_secs(1),
+            move || Some(crate::traffic_process::is_local(ip))).await else { return origin; };
         value
     };
     if !local_peer { origin.process_status = "remote".into(); }

@@ -68,6 +68,49 @@ async fn distinct_clients_persist_their_origin_and_replay_does_not_inherit_it() 
     }).await.unwrap();
 }
 
+#[tokio::test]
+async fn browser_sized_connection_burst_keeps_each_clients_own_origin() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        const COUNT: usize = 16;
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(dir.path()).unwrap();
+        let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = source.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..COUNT {
+                let (io, _) = source.accept().await.unwrap();
+                let mut io = BufReader::new(io);
+                read_head(&mut io).await.unwrap();
+                io.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").await.unwrap();
+            }
+        });
+        let handle = proxy::start(engine.clone(), 0).await.unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(COUNT));
+        let mut clients = tokio::task::JoinSet::new();
+        for index in 0..COUNT {
+            let proxy = handle.address;
+            let barrier = barrier.clone();
+            clients.spawn(async move {
+                let mut client = TcpStream::connect(proxy).await.unwrap();
+                let peer = client.local_addr().unwrap().to_string();
+                barrier.wait().await;
+                client.write_all(format!("GET http://{address}/burst-{index} HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes()).await.unwrap();
+                let mut response = Vec::new(); client.read_to_end(&mut response).await.unwrap();
+                assert!(response.starts_with(b"HTTP/1.1 204"));
+                (index, peer)
+            });
+        }
+        let mut peers = Vec::new();
+        while let Some(client) = clients.join_next().await { peers.push(client.unwrap()); }
+        let flows = completed(&engine, COUNT).await;
+        for (index, peer) in peers {
+            let flow = flows.iter().find(|flow| flow.request.url.ends_with(&format!("/burst-{index}"))).unwrap();
+            check_local(flow.traffic_origin.as_ref().unwrap(), peer);
+        }
+        server.await.unwrap(); handle.stop().await;
+    }).await.unwrap();
+}
+
 fn roots(ca: &CertificateAuthority) -> rustls::RootCertStore {
     let pem = std::fs::read(&ca.cert_path).unwrap();
     let mut roots = rustls::RootCertStore::empty();

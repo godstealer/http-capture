@@ -1,5 +1,5 @@
 //! Signed desktop updates. The webview never receives updater/process permissions.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{future::Future, sync::Mutex as StdMutex, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -15,11 +15,13 @@ pub struct AppUpdateState {
 
 struct PendingUpdate { update: Update, bytes: Option<Vec<u8>> }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
     current_version: String,
     configured: bool,
+    #[serde(default)]
+    manual_update: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
 }
@@ -69,13 +71,77 @@ fn configuration_reason(value: Option<&serde_json::Value>) -> Option<String> {
 
 #[tauri::command]
 pub fn app_update_status(app: AppHandle) -> UpdateStatus {
-    let reason = configuration_reason(app.config().plugins.0.get("updater"));
+    let configuration = configuration_reason(app.config().plugins.0.get("updater"));
     #[cfg(target_os = "linux")]
-    let reason = reason.or_else(|| linux_installation_reason(
+    let installation = linux_installation_reason(
         tauri::utils::platform::bundle_type(),
         std::env::var_os("APPIMAGE").is_some_and(|value| !value.is_empty()),
-    ));
-    UpdateStatus { current_version: app.package_info().version.to_string(), configured: reason.is_none(), reason }
+    );
+    #[cfg(not(target_os = "linux"))]
+    let installation = None;
+    update_status(app.package_info().version.to_string(), configuration, installation)
+}
+
+fn update_status(current_version: String, configuration: Option<String>, installation: Option<String>) -> UpdateStatus {
+    let manual_update = configuration.is_none() && installation.is_some();
+    let reason = configuration.or(installation);
+    UpdateStatus { current_version, configured: reason.is_none(), manual_update, reason }
+}
+
+const UPDATE_DOWNLOAD_URL: &str = "https://github.com/godstealer/http-capture/releases/latest";
+
+// Only this repository's fixed download page can be opened by the webview.
+fn update_download_command() -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("rundll32.exe");
+        command.args(["url.dll,FileProtocolHandler", UPDATE_DOWNLOAD_URL]).creation_flags(0x08000000);
+        command
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = std::process::Command::new("open");
+        command.arg(UPDATE_DOWNLOAD_URL);
+        command
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(UPDATE_DOWNLOAD_URL);
+        command
+    }
+}
+
+#[tauri::command]
+pub async fn open_update_download() -> Result<(), String> {
+    let mut child = tokio::process::Command::from(update_download_command())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn().map_err(|error| format!("无法启动默认浏览器：{error}"))?;
+    let launch = wait_update_opener(
+        async { child.wait().await.map(|status| status.success()) },
+        Duration::from_secs(2),
+    ).await?;
+    if launch == DownloadLaunch::StillRunning {
+        // Some xdg-open implementations remain attached to the browser. Reap
+        // asynchronously without blocking the IPC response or killing it.
+        tokio::spawn(async move { let _ = child.wait().await; });
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+enum DownloadLaunch { Finished, StillRunning }
+
+async fn wait_update_opener(wait: impl Future<Output = std::io::Result<bool>>, grace: Duration) -> Result<DownloadLaunch, String> {
+    match tokio::time::timeout(grace, wait).await {
+        Ok(Ok(true)) => Ok(DownloadLaunch::Finished),
+        Ok(Ok(false)) => Err("系统未能打开默认浏览器，请手动打开下载链接".into()),
+        Ok(Err(error)) => Err(format!("等待默认浏览器失败：{error}")),
+        Err(_) => Ok(DownloadLaunch::StillRunning),
+    }
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -287,5 +353,49 @@ mod tests {
         assert!(linux_installation_reason(None, true).is_none());
         assert!(linux_installation_reason(Some(BundleType::Deb), false).is_none());
         assert!(linux_installation_reason(Some(BundleType::Rpm), false).is_none());
+    }
+
+    #[test]
+    fn manual_update_status_is_distinct_from_unconfigured_and_legacy_status_defaults() {
+        let portable = update_status("1.0.0".into(), None, Some("manual installation".into()));
+        let json = serde_json::to_value(portable).unwrap();
+        assert_eq!(json["manualUpdate"], true);
+        assert_eq!(json["configured"], false);
+        let missing = update_status("1.0.0".into(), Some("missing source".into()), Some("manual installation".into()));
+        assert!(!missing.manual_update);
+        assert_eq!(missing.reason.as_deref(), Some("missing source"));
+        let installed = update_status("1.0.0".into(), None, None);
+        assert!(installed.configured);
+        assert!(!installed.manual_update);
+        let legacy: UpdateStatus = serde_json::from_value(json!({"currentVersion":"0.1.28","configured":true})).unwrap();
+        assert!(!legacy.manual_update);
+    }
+
+    #[test]
+    fn download_command_only_contains_the_fixed_release_page() {
+        let command = update_download_command();
+        let args = command.get_args().map(|arg| arg.to_str().unwrap()).collect::<Vec<_>>();
+        #[cfg(target_os = "windows")]
+        assert_eq!(args, ["url.dll,FileProtocolHandler", UPDATE_DOWNLOAD_URL]);
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(args, [UPDATE_DOWNLOAD_URL]);
+        assert_eq!(UPDATE_DOWNLOAD_URL, "https://github.com/godstealer/http-capture/releases/latest");
+    }
+
+    #[tokio::test]
+    async fn download_opener_checks_immediate_results_without_launching_a_browser() {
+        assert_eq!(wait_update_opener(async { Ok(true) }, Duration::from_secs(2)).await.unwrap(), DownloadLaunch::Finished);
+        assert!(wait_update_opener(async { Ok(false) }, Duration::from_secs(2)).await.unwrap_err().contains("手动打开下载链接"));
+        assert!(wait_update_opener(async { Err(std::io::Error::other("wait failure")) }, Duration::from_secs(2)).await.unwrap_err().contains("wait failure"));
+    }
+
+    #[tokio::test]
+    async fn download_opener_returns_after_grace_for_a_still_running_browser() {
+        // Pending represents an opener that waits for the browser to exit;
+        // no external command or browser is executed by this lifecycle test.
+        let launch = tokio::time::timeout(Duration::from_secs(1), wait_update_opener(
+            std::future::pending(), Duration::from_millis(5),
+        )).await.unwrap().unwrap();
+        assert_eq!(launch, DownloadLaunch::StillRunning);
     }
 }

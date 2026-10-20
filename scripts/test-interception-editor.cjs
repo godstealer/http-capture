@@ -45,7 +45,8 @@ global.FileReader = class {
     this.onload?.();
   }
 };
-function mount() {
+function mount(stage = 'request') {
+  const calls = [];
   let cursor = 0,
     dirty = true,
     mounted = true,
@@ -91,6 +92,8 @@ function mount() {
           ? { t: (x) => x }
           : name === "./types"
             ? { encodeText: (s) => Buffer.from(s).toString("base64") }
+            : name === "./api"
+              ? { invoke: async (...args) => { calls.push(args); } }
             : name === "./BodyCodeEditor"
               ? Body
               : name === "./OrderedHeaders"
@@ -111,7 +114,7 @@ function mount() {
   ];
   const item = {
     id: "one",
-    stage: "request",
+    stage,
     flow: {
       request: {
         method: "POST",
@@ -152,6 +155,7 @@ function mount() {
   }
   render();
   return {
+    calls,
     find,
     render,
     body: () => find((n) => n.type === Body),
@@ -179,6 +183,25 @@ function mount() {
   };
 }
 (async () => {
+  const response = mount('response');
+  response.body().onChange('{"replacement":true}');
+  response.render();
+  response.button('替换响应并放行').onClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(response.calls[0][0], 'resolve_interception');
+  assert.equal(response.calls[0][1].decision.action, 'modify');
+  assert.equal(response.calls[0][1].decision.request, null);
+  assert.equal(Buffer.from(response.calls[0][1].decision.response.bodyBase64, 'base64').toString(), '{"replacement":true}');
+  response.button('原样放行').onClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(response.calls[1][1].decision, {id:'one',action:'continue',request:null,response:null});
+  response.unmount();
+  const direct = mount();
+  direct.replace(true);
+  direct.button('返回自定义响应').onClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(direct.calls[0][1].decision.action, 'replace', 'request-stage direct replacement remains available');
+  direct.unmount();
   for (const response of [false, true]) {
     const encoding = mount();
     if (response) encoding.replace(true);

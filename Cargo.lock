@@ -761,6 +761,7 @@ dependencies = [
  "capture-core",
  "reqwest",
  "rmcp",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",

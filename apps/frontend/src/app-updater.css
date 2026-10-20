@@ -30,6 +30,11 @@
 .app-update-dialog > footer > button:first-child { margin-right: auto; }
 .app-update-dialog .app-update-install { border-color: var(--update-accent); background: var(--update-accent); color: var(--update-accent-text); font-weight: 600; }
 .app-update-dialog .app-update-install:hover:not(:disabled) { border-color: var(--field-focus); background: var(--update-accent); }
+.app-update-dialog .app-update-download { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:34px; padding:6px 11px; border:1px solid var(--update-accent); border-radius:6px; background:var(--update-accent); color:var(--update-accent-text); font-size:12px; font-weight:600; text-decoration:none; }
+.app-update-download:hover { filter:brightness(1.05); }
+.app-update-download:focus-visible { outline:2px solid var(--field-focus); outline-offset:2px; }
+.app-update-download-fallback { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.app-update-download-fallback input { flex:1 1 220px; min-width:0; padding:8px; font-size:12px; }
 [data-color-scheme='dark'] .app-update-trigger.has-update { border-color: #4a9b7f; background: #20392f; color: #a0eccf; }
 [data-color-scheme='dark'] .app-update-backdrop { --update-accent: #65d5b0; --update-accent-text: #102a23; --update-soft: #20392f; --update-danger: #ff9b91; }
 [data-color-scheme='dark'] .app-update-symbol { color: #a0eccf; }

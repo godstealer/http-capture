@@ -12,7 +12,7 @@ interface Section {id:string;count:number}
 interface Snapshot {document:string;summary:{sections:Section[];warnings:string[]}}
 interface Preview {expectedRevision:string;sections:Section[];warnings:string[];requiresRestart:boolean;sourceVersion:string;exportedAt:number}
 const maxBytes=16*1024*1024;
-function sectionLabel(id:string){return ({preferences:t('界面与监听偏好'),library:t('集合与环境'),workspace:t('请求草稿'),interception:t('断点规则'),blocking:t('阻止规则'),scripts:t('全局抓包脚本'),plugins:t('插件'),decryption:t('解密绕过列表'),upstream:t('上游代理'),mcp:t('MCP 配置')})[id]??id}
+function sectionLabel(id:string){return ({preferences:t('界面与监听偏好'),library:t('集合与环境'),workspace:t('请求草稿'),interception:t('断点规则'),blocking:t('阻止规则'),faults:t('模拟规则'),scripts:t('全局抓包脚本'),plugins:t('插件'),decryption:t('解密绕过列表'),upstream:t('上游代理'),mcp:t('MCP 配置')})[id]??id}
 
 export default function ConfigMigration({connected,beforeTransfer,onImported}:{connected:boolean;beforeTransfer:()=>Promise<void>;onImported:(result:ConfigImportResult)=>void}){
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');

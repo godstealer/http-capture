@@ -87,40 +87,31 @@ impl Store {
         let path = match direction { "request"=>"$.request.bodyBase64", "response"=>"$.response.bodyBase64", _=>anyhow::bail!("direction must be request or response") };
         let mut conn = self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
         let tx = conn.transaction()?;
-        let (kind, encoded_len, ending, marker): (Option<String>,Option<usize>,Option<String>,Option<String>) = tx.query_row(
-            "SELECT json_type(data,?2),length(json_extract(data,?2)),substr(json_extract(data,?2),-2),
+        let (kind, encoded_len, ending, marker): (Option<String>,Option<usize>,Option<Vec<u8>>,Option<String>) = tx.query_row(
+            "SELECT json_type(data,?2),length(CAST(json_extract(data,?2) AS BLOB)),substr(CAST(json_extract(data,?2) AS BLOB),-4),
              CASE WHEN substr(json_extract(data,?2),1,6)='@body:' THEN json_extract(data,?2) END FROM flows WHERE id=?1",
             params![id,path], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?.context("Request not found")?;
         ensure!(kind.as_deref()==Some("text"), "Requested body is unavailable");
-        let (total, bytes) = if let Some(marker) = marker {
+        let (plan, bytes) = if let Some(marker) = marker {
             ensure!(marker==format!("@body:{direction}"), "Invalid stored body reference");
             let rowid:i64=tx.query_row("SELECT rowid FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,direction],|r|r.get(0))?;
             let blob=tx.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,true)?;
-            let total=blob.len() as u64;
-            let count=total.saturating_sub(offset).min(length as u64) as usize;
-            let mut bytes=vec![0;count];
-            if count>0 {blob.read_at_exact(&mut bytes,offset as usize)?;}
-            (total,bytes)
+            let plan=crate::body_read::BodyReadPlan::new(blob.len() as u64,offset,length)?;
+            let mut bytes=vec![0;plan.length];
+            if plan.length>0 {blob.read_at_exact(&mut bytes,usize::try_from(plan.start)?)?;}
+            (plan,bytes)
         } else {
             let encoded_len=encoded_len.unwrap_or(0);
-            ensure!(encoded_len%4==0,"Invalid Base64 body length");
-            let padding=ending.unwrap_or_default().bytes().rev().take_while(|&b|b==b'=').count();
-            let total=(encoded_len/4*3).checked_sub(padding).context("Invalid Base64 padding")? as u64;
-            let count=total.saturating_sub(offset).min(length as u64) as usize;
-            let bytes=if count==0 {Vec::new()} else {
-                let skip=(offset%3) as usize;
-                let start=offset/3*4+1;
-                let encoded_count=(skip+count).div_ceil(3)*4;
-                let part:String=tx.query_row("SELECT substr(json_extract(data,?2),?3,?4) FROM flows WHERE id=?1",params![id,path,start,encoded_count],|r|r.get(0))?;
-                let decoded=STANDARD.decode(part)?;
-                ensure!(decoded.len()>=skip+count,"Incomplete stored body");
-                decoded[skip..skip+count].to_vec()
+            let tail=ending.unwrap_or_default();
+            let plan=crate::body_read::Base64ReadPlan::new(encoded_len,std::str::from_utf8(&tail).context("Invalid stored body ending")?,offset,length)?;
+            let bytes=if plan.body.length==0 {Vec::new()} else {
+                let part:Vec<u8>=tx.query_row("SELECT substr(CAST(json_extract(data,?2) AS BLOB),?3,?4) FROM flows WHERE id=?1",params![id,path,plan.encoded_start+1,plan.encoded_length],|r|r.get(0))?;
+                plan.decode_part(&part)?
             };
-            (total,bytes)
+            (plan.body,bytes)
         };
         tx.commit()?;
-        let end=offset.saturating_add(bytes.len() as u64);
-        Ok(McpBodyChunk{offset,total_bytes:total,body_base64:STANDARD.encode(&bytes),text:String::from_utf8(bytes).ok(),next_offset:if end<total {Some(end)} else {None}})
+        Ok(McpBodyChunk{offset:plan.offset,total_bytes:plan.total_bytes,body_base64:STANDARD.encode(&bytes),text:String::from_utf8(bytes).ok(),next_offset:plan.next_offset})
     }
 }
 
@@ -151,6 +142,23 @@ mod tests {
             }
         }
         assert!(store.mcp_read_body("body-1","request",0,65537).is_err());
+    }
+    #[test]
+    fn legacy_inline_ranges_validate_tail_and_selected_bytes_without_decoding_unselected_payload(){
+        let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("test.db")).unwrap();store.insert(&flow("legacy",b"")).unwrap();
+        let set=|encoded:&str|{store.0.lock().unwrap().execute("UPDATE flows SET data=json_set(data,'$.request.bodyBase64',?1) WHERE id='legacy'",[encoded]).unwrap();};
+        for bad in ["====","A===","AA=A","AAAAéé","AAAAA=AA","not base64"] {
+            set(bad);assert!(store.mcp_read_body("legacy","request",0,1).is_err(),"invalid legacy ending {bad:?}");
+        }
+        // An unselected prefix is never decoded. A bounded inspection is not
+        // a full-body validator; the selected quantum and final quantum are.
+        set("####AQI=");let chunk=store.mcp_read_body("legacy","request",3,2).unwrap();
+        assert_eq!(STANDARD.decode(chunk.body_base64).unwrap(),vec![1,2]);assert_eq!(chunk.total_bytes,5);assert_eq!(chunk.next_offset,None);
+        assert!(store.mcp_read_body("legacy","request",0,1).is_err());
+        set("AAH+/w==");let chunk=store.mcp_read_body("legacy","request",i64::MAX as u64,65536).unwrap();
+        assert_eq!(chunk.offset,i64::MAX as u64);assert_eq!(chunk.total_bytes,4);assert!(chunk.body_base64.is_empty());assert_eq!(chunk.next_offset,None);
+        assert!(store.mcp_read_body("legacy","request",u64::MAX,1).is_err());
+        assert!(store.mcp_read_body("legacy","request",0,0).is_err());
     }
     #[test]
     fn summary_cursor_and_filters_are_applied_before_the_limit() {

@@ -167,6 +167,12 @@ async fn configure_blocking(State(s):State<Shared>, headers:HeaderMap, Json(inpu
  authorize(&headers,&s)?; s.engine.blocking.configure(input.config).map_err(error)?; Ok(Json(()))
 }
 
+async fn fault_rules(State(s):State<Shared>,headers:HeaderMap)->Result<Json<capture_core::fault_rules::Snapshot>,ApiError>{authorize(&headers,&s)?;Ok(Json(s.engine.fault_rules.snapshot()))}
+#[derive(Deserialize)] #[serde(rename_all="camelCase",deny_unknown_fields)]
+struct FaultInput {config:capture_core::fault_rules::Config,expected_version:String}
+async fn configure_fault_rules(State(s):State<Shared>,headers:HeaderMap,Json(input):Json<FaultInput>)->Result<Json<capture_core::fault_rules::Snapshot>,ApiError>{authorize(&headers,&s)?;s.engine.fault_rules.configure(input.config,&input.expected_version).map(Json).map_err(error)}
+async fn mcp_audit(State(s):State<Shared>,headers:HeaderMap,Json(input):Json<capture_core::audit::AuditQuery>)->Result<Json<capture_core::audit::AuditPage>,ApiError>{authorize(&headers,&s)?;tokio::task::spawn_blocking(move||s.engine.store.mcp_audit_page(input)).await.map_err(error)?.map(Json).map_err(error)}
+
 async fn interception(State(s): State<Shared>, headers: HeaderMap) -> Result<Json<capture_core::intercept::Snapshot>, ApiError> {
  authorize(&headers,&s)?; Ok(Json(s.engine.intercept.snapshot()))
 }
@@ -246,6 +252,8 @@ fn router(state:Shared)->Router {
         .route("/plugins/logs",get(plugin_logs))
         .route("/scripts", get(capture_scripts).post(set_capture_scripts))
         .route("/blocking", get(blocking).post(configure_blocking))
+        .route("/fault-rules",get(fault_rules).post(configure_fault_rules))
+        .route("/mcp/audit",post(mcp_audit))
         .route("/interception", get(interception).post(configure_interception)).route("/interception/resolve", post(resolve_interception).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/certificate", get(certificate)).route("/upstream", post(set_upstream))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)).layer(axum::middleware::from_fn_with_state(state.clone(), authenticated)).with_state(state)

@@ -17,6 +17,10 @@ pub use mcp::{McpBodyChunk, McpRequestFilter, McpRequestPage};
 mod mcp_workflows;
 #[path = "store_config_migration.rs"]
 mod config_migration;
+#[path = "store_audit.rs"]
+mod audit;
+#[path = "store_fault_rules.rs"]
+mod fault_rules;
 
 impl Store {
     pub fn backup(&self) -> Result<String> {
@@ -107,6 +111,7 @@ impl Store {
         conn.execute_batch("CREATE TABLE IF NOT EXISTS flow_bodies(flow_id TEXT NOT NULL, slot TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(flow_id,slot));
           CREATE TRIGGER IF NOT EXISTS flow_bodies_delete AFTER DELETE ON flows BEGIN DELETE FROM flow_bodies WHERE flow_id=old.id; END;")?;
         conn.execute("UPDATE flows SET data=json_set(data,'$.state','interrupted') WHERE json_extract(data,'$.state') IN ('sending','receiving')", [])?;
+        crate::audit::initialize(&conn)?;
         let migration_epoch:Option<String>=conn.query_row("SELECT value FROM settings WHERE key='config-migration.epoch.v1'",[],|row|row.get(0)).optional()?;
         Ok(Self(Mutex::new(conn), uuid::Uuid::new_v4().to_string(),std::sync::atomic::AtomicBool::new(false),migration_epoch))
     }

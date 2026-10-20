@@ -2,6 +2,7 @@
 //! Anonymous/delete-on-close temporary files disappear on cancellation and exit.
 use anyhow::{ensure, Result};
 use base64::{engine::general_purpose::STANDARD, write::EncoderStringWriter};
+use crate::body_read::{BodyReadChunk, BodyReadPlan};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 const MEMORY_LIMIT: usize = 64 * 1024;
@@ -74,10 +75,10 @@ impl BodySpool {
                 self.needs_rewind = true;
             }
             let file = self.file.as_mut().unwrap();
-            if !self.needs_rewind {
-                // Appending after a read starts subsequent reads at byte zero.
-                file.seek(std::io::SeekFrom::End(0)).await?;
-            }
+            // A cancelled seek/read can leave the cursor anywhere. Always seek
+            // to the end before appending; inspection must never overwrite the
+            // body that will subsequently be forwarded or saved.
+            file.seek(std::io::SeekFrom::End(0)).await?;
             file.write_all(bytes).await?;
             // Tokio file writes are buffered in a blocking task. Observe any
             // delayed write error before committing the new body length.
@@ -124,6 +125,30 @@ impl BodySpool {
         };
         chunk.truncate(count);
         Ok(chunk)
+    }
+
+    /// Inspect at most 64 KiB without materializing the complete body. A range
+    /// read resets the next sequential read to byte zero, including on cancel.
+    /// It never limits the complete send/serialization paths.
+    // Prepared for a future file-backed preview entry point. Current UI/API
+    // body inspection uses stored Base64/blob ranges, not this spool method.
+    #[allow(dead_code)]
+    pub(crate) async fn read_range(&mut self, offset: u64, length: usize) -> Result<BodyReadChunk> {
+        ensure!(!self.failed, "Temporary body was discarded after an incomplete append");
+        let plan = BodyReadPlan::new(self.len, offset, length)?;
+        let mut bytes = vec![0; plan.length];
+        self.needs_rewind = true;
+        if !bytes.is_empty() {
+            if let Some(file) = &mut self.file {
+                file.seek(std::io::SeekFrom::Start(plan.start)).await?;
+                file.read_exact(&mut bytes).await?;
+            } else {
+                let start = usize::try_from(plan.start)?;
+                bytes.copy_from_slice(self.memory.get_ref().get(start..start + plan.length)
+                    .ok_or_else(|| anyhow::anyhow!("Incomplete temporary body"))?);
+            }
+        }
+        Ok(BodyReadChunk { plan, bytes })
     }
 
     pub async fn send<W: AsyncWrite + Unpin + ?Sized>(&mut self, writer: &mut W) -> Result<()> {
@@ -296,6 +321,53 @@ mod tests {
             expected.extend_from_slice(b"tail");
             assert_eq!(spool.into_base64().await.unwrap(), STANDARD.encode(expected));
         }
+    }
+
+    #[tokio::test]
+    async fn bounded_inspection_does_not_truncate_later_frames_or_change_full_transfer() {
+        for length in [MEMORY_LIMIT, MEMORY_LIMIT + 1, 2 * MEMORY_LIMIT + 7] {
+            let bytes = pattern(0, length);
+            let mut spool = BodySpool::empty();
+            // An exact inspection budget is followed by additional network
+            // frames; the inspection ceiling must not become a capture limit.
+            spool.append(&bytes[..MEMORY_LIMIT]).await.unwrap();
+            assert_eq!(spool.read_range(0, MEMORY_LIMIT).await.unwrap().bytes, bytes[..MEMORY_LIMIT]);
+            for frame in bytes[MEMORY_LIMIT..].chunks(7919) { spool.append(frame).await.unwrap(); }
+            let chunk = spool.read_range(65535, MEMORY_LIMIT).await.unwrap();
+            assert_eq!(chunk.bytes, bytes[65535..(65535 + MEMORY_LIMIT).min(length)]);
+            assert_eq!(chunk.plan.total_bytes, length as u64);
+            assert!(spool.read_range(u64::MAX, 1).await.unwrap().bytes.is_empty());
+            assert!(spool.read_range(0, MEMORY_LIMIT + 1).await.is_err());
+            assert_eq!(spool.next_chunk().await.unwrap(), bytes[..MEMORY_LIMIT]);
+            spool.append(b"later").await.unwrap();
+            let mut expected = bytes;
+            expected.extend_from_slice(b"later");
+            let mut out = Vec::new();
+            spool.send(&mut out).await.unwrap();
+            assert_eq!(out, expected);
+            assert_eq!(spool.into_base64().await.unwrap(), STANDARD.encode(&expected));
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_range_read_keeps_subsequent_appends_at_end() {
+        let bytes = pattern(0, MEMORY_LIMIT + 7);
+        let mut spool = BodySpool::empty();
+        spool.append(&bytes).await.unwrap();
+        // Poll once and discard, covering cancellation during either the seek
+        // or read. If a platform completes immediately, the same cursor rule
+        // still applies to an already completed inspection.
+        {
+            let mut future = Box::pin(spool.read_range(1, MEMORY_LIMIT));
+            std::future::poll_fn(|cx| {
+                let _ = std::future::Future::poll(future.as_mut(), cx);
+                std::task::Poll::Ready(())
+            }).await;
+        }
+        spool.append(b"after-cancel").await.unwrap();
+        let mut expected = bytes;
+        expected.extend_from_slice(b"after-cancel");
+        assert_eq!(spool.into_base64().await.unwrap(), STANDARD.encode(expected));
     }
 
     #[tokio::test]

@@ -5,5 +5,7 @@ pub mod bridge;
 pub mod connections;
 pub mod workflows;
 pub mod rules;
+pub mod contracts;
+pub mod resources;
 pub use server::{ServerConfig, ServerManager, ServerStatus};
 pub use client::{ClientInput, ClientManager, ClientStatus};

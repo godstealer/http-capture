@@ -3,6 +3,9 @@ pub mod runtime;
 pub mod config_migration;
 pub use runtime::CaptureRuntime;
 pub mod body_export;
+pub mod body_read;
+pub mod audit;
+pub mod fault_rules;
 mod body_spool;
 mod capture_tls;
 mod traffic_origin;
@@ -53,6 +56,7 @@ pub struct Engine {
     pub plugins: plugins::Plugins,
     pub intercept: intercept::Interceptor,
     pub blocking: blocking::Blocking,
+    pub fault_rules: fault_rules::FaultRules,
     pub upstream: upstream::UpstreamState,
     pub store: Arc<store::Store>,
     pub ca: ca::CertificateAuthority,
@@ -94,7 +98,7 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open_with_store(data_dir,store.clone())?, store,
+        Ok(Arc::new(Self { fault_rules:fault_rules::FaultRules::open(store.clone())?, blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open_with_store(data_dir,store.clone())?, store,
             ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
             send_engines, upstream_roots }))
     }
@@ -146,6 +150,7 @@ impl Engine {
             }
             flow.request.retain_enabled_headers();
             if self.blocking.apply(&mut flow) { return Ok(()); }
+            if self.fault_rules.apply(&mut flow).await? { return Ok(()); }
             let (response, notes) = self.send_observed(&mut flow, route, (script.enabled && !script.after.trim().is_empty())||plugins.iter().any(|p|!p.after.trim().is_empty())).await?;
             flow.response = Some(response); flow.notes.extend(notes);
             plugins::run(self,&plugins,&mut flow,true).await;

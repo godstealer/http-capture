@@ -6,12 +6,12 @@ use serde::{Deserialize,Serialize};
 use serde_json::{json,Value};
 use std::{collections::{BTreeMap,BTreeSet},io::Write,time::{SystemTime,UNIX_EPOCH}};
 use crate::{store::{Store,Library,Workspace},scripts::Scripts,plugins::Plugin};
-pub(crate) const CONFIG_KEYS:&[&str]=&["library.v1","workspace.v1","interception.v1","blocking.v1","capture-scripts.v1","plugins.v1","decryption.bypass.v1","upstream.profiles.v1","mcp.server.v1","mcp.clients.v1","ui.preferences.v1"];
+pub(crate) const CONFIG_KEYS:&[&str]=&["library.v1","workspace.v1","interception.v1","blocking.v1","fault-rules.v1","capture-scripts.v1","plugins.v1","decryption.bypass.v1","upstream.profiles.v1","mcp.server.v1","mcp.clients.v1","ui.preferences.v1"];
 pub(crate) struct Snapshot {pub revision:String,pub settings:BTreeMap<String,Value>}
 
 pub const MAX_DOCUMENT_BYTES:usize=16*1024*1024;
 const PREF_KEY:&str="ui.preferences.v1";
-const SECTION_KEYS:&[(&str,&str)]=&[("preferences",PREF_KEY),("library","library.v1"),("workspace","workspace.v1"),("interception","interception.v1"),("blocking","blocking.v1"),("scripts","capture-scripts.v1"),("plugins","plugins.v1"),("decryption","decryption.bypass.v1"),("upstream","upstream.profiles.v1")];
+const SECTION_KEYS:&[(&str,&str)]=&[("preferences",PREF_KEY),("library","library.v1"),("workspace","workspace.v1"),("interception","interception.v1"),("blocking","blocking.v1"),("faults","fault-rules.v1"),("scripts","capture-scripts.v1"),("plugins","plugins.v1"),("decryption","decryption.bypass.v1"),("upstream","upstream.profiles.v1")];
 const PREF_KEYS:&[&str]=&["http-capture.theme","http-capture.language","http-capture.zoom","http-capture.listener.v1","http-capture.body-editor.auto-format-paste.v1","http-capture.capture.columns.v1","http-capture.capture.column-widths","http-capture.capture.id-sort","http-capture.layout.inspector-direction","http-capture.layout.composer-columns","http-capture.layout.capture-list","http-capture.layout.capture-messages-row","http-capture.layout.capture-messages-column","http-capture.code-target","http-capture.clienthello-templates.v1","http-capture.grpc.proto.v1","http-capture.request-modes"];
 
 #[derive(Clone,Default,Deserialize)]
@@ -63,7 +63,7 @@ fn strict_json(text:&str)->Result<Value>{Ok(serde_json::from_str::<Strict>(text)
 fn now()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64}
 fn section(data:Value)->Section{Section{version:1,data}}
 fn warning(warnings:&mut Vec<String>,value:&str){if !warnings.iter().any(|v|v==value){warnings.push(value.into());}}
-fn count(id:&str,data:&Value)->usize {match id {"library"=>data["requests"].as_array().map_or(0,Vec::len),"workspace"=>data["editors"].as_array().map_or(0,Vec::len),"interception"|"blocking"=>data["rules"].as_array().map_or(0,Vec::len),"preferences"=>data.as_object().map_or(0,serde_json::Map::len),"mcp"=>data["clients"].as_array().map_or(0,Vec::len),_=>data.as_array().map_or(1,Vec::len)}}
+fn count(id:&str,data:&Value)->usize {match id {"library"=>data["requests"].as_array().map_or(0,Vec::len),"workspace"=>data["editors"].as_array().map_or(0,Vec::len),"interception"|"blocking"|"faults"=>data["rules"].as_array().map_or(0,Vec::len),"preferences"=>data.as_object().map_or(0,serde_json::Map::len),"mcp"=>data["clients"].as_array().map_or(0,Vec::len),_=>data.as_array().map_or(1,Vec::len)}}
 fn summary(package:&Package)->Summary {Summary{sections:package.sections.iter().map(|(id,s)|SectionSummary{id:id.clone(),count:count(id,&s.data)}).collect(),warnings:package.warnings.clone()}}
 fn serialize(package:Package)->Result<Exported>{let result=Exported{summary:summary(&package),document:serde_json::to_string_pretty(&package)?};ensure!(result.document.len()<=MAX_DOCUMENT_BYTES,"Configuration file exceeds 16 MiB; exclude request bodies or workspace");Ok(result)}
 
@@ -153,6 +153,7 @@ fn validate_section(id:&str,data:&Value)->Result<()> {
         "workspace"=>validate_workspace(&serde_json::from_value(data.clone())?)?,
         "interception"=>crate::intercept::validate_config(&serde_json::from_value(data.clone())?)?,
         "blocking"=>crate::blocking::validate_config(&serde_json::from_value(data.clone())?)?,
+        "faults"=>crate::fault_rules::validate_config(&serde_json::from_value(data.clone())?)?,
         "scripts"=>validate_script(&serde_json::from_value(data.clone())?)?,
         "plugins"=>{let plugins:Vec<Plugin>=serde_json::from_value(data.clone())?;ensure!(plugins.len()<=32,"At most 32 plugins can be imported");let mut ids=BTreeSet::new();for plugin in plugins{ensure!(ids.insert(plugin.id.clone()),"Duplicate plugin ID");crate::plugins::validate_plugin(&plugin)?;}},
         "decryption"=>{let hosts:Vec<String>=serde_json::from_value(data.clone())?;ensure!(hosts.len()<=256,"Too many passthrough hosts");for host in hosts{let domain=host.strip_prefix("*.").unwrap_or(&host);ensure!(!domain.is_empty()&&domain.len()<=253&&domain.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'.'||b==b'-'),"Invalid passthrough host");}},
@@ -167,7 +168,7 @@ fn parse_document(document:&str)->Result<Package> {
     ensure!(package.format=="http-capture-config"&&package.schema_version==1,"Unsupported configuration format/version; update the application before importing");
     uuid::Uuid::parse_str(&package.export_id).context("Invalid configuration export ID")?;
     ensure!(!package.source_version.is_empty()&&package.source_version.len()<=64&&package.warnings.len()<=256&&package.warnings.iter().all(|v|v.len()<=2048),"Invalid source version or warnings");
-    ensure!(!package.sections.is_empty()&&package.sections.len()<=10,"Invalid configuration categories");
+    ensure!(!package.sections.is_empty()&&package.sections.len()<=11,"Invalid configuration categories");
     for (id,section) in &package.sections {ensure!(section.version==1,"Unsupported {id} category version");validate_section(id,&section.data).with_context(||format!("Invalid {id} configuration"))?;}
     Ok(package)
 }
@@ -218,6 +219,7 @@ fn make_package(snapshot:&Snapshot,mut preferences:BTreeMap<String,String>,optio
     let mut interception:crate::intercept::Config=snapshot.settings.get("interception.v1").cloned().map(serde_json::from_value).transpose()?.unwrap_or(crate::intercept::Config{scope:"all".into(),..Default::default()});interception.request=false;interception.response=false;
     sections.insert("interception".into(),section(serde_json::to_value(interception)?));
     let mut blocking:crate::blocking::Config=saved(snapshot,"blocking.v1")?;blocking.enabled=false;sections.insert("blocking".into(),section(serde_json::to_value(blocking)?));
+    let mut faults:crate::fault_rules::Config=saved(snapshot,"fault-rules.v1")?;faults.enabled=false;sections.insert("faults".into(),section(serde_json::to_value(faults)?));
     let hosts:Vec<String>=saved(snapshot,"decryption.bypass.v1")?;sections.insert("decryption".into(),section(json!(hosts)));
     let profiles:Vec<Value>=saved(snapshot,"upstream.profiles.v1")?;
     let profiles=profiles.into_iter().map(|p|PortableProxy{id:p["id"].as_str().unwrap_or_default().into(),name:p["name"].as_str().unwrap_or_default().into(),url:p["url"].as_str().unwrap_or_default().into(),username:if options.include_proxy_usernames{p["username"].as_str().unwrap_or_default().into()}else{String::new()},auth_enabled:p["authEnabled"].as_bool().unwrap_or(false)}).collect::<Vec<_>>();
@@ -248,7 +250,7 @@ pub fn export(store:&Store,preferences:BTreeMap<String,String>,options:ExportOpt
 pub fn preview(store:&Store,document:&str)->Result<Preview>{
     let package=parse_document(document)?;let snapshot=store.configuration_snapshot()?;
     let mut warnings=package.warnings.clone();warning(&mut warnings,"导入会替换勾选的类别，不会合并；提交后需要重启应用。");
-    warning(&mut warnings,"导入不会启用抓包、TUN、系统代理、断点、阻止、脚本、插件或 MCP；这些功能需要在本机重新启用。");
+    warning(&mut warnings,"导入不会启用抓包、TUN、系统代理、断点、阻止、故障模拟、脚本、插件或 MCP；这些功能需要在本机重新启用。");
     warning(&mut warnings,"无论是否勾选 MCP 类别，本机 MCP 服务和所有 MCP 操作权限都会关闭，需在重启后重新授权。");
     if package.sections.contains_key("library"){warning(&mut warnings,"替换集合时，现有标签中指向已删除收藏的关联会清除。");}
     if package.sections.contains_key("upstream"){warning(&mut warnings,"替换代理会为导入代理生成新 ID；现有未导入请求的代理关联会清除，需要重新选择代理。");}
@@ -263,7 +265,7 @@ fn remap_proxy(draft:&mut crate::model::RequestDraft,ids:&BTreeMap<String,String
 pub fn prepare_import(store:&Store,document:&str,selected:&[String],expected:&str,current_preferences:BTreeMap<String,String>,source_version:&str)->Result<PreparedImport>{
     store.configuration_ready()?;validate_preferences(&current_preferences)?;let package=parse_document(document)?;let snapshot=store.configuration_snapshot()?;
     ensure!(snapshot.revision==expected,"Configuration changed after preview; preview the file again before importing");
-    ensure!(!selected.is_empty()&&selected.len()<=10,"Choose at least one configuration category");let chosen=selected.iter().map(String::as_str).collect::<BTreeSet<_>>();ensure!(chosen.len()==selected.len()&&chosen.iter().all(|id|package.sections.contains_key(*id)),"Invalid or duplicate import category");
+    ensure!(!selected.is_empty()&&selected.len()<=11,"Choose at least one configuration category");let chosen=selected.iter().map(String::as_str).collect::<BTreeSet<_>>();ensure!(chosen.len()==selected.len()&&chosen.iter().all(|id|package.sections.contains_key(*id)),"Invalid or duplicate import category");
     let restore_preferences=if current_preferences.is_empty(){saved(&snapshot,PREF_KEY)?}else{current_preferences};
     let recovery_package=make_package(&snapshot,restore_preferences,&ExportOptions{include_request_data:true,include_code:true,include_workspace:true,include_proxy_usernames:true},source_version)?;
     let recovery_export=serialize(recovery_package.clone())?;
@@ -302,7 +304,7 @@ pub fn prepare_import(store:&Store,document:&str,selected:&[String],expected:&st
         let mut value=package.sections[*id].data.clone();
         match *id {
             "interception"=>{value["request"]=json!(false);value["response"]=json!(false);},
-            "blocking"|"scripts"=>value["enabled"]=json!(false),
+            "blocking"|"faults"|"scripts"=>value["enabled"]=json!(false),
             "plugins"=>{for plugin in value.as_array_mut().context("Invalid plugins")?{plugin["enabled"]=json!(false);}},_=>{}
         }updates.insert((*key).into(),value);
     }

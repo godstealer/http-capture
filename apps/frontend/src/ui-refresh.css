@@ -205,7 +205,8 @@ body,.app-shell { background:var(--ui-bg); color:var(--ui-text); }
 @media(max-width:1250px) {
   .app-shell .proxy-toolbar { gap:12px; padding-inline:16px; }
   .workspace-heading { flex-basis:120px; }
-  .app-shell .upstream-chip { display:none; }
+  .app-shell .upstream-chip { display:inline-flex; flex:0 0 34px; width:34px; min-width:34px; min-height:34px; padding:7px; justify-content:center; }
+  .app-shell .upstream-chip span { display:none; }
   .toolbar-actions { gap:7px; }
   .app-shell .capture-filter .search-box { flex-basis:220px; width:220px; }
   .capture-actions-hint { display:none; }
@@ -222,6 +223,8 @@ body,.app-shell { background:var(--ui-bg); color:var(--ui-text); }
   .app-shell .response-meta { flex-wrap:wrap; }
 }
 @media(max-width:700px) {
+  .app-shell .inspector-heading { height:auto; flex-wrap:wrap; padding-block:8px; gap:8px; }
+  .app-shell .inspector-heading>code { flex:1 1 calc(100% - 60px); min-width:0; }
   .app-sidebar { flex-basis:60px; width:60px; padding-inline:5px; }
   .app-sidebar .sidebar-item { width:50px; font-size:10px; }
   .sidebar-brand { width:35px; height:35px; }

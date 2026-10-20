@@ -6,9 +6,8 @@
 
 use std::net::{IpAddr, SocketAddr};
 #[cfg(any(windows, target_os = "linux"))]
-use std::time::{Duration, Instant};
-
-#[cfg(any(windows, target_os = "linux"))]
+use std::time::Instant;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::model::ProcessInfo;
@@ -79,8 +78,11 @@ pub(crate) async fn lookup(peer: SocketAddr, local: SocketAddr) -> Option<Proces
         if peer.port() == 0 || local.port() == 0 || peer.is_ipv4() != local.is_ipv4() {
             return None;
         }
-        let deadline = Instant::now() + BLOCKING_BUDGET;
         run_bounded(&LOOKUPS, LOOKUP_TIMEOUT, move || {
+            // A busy queue must not consume the native lookup's own budget.
+            // run_bounded still limits the caller's total wait, including the
+            // queue, and the worker retains its permit after caller timeout.
+            let deadline = Instant::now() + BLOCKING_BUDGET;
             if !is_local(peer.ip()) || Instant::now() >= deadline {
                 return None;
             }
@@ -94,18 +96,23 @@ pub(crate) async fn lookup(peer: SocketAddr, local: SocketAddr) -> Option<Proces
     }
 }
 
-#[cfg(any(windows, target_os = "linux"))]
-async fn run_bounded(
+pub(crate) async fn run_bounded<T: Send + 'static>(
     semaphore: &'static Semaphore,
     timeout: Duration,
-    work: impl FnOnce() -> Option<ProcessInfo> + Send + 'static,
-) -> Option<ProcessInfo> {
-    let permit = semaphore.try_acquire().ok()?;
-    let worker = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        work()
-    });
-    tokio::time::timeout(timeout, worker).await.ok()?.ok()?
+    work: impl FnOnce() -> Option<T> + Send + 'static,
+) -> Option<T> {
+    // Browser page loads commonly open more than four connections together.
+    // Wait for an existing lookup rather than permanently losing attribution
+    // for every connection beyond the concurrency budget. Waiting is bounded
+    // and cancellable; no blocking worker is spawned before a permit is held.
+    tokio::time::timeout(timeout, async {
+        let permit = semaphore.acquire().await.ok()?;
+        let worker = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            work()
+        });
+        worker.await.ok()?
+    }).await.ok()?
 }
 
 #[cfg(test)]
@@ -155,7 +162,7 @@ mod tests {
         let caller = tokio::spawn(run_bounded(semaphore, Duration::from_millis(30), move || {
             let _ = started.send(());
             finish.recv_timeout(Duration::from_secs(2)).unwrap();
-            None
+            None::<ProcessInfo>
         }));
         ready.await.unwrap();
         if cancel_caller {
@@ -165,7 +172,7 @@ mod tests {
             assert!(caller.await.unwrap().is_none());
         }
         assert_eq!(semaphore.available_permits(), 0);
-        assert!(run_bounded(semaphore, Duration::from_secs(1), || panic!("must not queue another worker")).await.is_none());
+        assert!(run_bounded(semaphore, Duration::from_millis(30), || -> Option<ProcessInfo> { panic!("must not start another worker before the slot is released") }).await.is_none());
         release.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             while semaphore.available_permits() == 0 { tokio::task::yield_now().await; }
@@ -183,5 +190,45 @@ mod tests {
     #[tokio::test]
     async fn cancellation_keeps_concurrency_slot_until_blocking_work_finishes() {
         assert_worker_keeps_permit(true).await;
+    }
+
+    #[tokio::test]
+    async fn burst_waits_for_lookup_slots_instead_of_dropping_connections() {
+        let semaphore: &'static Semaphore = Box::leak(Box::new(Semaphore::new(4)));
+        let held = semaphore.acquire_many(4).await.unwrap();
+        let mut calls = tokio::task::JoinSet::new();
+        for index in 0..16 {
+            calls.spawn(run_bounded(semaphore, Duration::from_secs(2), move || Some(index)));
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(calls.try_join_next().is_none(), "busy lookup slots must queue callers");
+        drop(held);
+        let mut values = Vec::new();
+        while let Some(value) = calls.join_next().await { values.push(value.unwrap().unwrap()); }
+        values.sort();
+        assert_eq!(values, (0..16).collect::<Vec<_>>());
+        assert_eq!(semaphore.available_permits(), 4);
+    }
+
+    #[tokio::test]
+    async fn timed_out_or_cancelled_waiters_never_start_a_late_lookup() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        let semaphore: &'static Semaphore = Box::leak(Box::new(Semaphore::new(1)));
+        let held = semaphore.acquire().await.unwrap();
+        let started = Arc::new(AtomicBool::new(false));
+        let seen = started.clone();
+        assert!(run_bounded(semaphore, Duration::from_millis(10), move || {
+            seen.store(true, Ordering::SeqCst); Some(())
+        }).await.is_none());
+        let seen = started.clone();
+        let call = tokio::spawn(run_bounded(semaphore, Duration::from_secs(2), move || {
+            seen.store(true, Ordering::SeqCst); Some(())
+        }));
+        tokio::task::yield_now().await;
+        call.abort(); assert!(call.await.unwrap_err().is_cancelled());
+        drop(held); tokio::task::yield_now().await;
+        assert!(!started.load(Ordering::SeqCst));
+        assert_eq!(semaphore.available_permits(), 1);
+        assert_eq!(run_bounded(semaphore, Duration::from_secs(1), || Some(7)).await, Some(7));
     }
 }

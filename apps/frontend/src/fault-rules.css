@@ -1,0 +1,13 @@
+.request-policies{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
+.request-policy-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:12px 28px;border-bottom:1px solid var(--field-border);background:var(--field-bg)}
+.request-policy-tabs button{padding:8px 16px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--field-placeholder);cursor:pointer}
+.request-policy-tabs button[aria-selected='true']{border-color:var(--field-focus);background:var(--field-disabled);color:var(--field-text);font-weight:600}
+.request-policy-panel{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
+.request-policy-panel[hidden]{display:none}
+.fault-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:16px;padding-top:14px;border-top:1px solid var(--field-border)}
+.fault-actions>label{display:flex;flex-direction:column;gap:7px;font-size:12px;min-width:0}
+.fault-actions input[type='number']{width:100%;min-width:0}
+.fault-actions>.fault-limit-switch{flex-direction:row;align-items:center;gap:8px}
+.fault-limit-switch input{width:16px;height:16px}
+@media(max-width:800px){.fault-actions{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:550px){.fault-actions{grid-template-columns:minmax(0,1fr)}.request-policy-tabs{padding:10px 18px}}

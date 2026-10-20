@@ -40,6 +40,9 @@ type Input struct {
 	Proxy   *Proxy `json:"proxy"`
 	Request Draft  `json:"request"`
 	Preset  string `json:"preset"`
+	// Optional helper-level constraint. The application currently omits this
+	// field, which means TCP ALPN negotiation; imported hellos remain strict.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 func capabilities() map[string]any {
@@ -60,6 +63,11 @@ func capabilities() map[string]any {
 	return map[string]any{"customClientHello": true, "protocolVersion": 1, "browserVersions": versions}
 }
 func execute(in Input) (map[string]any, error) {
+	return executeWithRoots(in, nil)
+}
+
+// Tests inject a local CA here without adding a trust override to the wire API.
+func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
 	if fingerprint.GetStrict(in.Preset) == nil {
 		return nil, fmt.Errorf("unsupported preset: %s", in.Preset)
 	}
@@ -91,12 +99,15 @@ func execute(in Input) (map[string]any, error) {
 		}
 		pairs = append(pairs, fingerprint.HeaderPair{Key: h.Name, Value: string(value)})
 	}
-	protocol := customProtocol
-	if strings.HasPrefix(in.Request.URL, "http://") {
-		protocol = tr.ProtocolHTTP1
+	protocol, negotiateHTTP1, err := selectRequestProtocol(in, customProtocol)
+	if err != nil {
+		return nil, err
 	}
 	if protocol == tr.ProtocolHTTP1 {
-		pairs, _ = joinCookieFields(pairs)
+		pairs, err = prepareH1Headers(pairs, len(body))
+		if err != nil {
+			return nil, err
+		}
 	}
 	var proxy *tr.ProxyConfig
 	if in.Proxy != nil {
@@ -107,12 +118,13 @@ func execute(in Input) (map[string]any, error) {
 	}
 	transport := tr.NewTransportWithConfig(transportPreset, proxy, &tr.TransportConfig{TLSOnly: true})
 	defer transport.Close()
-	// Explicit H2 for HTTPS, H1 for plaintext; no QUIC attempts or silent downgrade.
+	// Start with browser TLS over TCP. Only a typed, pre-request ALPN mismatch
+	// may select H1 in default mode; never use the library's H3/response fallback.
 	transport.SetProtocol(protocol)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	var tlsDetails map[string]any
-	transport.SetTLSVerify(&tr.TLSVerify{VerifyConnection: func(s tls.ConnectionState) error {
+	transport.SetTLSVerify(&tr.TLSVerify{RootCAs: roots, VerifyConnection: func(s tls.ConnectionState) error {
 		tlsDetails = map[string]any{"version": tls.VersionName(s.Version), "cipherSuite": tls.CipherSuiteName(s.CipherSuite), "alpn": s.NegotiatedProtocol, "serverName": s.ServerName, "offeredCipherSuites": []string{}, "offeredAlpn": []string{}, "signatureSchemes": []string{}, "supportedGroups": []string{}, "certificates": []any{}}
 		certs := []any{}
 		for _, c := range s.PeerCertificates {
@@ -121,7 +133,7 @@ func execute(in Input) (map[string]any, error) {
 		tlsDetails["certificates"] = certs
 		return nil
 	}})
-	response, err := transport.DoStream(ctx, &tr.Request{Method: in.Request.Method, URL: in.Request.URL, Body: body, ExactHeaders: pairs, Timeout: 25 * time.Second})
+	response, err := sendNegotiated(ctx, transport, &tr.Request{Method: in.Request.Method, URL: in.Request.URL, Body: body, ExactHeaders: pairs, Timeout: 25 * time.Second}, protocol, negotiateHTTP1, proxy != nil)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +150,7 @@ func execute(in Input) (map[string]any, error) {
 	sort.Strings(keys)
 	decoded := false
 	for _, k := range keys {
-		if strings.EqualFold(k, "content-encoding") {
+		if response.decodedBody && strings.EqualFold(k, "content-encoding") {
 			for _, v := range response.Headers[k] {
 				switch strings.ToLower(v) {
 				case "gzip", "br", "deflate", "zstd":

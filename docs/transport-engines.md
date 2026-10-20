@@ -26,10 +26,10 @@ Windows：运行 `scripts/build-httpcloak.ps1`（Go 1.26+，优先使用项目�
 
 原生 h3 引擎更新（2026-10-01）：已支持 SOCKS5 UDP ASSOCIATE 出站及代理端目标 DNS，外部 cloudflare-quic.com 经本机 SOCKS5 返回 200 / HTTP3 / TLS1.3。HTTP CONNECT 不支持此路径；httpcloak 的 H3 能力仍未接入。详情见 [实测记录](tls-components-test.md)。
 
-- HTTPS 当前强制 HTTP/2，明文 HTTP 使用 HTTP/1.1；HTTP/3、HTTPS 的自动 h1 回退尚未接入此适配器。
+- 已发布的 0.1.28 中 HTTPS 默认强制 HTTP/2，明文 HTTP 使用 HTTP/1.1。2026-10-20 工作区修复（未发布）为默认浏览器预设补充 ALPN 协商：服务端选择 H1 或无 ALPN 时，在发送 HTTP 数据前将同一已验证 TLS 连接交给 H1，沿用原 HTTP CONNECT/SOCKS5 隧道，不重新握手或因普通网络/响应错误跨协议重发。显式 H2 和包含 H2 的导入 ClientHello 保持严格约束；不启用库的 Auto/H3 路径，HTTP/3 仍未接入此适配器。详见 [TODO 修复记录](todo-feedback-2026-10-20.md)。
 - 使用 ExactHeaders 保留常规字段的有序列表，包括交错同名字段。Host 和正文长度仍由 core 根据 URL/正文规范化，协议伪头使用预设。
 - 响应不自动跟随重定向，不使用浏览器预设替换 UA；不共享请求之间的 Cookie 或连接。
-- 响应字段为协议库解析结果，不标记为原始线上顺序。库会流式解压常见压缩响应，适配器移除已解码的 Content-Encoding 并更新长度；此路径不保留原压缩字节。
+- 响应字段为协议库解析结果，不标记为原始线上顺序。库的常规路径解压常见压缩响应，适配器移除已解码的 Content-Encoding 并更新长度；此路径不保留原压缩字节。上述工作区新增的同连接 H1 移交路径则返回原编码字节，保留相应 Content-Encoding 和长度头，不声明已经解压。
 - httpcloak 支持按请求选择 HTTP / SOCKS5 上游代理，凭据通过 stdin 传递，不写入请求记录或命令行；拒绝后不回退直连，并校验代理解析地址避免监听回环。自定义 TLS 高级覆盖、显式伪头列表暂不支持，明确报错。
 - TLS 版本、协商密码套件、证书链来自验证回调，保持默认信任校验。握手广告字段未采集的值不伪造。
 - 自定义 JSON 预设编辑/导入尚未接入；当前支持库内已实现的 Chrome 152，不以改版本名冒充新版本。

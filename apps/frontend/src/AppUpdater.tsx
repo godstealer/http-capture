@@ -5,12 +5,14 @@ import { isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Download, RefreshCw, X } from 'lucide-react';
 import { invoke } from './api';
+import { writeClipboard } from './clipboard';
 import { t } from './i18n';
 import { UpdateCheckGate, downloadPercent, mergeUpdateProgress, performUpdateInstallation, shouldOfferUpdate,
   type AppUpdate, type AppUpdateStatus, type UpdateProgress } from './appUpdateState';
 import './app-updater.css';
 
 const skippedKey = 'http-capture.updater.skippedVersion';
+const downloadUrl = 'https://github.com/godstealer/http-capture/releases/latest';
 export interface AppUpdaterDriver {
   desktop: boolean;
   production: boolean;
@@ -19,6 +21,7 @@ export interface AppUpdaterDriver {
   download: () => Promise<void>;
   install: () => Promise<void>;
   listen: (receive: (event: unknown) => void) => Promise<UnlistenFn>;
+  openDownload?: () => Promise<void>;
 }
 const nativeDriver: AppUpdaterDriver = {
   desktop: isTauri(),
@@ -28,6 +31,7 @@ const nativeDriver: AppUpdaterDriver = {
   download: () => invoke<void>('download_app_update'),
   install: () => invoke<void>('install_app_update'),
   listen: receive => listen<UpdateProgress>('app-update-progress', event => receive(event.payload)),
+  openDownload: () => invoke<void>('open_update_download'),
 };
 interface DriverCache { checks: UpdateCheckGate; statusRequest?: Promise<AppUpdateStatus> }
 const driverCaches = new WeakMap<AppUpdaterDriver, DriverCache>();
@@ -63,6 +67,7 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState('');
+  const [downloadFallback, setDownloadFallback] = useState(false);
   const [installState, setInstallState] = useState<InstallState>('idle');
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const mounted = useRef(false);
@@ -181,6 +186,17 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
     }
   }
 
+  async function openDownload() {
+    try { await activeDriver.openDownload?.(); }
+    catch (error) {
+      if (mounted.current) { setDownloadFallback(true); setError(t('无法打开下载页，请复制链接到浏览器：{v0}', { v0: String(error) })); }
+    }
+  }
+  async function copyDownload() {
+    try { await writeClipboard(downloadUrl); }
+    catch (error) { if (mounted.current) setError(t('复制下载链接失败，请手动选择链接：{v0}', { v0: String(error) })); }
+  }
+
   const progressText = installState === 'preparing' ? t('正在保存草稿并准备更新…')
     : installState === 'submitted' ? t('安装请求已提交，等待应用重启。')
     : progress?.phase === 'restarting' ? t('正在重启应用…')
@@ -194,9 +210,9 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
       <div ref={dialog} className="app-update-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={event => {
         if (event.key === 'Escape' && !busy) { event.preventDefault(); setOpen(false); }
         if (event.key === 'Tab') {
-          const buttons = Array.from(dialog.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []);
+          const buttons = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled)') ?? []);
           if (!buttons.length) { event.preventDefault(); return; }
-          const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          const index = buttons.indexOf(document.activeElement as HTMLElement);
           if (index < 0 || (!event.shiftKey && index === buttons.length - 1) || (event.shiftKey && index === 0)) {
             event.preventDefault(); buttons[event.shiftKey ? buttons.length - 1 : 0].focus();
           }
@@ -207,7 +223,7 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
         {status && <p className="app-update-version">{t('当前版本：{v0}', { v0: status.currentVersion })}</p>}
         {!desktop ? <p>{t('应用内更新仅支持桌面版。')}</p>
           : checking ? <p role="status">{t('正在检查更新…')}</p>
-          : status && !status.configured ? <p>{t('此构建尚未配置更新服务。')}{status.reason && <span className="app-update-reason">{status.reason}</span>}</p>
+          : status && !status.configured ? <p>{status.manualUpdate ? t('此安装方式需要手动更新。') : t('此构建尚未配置更新服务。')}{status.reason && <span className="app-update-reason">{status.reason}</span>}</p>
           : !update && checked && !error ? <p role="status">{t('当前已是最新版本。')}</p> : null}
         {update && <>
           <p>{t('新版本：{v0}', { v0: update.version })}{update.date && <span className="app-update-date">{Number.isNaN(Date.parse(update.date)) ? update.date : new Date(update.date).toLocaleDateString()}</span>}</p>
@@ -218,9 +234,11 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
           {progress?.phase === 'downloading' && <><progress aria-label={t('更新下载进度')} max={100} {...(percent === undefined ? {} : { value: percent })} /><span>{size(progress.downloaded)}{progress.total !== undefined ? ` / ${size(progress.total)}` : ''}{percent !== undefined ? ` · ${percent}%` : ''}</span></>}
         </div>}
         {error && <p className="app-update-error" role="alert">{error}</p>}
+        {downloadFallback && <div className="app-update-download-fallback"><input aria-label={t('最新版下载地址')} readOnly value={downloadUrl} onFocus={event => event.currentTarget.select()}/><button type="button" onClick={() => void copyDownload()}>{t('复制下载链接')}</button></div>}
         <footer><button type="button" disabled={busy} onClick={() => setOpen(false)}>{update ? t('稍后') : t('关闭')}</button>
           {update && <><button type="button" disabled={busy || checking} onClick={skip}>{t('跳过此版本')}</button><button type="button" className="app-update-install" disabled={busy || checking} onClick={() => void install()}><Download size={15} />{installState === 'failed' ? t('重试安装') : t('下载并安装')}</button></>}
           {!update && desktop && (!status || status.configured) && error && <button type="button" className="app-update-install" disabled={checking} onClick={() => void check(true)}>{t('重试检查')}</button>}
+          {!update && status?.manualUpdate && <a className="app-update-download" href={downloadUrl} target="_blank" rel="noopener noreferrer" onClick={event => { if (desktop && activeDriver.openDownload) { event.preventDefault(); void openDownload(); } }}><Download size={15}/>{t('下载最新版')}</a>}
         </footer>
       </div>
     </div>, document.body)}
