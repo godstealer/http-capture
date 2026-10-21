@@ -39,7 +39,7 @@ jobs:
             if(!/^[a-f0-9]{40}$/.test(sha))throw Error('Invalid source SHA');
             try {
               const {data:release}=await github.rest.repos.getReleaseByTag({...context.repo,tag:`build-${sha.slice(0,12)}`});
-              const staged=!release.draft&&!release.assets.some(asset=>asset.name==='latest.json');
+              const staged=(!release.draft||release.body?.includes('<!-- staged-platform-release -->'))&&!release.assets.some(asset=>asset.name==='latest.json');
               core.setOutput('staged',String(staged));
               if(staged)core.notice('This source already has a staged public release. Complete missing platforms manually without rebuilding public packages.');
             } catch(error) {
