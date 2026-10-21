@@ -1,0 +1,13 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const {platformReleaseSource}=require('./platform-release-policy.cjs');
+const run={name:'Check',path:'.github/workflows/check.yml',event:'push',head_branch:'main',head_repository:{full_name:'owner/repo'},head_sha:'a'.repeat(40),run_number:34,created_at:'2026-10-21T14:55:55Z'};
+const jobs=['frontend','capture (windows-latest)','capture (ubuntu-latest)'].map(name=>({name,status:'completed',conclusion:'success'}));jobs.push({name:'capture (macos-26)',status:'queued',conclusion:null});
+assert.deepEqual(platformReleaseSource(run,jobs,'windows-linux','owner/repo').matrix.map(x=>x.label),['windows-x64','linux-x64']);
+assert.throws(()=>platformReleaseSource(run,jobs,'macos','owner/repo'),/has not succeeded/);
+const complete=jobs.map(job=>({...job,status:'completed',conclusion:'success'}));assert.deepEqual(platformReleaseSource(run,complete,'macos','owner/repo').matrix.map(x=>x.label),['macos-arm64','macos-x64']);
+for(const field of [{event:'pull_request'},{head_branch:'feature'},{path:'.github/workflows/untrusted.yml'},{head_repository:{full_name:'fork/repo'}},{head_sha:'not-sha'},{run_number:0}])assert.throws(()=>platformReleaseSource({...run,...field},jobs,'windows-linux','owner/repo'));
+for(const conclusion of ['failure','cancelled',null])assert.throws(()=>platformReleaseSource(run,jobs.map((job,i)=>i===0?{...job,conclusion}:job),'windows-linux','owner/repo'),/has not succeeded/);
+assert.throws(()=>platformReleaseSource(run,[...jobs,jobs[0]],'windows-linux','owner/repo'),/has not succeeded/);assert.throws(()=>platformReleaseSource(run,jobs,'__proto__','owner/repo'));
+const workflow=fs.readFileSync('.github/workflows/release-platforms.yml','utf8');assert(workflow.includes('workflow_dispatch:'));assert(workflow.includes('platformReleaseSource'));assert(workflow.includes('cargo test --release --locked -p http-capture-desktop --bin http-capture app_update::tests'));assert(!workflow.includes('continue-on-error:'));assert(!workflow.includes('publish-release.mjs'));assert(!workflow.includes('generate-updater.mjs'));
+console.log('Platform release policy: exact trusted source, per-platform successful checks, deferred Mac, strict identities and native updater gates passed.');

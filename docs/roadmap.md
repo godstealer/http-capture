@@ -23,6 +23,8 @@
 - [x] Rust→Go 四项集成回归通过：155 自动/latest/显式版本、150/153 旧版兼容、UA/Accept 和重复头部顺序保持、伪头再生成及代理失败不回退。二进制构建信息核实依赖 v1.7.3，未手工修改版本目录。
 - [ ] 四平台安装包发布和真实业务验收待后续处理，本轮本地验证不据此勾选。
 
+发布顺序调整（2026-10-21 用户确认）：0.1.34 先发 Windows/Linux，macOS 换时间补发。来源固定 `20f9137572e00c4faa06d6290b94ac01f10c2105` / Check #34；前端、Windows、Linux 均已通过，Mac 托管 runner 容量不足。分平台构建入口要求相应平台源码检查成功，保留签名和原生更新测试；未齐四平台时不推进完整自动更新频道。Mac 与实机待验项继续保留。
+
 ## 本次正式发布：0.1.33，自动响应重写与按需正文（2026-10-21）
 
 本轮增量已正式交付。正式版 [0.1.33 / build-a59befecdc1c](https://github.com/godstealer/http-capture/releases/tag/build-a59befecdc1c)，来源 `a59befecdc1cc4b35d134baad51195c7d149210b`；[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 三系统及前端全部通过，[Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 四平台构建、各平台 10 项原生更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。 自动响应重写、P0 后端及前端阶段的范围见[本轮发布说明](release-2026-10-20-body-preview.md)。原 0.1.32 候选来源 `d2d1ed7` 的 Check #32 attempt 3 最终失败、Release #29 跳过的记录继续保留；其七条摘要不改写，本版采用新的十条摘要。真实安装与业务验收仍单列。

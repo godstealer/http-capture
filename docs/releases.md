@@ -23,6 +23,18 @@
 
 ## 签名更新与正式版兼容频道（2026-10-18）
 
+### 分平台补发入口（2026-10-21）
+
+macOS 托管 runner 排队时，可以先发布 Windows/Linux 正式安装包。维护者通过 `Build selected release platforms` 手动工作流指定原始 **main push Check run ID** 和 `windows-linux`；只有该来源的前端、Windows、Linux 检查均已成功才允许构建，版本仍采用原 Check 编号。工作流保留 helper 回归、签名、每个平台 10 项原生更新测试和校验文件，输出 Actions 安装包附件，由 CLI 核验后发布。
+
+```sh
+gh workflow run release-platforms.yml -f check_run_id=<原始Check运行ID> -f platforms=windows-linux
+```
+
+首次分平台发布使用同一 `build-<sha12>` 标签、`prerelease=false`、`latest=false`，仅上传已经验证的平台文件；不生成缺少 Mac 的 `latest.json`，不改兼容更新频道。用户可以从对应版本页手动下载安装。旧版自动更新仍使用之前完整的版本。
+
+以后先让原 Check 的 macOS 检查通过，再用相同 run ID 和 `platforms=macos` 构建两种 Mac 架构。补发仅增加缺少的文件，不覆盖已公开的平台安装包；四平台齐全后，核验完整清单、全部签名和已有附件，再上传完整 `latest.json` 并推进更新频道/Latest。不能混用新来源、其他 Check 编号或重新签名产生的不同旧文件。该手动入口不改变默认全平台自动发布门槛。
+
 安装包版本采用 `主版本.次版本.<源 Check run_number>`。主/次版本读取 `tauri.conf.json`，当前得到 `0.1.N`；`N` 来自成功的 **Check**，不使用 Release 的 run number 或重跑次数。同一次 Check 重跑、四个平台构建的版本完全相同。已公开的 `build-<sha12>` 版本和资产不覆盖；重跑时以已发布的 `latest.json` 为准，避免新生成的随机签名指向旧包。
 
 应用继续读取固定端点：[兼容频道 latest.json](https://github.com/godstealer/http-capture/releases/download/updater-preview/latest.json)。旧安装包已写入此地址，因此保留 `updater-preview` 标签。该频道仅存放当前完整清单，仍为预发布且设置 `latest=false`；清单下载地址固定指向对应 `build-<sha12>` 的正式资产。正式 build 以 `prerelease=false` 公开，合格的新版本再设为 GitHub Latest，标题为 `HTTP Capture <版本>`。

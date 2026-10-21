@@ -1,0 +1,124 @@
+name: Build selected release platforms
+on:
+  workflow_dispatch:
+    inputs:
+      check_run_id:
+        description: Source main push Check run ID (version remains its run number)
+        required: true
+        type: string
+      platforms:
+        description: Build now; publish verified assets separately without changing the update channel
+        required: true
+        type: choice
+        options: [windows-linux, macos]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: platform-build-${{ inputs.check_run_id }}-${{ inputs.platforms }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      number: ${{ steps.source.outputs.number }}
+      created_at: ${{ steps.source.outputs.created_at }}
+      matrix: ${{ steps.source.outputs.matrix }}
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require successful checks for selected platforms on the exact source
+        id: source
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {platformReleaseSource}=require('./scripts/platform-release-policy.cjs');
+            const id=context.payload.inputs.check_run_id;
+            if(!/^[1-9]\d*$/.test(id)||!Number.isSafeInteger(Number(id)))throw Error('Numeric Check run ID required');
+            const {data:run}=await github.rest.actions.getWorkflowRun({...context.repo,run_id:Number(id)});
+            const jobs=await github.paginate(github.rest.actions.listJobsForWorkflowRun,{...context.repo,run_id:Number(id),filter:'latest',per_page:100});
+            const selected=platformReleaseSource(run,jobs,context.payload.inputs.platforms,`${context.repo.owner}/${context.repo.repo}`);
+            core.setOutput('sha',selected.sha);core.setOutput('number',String(selected.number));core.setOutput('created_at',selected.createdAt);core.setOutput('matrix',JSON.stringify(selected.matrix));
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify release fixtures and signing prerequisites
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_CHECK_RUN_NUMBER: ${{ steps.source.outputs.number }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          node --test scripts/test-release-updater.mjs scripts/test-verify-published-release.mjs
+          node scripts/release-updater.mjs preflight
+      - name: Fix version from source Check
+        id: identity
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_CHECK_RUN_NUMBER: ${{ steps.source.outputs.number }}
+        run: echo "version=$(node scripts/release-updater.mjs version)" >> "$GITHUB_OUTPUT"
+  build:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      SOURCE_SHA: ${{ needs.preflight.outputs.sha }}
+      SOURCE_CHECK_RUN_NUMBER: ${{ needs.preflight.outputs.number }}
+      SOURCE_CHECK_CREATED_AT: ${{ needs.preflight.outputs.created_at }}
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: helpers/httpcloak/go.mod
+          cache-dependency-path: helpers/httpcloak/go.sum
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libdbus-1-dev libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev libfuse2 patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+      - run: npm ci
+      - name: Verify httpcloak helper
+        working-directory: helpers/httpcloak
+        run: go test -mod=readonly ./...
+      - name: Prepare packaged helper and resources
+        run: node scripts/prepare-release.mjs
+      - name: Build signed updater artifacts and installers
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --config "${{ github.workspace }}/apps/desktop/src-tauri/tauri.release.json" --bundles ${{ matrix.bundles }} -- --locked
+      - name: Verify updater lifecycle
+        run: cargo test --release --locked -p http-capture-desktop --bin http-capture app_update::tests
+      - name: Collect and validate signed artifacts and checksums
+        run: node scripts/collect-release.mjs ${{ matrix.label }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.label }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
