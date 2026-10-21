@@ -33,6 +33,8 @@ gh workflow run release-platforms.yml -f check_run_id=<原始Check运行ID> -f p
 
 首次分平台发布使用同一 `build-<sha12>` 标签、`prerelease=false`、`latest=false`，仅上传已经验证的平台文件；不生成缺少 Mac 的 `latest.json`，不改兼容更新频道。用户可以从对应版本页手动下载安装。旧版自动更新仍使用之前完整的版本。
 
+下载 Actions 中两个平台的附件到同一独立目录后，可执行只读检查：`node scripts/verify-platform-release.mjs --directory <目录> --version <0.1.N> --source-sha <原始完整SHA> --group windows-linux`。它从原始提交读取公钥，核验 11 个附件、9 项 SHA256 和三个更新包正文/版本注释签名，拒绝夹带不完整的全局更新清单；Mac 分组改用 `--group macos`。另需检查 Actions 每个平台的原生更新测试日志和公开附件的下载哈希。
+
 以后先让原 Check 的 macOS 检查通过，再用相同 run ID 和 `platforms=macos` 构建两种 Mac 架构。补发仅增加缺少的文件，不覆盖已公开的平台安装包；四平台齐全后，核验完整清单、全部签名和已有附件，再上传完整 `latest.json` 并推进更新频道/Latest。不能混用新来源、其他 Check 编号或重新签名产生的不同旧文件。该手动入口不改变默认全平台自动发布门槛。
 
 安装包版本采用 `主版本.次版本.<源 Check run_number>`。主/次版本读取 `tauri.conf.json`，当前得到 `0.1.N`；`N` 来自成功的 **Check**，不使用 Release 的 run number 或重跑次数。同一次 Check 重跑、四个平台构建的版本完全相同。已公开的 `build-<sha12>` 版本和资产不覆盖；重跑时以已发布的 `latest.json` 为准，避免新生成的随机签名指向旧包。

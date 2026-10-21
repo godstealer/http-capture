@@ -42,4 +42,5 @@ jobs:
       - run: npm run test:frontend
       - run: node scripts/test-ci-retry.cjs
       - run: node scripts/test-platform-release-policy.cjs
+      - run: node --test scripts/test-platform-release.mjs
       - run: node --test scripts/test-release-updater.mjs scripts/test-verify-published-release.mjs
