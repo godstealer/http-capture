@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { t } from './i18n';
 
-export type SettingsPageId = 'general' | 'upstream' | 'system' | 'decryption' | 'tun' | 'migration';
+export type SettingsPageId = 'general' | 'upstream' | 'system' | 'certificates' | 'decryption' | 'tun' | 'migration';
 interface SettingsPage { id: SettingsPageId; label: string; icon: ReactNode; content: ReactNode }
 
 export default function SettingsTabs({ pages, active, onChange }: {
@@ -19,7 +19,7 @@ export default function SettingsTabs({ pages, active, onChange }: {
   }
 
   return <>
-    <div className="settings-tabs" role="tablist" aria-label={t('代理设置分类')} onKeyDown={event => {
+    <div className="settings-tabs" role="tablist" aria-label={t('设置分类')} onKeyDown={event => {
       const index = pages.findIndex(page => page.id === active);
       const next = event.key === 'ArrowRight' ? (index + 1) % pages.length
         : event.key === 'ArrowLeft' ? (index + pages.length - 1) % pages.length

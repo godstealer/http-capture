@@ -93,7 +93,8 @@ pub(crate) async fn browser_via(draft: &RequestDraft, proxy: Option<&crate::upst
     let (url,headers,body,mut notes)=prepare(draft)?;
     ensure_browser_header_order(&headers)?;
     let proxy_config=match proxy {Some(p)=>Some(p.for_helper().await?),None=>None};
-    let (mut response,extra,chain)=transport_wreq::send(draft,headers,body,proxy_config.as_ref()).await?;
+    let material=crate::certificates::current().material();
+    let (mut response,extra,chain)=transport_wreq::send_with_security(draft,headers,body,proxy_config.as_ref(),material.as_ref()).await?;
     if !chain.is_empty(){let chain:Vec<_>=chain.into_iter().map(rustls::pki_types::CertificateDer::from).collect();response.upstream_tls=Some(TlsDetails{server_name:url.host_str().map(str::to_owned),certificates:crate::tls_details::certificates(&chain),..Default::default()});}
     notes.extend(extra);Ok((response,notes))
 }

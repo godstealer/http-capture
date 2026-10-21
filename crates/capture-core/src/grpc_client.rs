@@ -48,7 +48,7 @@ async fn drive(engine:Arc<Engine>,flow:Arc<Mutex<Flow>>,initial:Vec<u8>,half_clo
  let conn=crate::upstream::connect(&url,route.as_ref()).await?;ensure!(!conn.absolute_form,"h2c requires direct or SOCKS5 connection");
  let mut details=None;
  let socket:crate::replay::Stream=if url.scheme()=="https"{
-  let config=crate::tls_config::config(&request.tls,&engine.upstream_roots,"h2")?;
+  let config=engine.certificates.config(&url,&request.tls,&engine.upstream_roots,"h2")?;
   let tls=tokio_rustls::TlsConnector::from(Arc::new(config)).connect(hostname(&url).try_into()?,conn.stream).await?;
   ensure!(tls.get_ref().1.alpn_protocol()==Some(b"h2"),"Server did not negotiate h2");details=Some(crate::tls_details::negotiated(tls.get_ref().1));Box::new(tls)
  }else{conn.stream};

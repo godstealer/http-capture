@@ -26,6 +26,7 @@ pub mod tls_details;
 pub mod upstream;
 mod socks_udp;
 pub mod ca;
+pub mod certificates;
 pub mod system_proxy;
 pub mod ca_management;
 pub mod http1;
@@ -48,6 +49,7 @@ use std::{path::Path, sync::Arc, time::{Instant, SystemTime, UNIX_EPOCH}};
 use tokio::sync::broadcast;
 
 pub struct Engine {
+    pub certificates: Arc<certificates::Certificates>,
     pub grpc_clients: grpc_client::Sessions,
     pub system_proxy: system_proxy::SystemProxy,
     pub websocket_clients: websocket_client::Clients,
@@ -100,8 +102,10 @@ impl Engine {
         std::fs::create_dir_all(data_dir)?;
         let (events, _) = broadcast::channel(128);
         let store=Arc::new(store::Store::open(&data_dir.join("sessions.db"))?);
-        Ok(Arc::new(Self { response_rewrite:response_rewrite::ResponseRewrite::open(store.clone())?, fault_rules:fault_rules::FaultRules::open(store.clone())?, blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open_with_store(data_dir,store.clone())?, store,
-            ca: ca::CertificateAuthority::load_or_create(&data_dir.join("certificates"))?, events,
+        let certificates=certificates::Certificates::open(data_dir)?;
+        let ca=certificates.authority(&data_dir.join("certificates"))?;
+        Ok(Arc::new(Self { certificates,response_rewrite:response_rewrite::ResponseRewrite::open(store.clone())?, fault_rules:fault_rules::FaultRules::open(store.clone())?, blocking:blocking::Blocking::open(store.clone())?, plugins:plugins::Plugins::open(store.clone())?, grpc_clients:Default::default(), system_proxy: Default::default(), websocket_clients:Default::default(), tun: Default::default(), executions: Default::default(), scripts: scripts::ScriptState::open(store.clone())?, intercept: intercept::Interceptor::open(store.clone())?, upstream: upstream::UpstreamState::open_with_store(data_dir,store.clone())?, store,
+            ca, events,
             send_engines, upstream_roots }))
     }
     pub async fn execute(&self, request: RequestDraft, parent_id: Option<String>, source: &str,
@@ -189,7 +193,8 @@ impl Engine {
     async fn send_observed(&self, flow: &mut Flow, route: Option<&upstream::UpstreamProxy>, after_script: bool) -> transport::SendResult {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         let context = sse::Context { tx, started: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
-        let send = sse::UPDATES.scope(context, self.send_engines.send_via(&flow.request, route));
+        let security=self.certificates.security(&url::Url::parse(&flow.request.url)?)?;
+        let send = certificates::CURRENT.scope(security,sse::UPDATES.scope(context, self.send_engines.send_via(&flow.request, route)));
         tokio::pin!(send);
         let mut body = Vec::new();
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));

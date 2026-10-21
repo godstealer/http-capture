@@ -6,6 +6,9 @@ use std::time::Duration;
 fn latin1(bytes:&[u8])->String {bytes.iter().map(|b|char::from(*b)).collect()}
 fn header_bytes(value:&str)->Result<Vec<u8>> {value.chars().map(|c|{ensure!((c as u32)<=255&&c!='\r'&&c!='\n'&&c!='\0',"Invalid header value");Ok(c as u8)}).collect()}
 pub async fn send<S>(draft: &RequestDraft<S>, headers: Vec<Header>, body: Vec<u8>, proxy: Option<&UpstreamProxyConfig>) -> Result<(CapturedResponse, Vec<String>, Vec<Vec<u8>>)> {
+    send_with_security(draft,headers,body,proxy,None).await
+}
+pub async fn send_with_security<S>(draft:&RequestDraft<S>,headers:Vec<Header>,body:Vec<u8>,proxy:Option<&UpstreamProxyConfig>,security:Option<&TlsMaterial>)->Result<(CapturedResponse,Vec<String>,Vec<Vec<u8>>)>{
     ensure!(draft.tls.version.is_none() || draft.tls.version.as_deref() == Some("auto"), "Explicit TLS version is currently supported only by native/auto/h2/h3 engines");
     use wreq::{header::{HeaderMap, HeaderName, HeaderValue, OrigHeaderMap}, IntoEmulation};
     use futures_util::StreamExt;
@@ -32,6 +35,17 @@ pub async fn send<S>(draft: &RequestDraft<S>, headers: Vec<Header>, body: Vec<u8
     }
     // A fresh client per replay guarantees a new ClientHello and no cookie/session leakage.
     let mut builder = wreq::Client::builder().emulation(emulation).no_proxy();
+    if let Some(security)=security{
+        if !security.trusted_ca_pem.is_empty(){
+            let mut store=wreq::tls::trust::CertStore::builder().add_der_certs(webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().map(|c|c.as_ref()));
+            for cert in &security.trusted_ca_pem{store=store.add_stack_pem_certs(cert);}
+            builder=builder.tls_cert_store(store.build()?);
+        }
+        match (&security.client_certificate_pem,&security.client_private_key_pem){
+            (Some(cert),Some(key))=>builder=builder.tls_identity(wreq::tls::trust::Identity::from_pkcs8_pem(cert.as_bytes(),key.as_bytes())?),
+            (None,None)=>{},_=>anyhow::bail!("Client certificate and private key must be provided together")
+        }
+    }
     if let Some(p)=proxy {
         let proxy_url=if p.url.starts_with("socks5://") {p.url.replacen("socks5://","socks5h://",1)}else{p.url.clone()};
         let mut configured=wreq::Proxy::all(proxy_url)?;

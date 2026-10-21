@@ -40,7 +40,7 @@ func assertOnlyCookiePolicyChanged(t *testing.T, baseName, exactName string) {
 }
 
 func TestExactCookiePresetPreservesBrowserProfile(t *testing.T) {
-	for _, base := range []string{"chrome-152-windows", "firefox-148-windows"} {
+	for _, base := range []string{"chrome-152-windows", "chrome-153-windows", "chrome-154-windows", "chrome-155-windows", "firefox-148-windows"} {
 		t.Run(base, func(t *testing.T) {
 			before := fingerprint.GetStrict(base)
 			if before == nil || before.H2DisableCookieSplit() {
@@ -307,7 +307,7 @@ func h2CookieWireServer(t *testing.T) (string, *x509.CertPool, <-chan h2CookieWi
 }
 
 func TestExactCookieHTTP2WireBoundaries(t *testing.T) {
-	for _, base := range []string{"chrome-152-windows", "firefox-148-windows"} {
+	for _, base := range []string{"chrome-152-windows", "chrome-155-windows", "firefox-148-windows"} {
 		for _, cookies := range [][]string{{"same=1; same=2; encoded=%3B%3D; empty="}, {"same=1; quoted=\"x;y\"", "same=2; empty="}} {
 			t.Run(fmt.Sprintf("%s/%d-fields", base, len(cookies)), func(t *testing.T) {
 				url, roots, received := h2CookieWireServer(t)

@@ -1,5 +1,7 @@
 # 桌面正式版发布
 
+2026-10-21 正在准备下一正式版：[证书管理与 Chrome 155](release-2026-10-21-certificates.md)。本轮包含设置入口调整、三类证书管理和 httpcloak v1.7.3；完成相同来源的 Check、四平台构建、原生更新测试和公开附件验证后记录版本。本段准备状态不表示新版本已经公开。
+
 当前正式版见[0.1.33 自动响应重写与按需正文更新说明](release-2026-10-20-body-preview.md)。正式版 [0.1.33 / build-a59befecdc1c](https://github.com/godstealer/http-capture/releases/tag/build-a59befecdc1c)，来源 `a59befecdc1cc4b35d134baad51195c7d149210b`；[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 三系统及前端全部通过，[Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 四平台构建、各平台 10 项原生更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。 GitHub Release 正文及应用内“更新内容”分别读取该文档及其不可变摘要；下一版须同步 `scripts/release-updater.mjs` 的说明路径。上一正式版见[0.1.31 更新说明](release-2026-10-20.md)，更早的[0.1.28](release-2026-10-19.md)与[预览版](release-2026-10-16.md)记录继续保留。真实安装与跨版本更新不由构建和验签推导为完成。
 
 本轮已交付自动响应重写、P0 历史/正文后端接口及前端接入，范围以[本轮正式说明](release-2026-10-20-body-preview.md)为准。原 `d2d1ed7` 来源 Check #32 attempt 3 因 macOS runner 未分配最终失败，Release #29 已跳过；[原七条摘要](release-2026-10-20-response-rewrite.md)继续作为未发布来源记录，未被本版十条摘要覆盖。

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
@@ -16,6 +17,32 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestCertificateRootsExtendTrustAndRejectUnsupportedIdentity(t *testing.T) {
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("trusted")) }))
+	defer s.Close()
+	in := Input{Preset: "chrome-152-windows", Request: Draft{Method: "GET", URL: s.URL}}
+	if _, err := execute(in); err == nil {
+		t.Fatal("untrusted server accepted")
+	}
+	in.Security = &Security{TrustedCAPEM: []string{string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.Certificate().Raw}))}}
+	out, err := execute(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["response"].(map[string]any)["status"] != 200 {
+		t.Fatal(out)
+	}
+	in.Security.TrustedCAPEM = []string{"invalid"}
+	if _, err = execute(in); err == nil {
+		t.Fatal("invalid CA accepted")
+	}
+	identity := "private identity must never be printed"
+	in.Security = &Security{ClientPrivateKeyPEM: &identity}
+	if _, err = execute(in); err == nil || !strings.Contains(err.Error(), "does not support client certificate") || strings.Contains(err.Error(), identity) {
+		t.Fatal("unsupported identity must fail without leaking material")
+	}
+}
 
 func TestExactHeadersAndRedirect(t *testing.T) {
 	l, e := net.Listen("tcp", "127.0.0.1:0")

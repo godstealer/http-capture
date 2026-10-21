@@ -136,7 +136,7 @@ func TestAutoALPNH1SendsPostOnceAndKeepsExactHeaders(t *testing.T) {
 	compressor.Write([]byte("encoded response"))
 	compressor.Close()
 	reply := append([]byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n", compressed.Len())), compressed.Bytes()...)
-	for _, base := range []string{"chrome-152-windows", "firefox-148-windows"} {
+	for _, base := range []string{"chrome-152-windows", "chrome-155-windows", "firefox-148-windows"} {
 		for _, alpn := range [][]string{{"http/1.1"}, nil} {
 			t.Run(fmt.Sprintf("%s/%v", base, alpn), func(t *testing.T) {
 				fixture := newALPNH1Fixture(t, alpn, reply)
@@ -190,7 +190,7 @@ func TestAutoALPNH1SendsPostOnceAndKeepsExactHeaders(t *testing.T) {
 }
 
 func TestAutoALPNKeepsHTTP2CookieWireFields(t *testing.T) {
-	for _, base := range []string{"chrome-152-windows", "firefox-148-windows"} {
+	for _, base := range []string{"chrome-152-windows", "chrome-155-windows", "firefox-148-windows"} {
 		t.Run(base, func(t *testing.T) {
 			url, roots, received := h2CookieWireServer(t)
 			result, err := executeWithRoots(Input{Preset: base, Request: Draft{Method: "GET", URL: url,

@@ -6,6 +6,7 @@ import type {ConfigurationImportStatus} from './configImportRecovery';
 import AppUpdater from './AppUpdater';
 import './settings-layout.css';
 import SettingsTabs, { type SettingsPageId } from './SettingsTabs';
+import Certificates from './Certificates';
 import {isGrpcContentType} from './grpc';
 import GrpcResponse from './GrpcResponse';
 import GrpcPanel from './GrpcPanel';
@@ -547,7 +548,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
         <div className="workspace-heading"><span>HTTP CAPTURE</span><strong>{view === 'capture' ? t('流量捕获') : view === 'replay' ? t('请求重放') : view === 'interception' ? t('拦截') : view === 'rewrite' ? t('响应重写') : view === 'blocking' ? t('阻止请求') : view === 'library' ? t('集合与环境') : view === 'mcp' ? 'MCP' : t('插件')}</strong></div>
         <div className="proxy-address"><span className={status.running ? 'dot green' : 'dot'}/><div><span>{!connected ? t('内核未连接') : status.running ? t('代理已就绪') : t('代理已停止')}</span><code>{listenAddress}</code></div><button className="icon-button" title={wildcard ? t('所有网卡监听：客户端请填写本机局域网 IP 和端口') : t('复制代理地址')} disabled={wildcard} onClick={() => void copy(listenAddress)}><Copy size={14}/></button></div>
         <button className="upstream-chip" aria-label={t('上游代理设置')} title={t('上游代理设置') + ' · ' + (status.upstream?.enabled ? t('上游：{v0}', {v0: status.upstream.profileName ?? status.upstream.url}) : t('上游：直连'))} onClick={() => openSettings('upstream')}><Globe2 size={14}/><span>{status.upstream?.enabled ? t('上游：{v0}', {v0: status.upstream.profileName ?? status.upstream.url}) : t('上游：直连')}</span></button>
-        <div className="toolbar-actions"><AppUpdater beforeInstall={beforeUpdateInstall} onBusyChange={value => { updateInProgress.current = value; }}/><SystemProxyToggle running={status.running} connected={connected} locked={proxyBusy} preferred={useSystemProxy} onPreference={setUseSystemProxy} onError={notify}/><ThemeSelector value={theme} onChange={value => { setTheme(value); applyTheme(value); }}/><button className="proxy-settings-button" aria-label={t('代理设置')} title={t('修改监听端口、配置上游代理')} onClick={() => openSettings()}><Settings2 size={17}/><span>{t('代理设置')}</span></button><button className={'capture-switch' + (status.running ? ' is-running' : '')} disabled={proxyBusy} onClick={() => void capture()}>{status.running ? <Square size={15}/> : <Play size={15}/>}<span>{proxyBusy ? t('处理中…') : status.running ? t('停止') : t('开始捕获')}</span></button></div>
+        <div className="toolbar-actions"><AppUpdater beforeInstall={beforeUpdateInstall} onBusyChange={value => { updateInProgress.current = value; }}/><SystemProxyToggle running={status.running} connected={connected} locked={proxyBusy} preferred={useSystemProxy} onPreference={setUseSystemProxy} onError={notify}/><ThemeSelector value={theme} onChange={value => { setTheme(value); applyTheme(value); }}/><button className="proxy-settings-button" aria-label={t('设置')} title={t('管理应用设置')} onClick={() => openSettings()}><Settings2 size={17}/><span>{t('设置')}</span></button><button className={'capture-switch' + (status.running ? ' is-running' : '')} disabled={proxyBusy} onClick={() => void capture()}>{status.running ? <Square size={15}/> : <Play size={15}/>}<span>{proxyBusy ? t('处理中…') : status.running ? t('停止') : t('开始捕获')}</span></button></div>
       </header>
       <nav className="work-tabs" aria-label={t("工作区标签")}>
         <div className="work-tab-items">
@@ -606,13 +607,13 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
     {modal && <div className="modal-backdrop settings-backdrop" onClick={() => setModal(null)}>
       <div className={`modal settings-layout ${modal === 'settings' ? 'settings-modal' : 'help-modal'}`}
         ref={settingsDialog}
-        role="dialog" aria-modal="true" aria-label={modal === 'settings' ? t("代理设置") : t("使用帮助")}
+        role="dialog" aria-modal="true" aria-label={modal === 'settings' ? t("设置") : t("使用帮助")}
         onClick={event => event.stopPropagation()}>
         <header className="settings-dialog-header">
           <div className="settings-dialog-symbol">{modal === 'settings' ? <Settings2 size={22}/> : <Terminal size={22}/>}</div>
           <div className="settings-dialog-title">
             <span>HTTP CAPTURE</span>
-            <h2>{modal === 'settings' ? t("代理设置") : t("开始使用 HTTP Capture")}</h2>
+            <h2>{modal === 'settings' ? t("设置") : t("开始使用 HTTP Capture")}</h2>
           </div>
           <button type="button" className="modal-close icon-button" aria-label={t("关闭")} onClick={() => setModal(null)}><X size={19}/></button>
         </header>
@@ -663,6 +664,9 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
                 <button type="button" className="button" disabled={!connected} onClick={() => void exportCa()}>{t("导出 CA 证书")}</button>
               </div>
             </section>
+          },
+          { id: 'certificates', label: t('证书管理'), icon: <ShieldCheck size={16}/>, content:
+            <Certificates connected={connected} active={modal==='settings'&&settingsPage==='certificates'}/>
           },
           { id: 'decryption', label: t('HTTPS 解密'), icon: <LockKeyhole size={16}/>, content:
             <section className="settings-section settings-decryption"><DecryptionSettings/></section>

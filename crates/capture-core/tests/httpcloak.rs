@@ -1,6 +1,21 @@
 use capture_core::{model::*,transport::SendEngines};
 use tokio::{io::{AsyncWriteExt,BufReader},net::TcpListener};
 #[tokio::test]
+async fn upgraded_helper_selects_chrome155_from_ua_latest_and_explicit_version(){
+ tokio::time::timeout(std::time::Duration::from_secs(15),async{
+ let engines=SendEngines::with_roots(rustls::RootCertStore::empty());
+ let info=engines.list();let Some(info)=info.iter().find(|e|e.id=="httpcloak"&&e.available)else{eprintln!("Build httpcloak helper to run integration test");return};
+ assert_eq!(info.browser_versions.get("chrome").unwrap().first(),Some(&155));
+ for(setting,expected)in[("auto",155),("latest",155),("155",155),("153",153),("150",150)]{
+  let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+  let server=tokio::spawn(async move{let(socket,_)=listener.accept().await.unwrap();let mut socket=BufReader::new(socket);let raw=capture_core::http1::read_head(&mut socket).await.unwrap();let(_,_,headers)=capture_core::http1::parse_request(&raw).unwrap();socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();headers});
+  let draft:RequestDraft=serde_json::from_value(serde_json::json!({"engine":"httpcloak","method":"GET","url":format!("http://{address}/"),"headers":[{"name":"User-Agent","value":"Chrome/155.0.0.0"},{"name":"Accept","value":"application/custom"},{"name":"X-Order","value":"one"},{"name":"x-order","value":"two"}],"bodyBase64":"","tls":{"preset":"chrome","browserVersion":setting}})).unwrap();
+  let before=serde_json::to_value(&draft).unwrap();let(response,notes)=engines.send(&draft).await.unwrap();assert_eq!(response.status,200);assert!(notes.iter().any(|n|n.contains(&format!("chrome-{expected}-windows"))));assert_eq!(serde_json::to_value(&draft).unwrap(),before);
+  let headers=server.await.unwrap();let fields:Vec<_>=headers.iter().filter(|h|h.name.eq_ignore_ascii_case("user-agent")||h.name.eq_ignore_ascii_case("accept")||h.name.eq_ignore_ascii_case("x-order")).map(|h|(h.name.as_str(),h.value.as_str())).collect();assert_eq!(fields,vec![("User-Agent","Chrome/155.0.0.0"),("Accept","application/custom"),("X-Order","one"),("x-order","two")]);
+ }
+ }).await.unwrap();
+}
+#[tokio::test]
 async fn helper_roundtrip_preserves_ua_and_explicit_version(){
  let engines=SendEngines::with_roots(rustls::RootCertStore::empty());
  if !engines.list().iter().any(|e|e.id=="httpcloak"&&e.available){eprintln!("Build httpcloak helper to run integration test");return;}

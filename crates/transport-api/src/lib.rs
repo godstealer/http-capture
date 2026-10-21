@@ -155,3 +155,13 @@ pub struct UpstreamProxyConfig {
     pub username: String,
     pub password: String,
 }
+
+/// Transient TLS material, passed separately from recorded request drafts.
+/// Never log, persist with requests, or attach this to transport results.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct TlsMaterial {
+    pub trusted_ca_pem: Vec<String>,
+    pub client_certificate_pem: Option<String>,
+    pub client_private_key_pem: Option<String>,
+}

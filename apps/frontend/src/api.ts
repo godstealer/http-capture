@@ -4,6 +4,7 @@ import type {BodyVariant} from './types';
 export async function invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) return tauriInvoke<T>(command, args);
   const routes: Record<string, [string, string]> = {
+    certificates:['GET','certificates'],import_certificate:['POST','certificates/import'],change_certificate:['POST','certificates/change'],
     mcp_status:['GET','mcp/status'],mcp_configure:['POST','mcp/configure'],mcp_connection_info:['POST','mcp/connection'],
     mcp_clients:['GET','mcp/clients'],mcp_save_client:['POST','mcp/clients/save'],mcp_remove_client:['POST','mcp/clients/remove'],
     mcp_connect_client:['POST','mcp/clients/connect'],mcp_disconnect_client:['POST','mcp/clients/disconnect'],mcp_client_tools:['POST','mcp/clients/tools'],mcp_call_tool:['POST','mcp/clients/call'],

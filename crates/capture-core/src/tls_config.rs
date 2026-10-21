@@ -12,6 +12,9 @@ fn entries(value: &str) -> Result<Vec<&str>> {
     Ok(values)
 }
 pub fn config(profile: &TlsProfile, roots: &rustls::RootCertStore, engine: &str) -> Result<rustls::ClientConfig> {
+    base_config(profile,roots,engine,&crate::certificates::current())
+}
+pub(crate) fn base_config(profile:&TlsProfile,roots:&rustls::RootCertStore,engine:&str,security:&crate::certificates::Security)->Result<rustls::ClientConfig>{
     ensure!(profile.preset == "native", "This engine requires the native TLS profile");
     ensure!(profile.client_hello_hex.is_none(), "ClientHello Hex requires the httpcloak engine");
     ensure!(profile.sigalgs_list.is_none() && profile.grease.is_none() && profile.permute_extensions.is_none(), "Signature algorithms, GREASE and extension permutation require a browser TLS engine");
@@ -37,8 +40,12 @@ pub fn config(profile: &TlsProfile, roots: &rustls::RootCertStore, engine: &str)
         other => anyhow::bail!("Unsupported TLS version: {other}"),
     };
     ensure!(provider.cipher_suites.iter().any(|suite| versions.iter().any(|v| suite.version().version == v.version)), "No cipher suite supports the selected TLS version");
-    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(provider)).with_protocol_versions(&versions)?
-        .with_root_certificates(roots.clone()).with_no_client_auth();
+    let mut roots=roots.clone();
+    for der in &security.roots{roots.add(rustls::pki_types::CertificateDer::from(der.clone()))?;}
+    let builder=rustls::ClientConfig::builder_with_provider(Arc::new(provider)).with_protocol_versions(&versions)?.with_root_certificates(roots);
+    let mut config=if let Some((cert,key))=&security.identity{
+        builder.with_client_auth_cert(crate::certificates::chain(cert)?,crate::certificates::key(key)?)?
+    }else{builder.with_no_client_auth()};
     config.alpn_protocols = match engine { "auto" => vec![b"h2".to_vec(), b"http/1.1".to_vec()], "h2" => vec![b"h2".to_vec()], "h3" => vec![b"h3".to_vec()], _ => vec![b"http/1.1".to_vec()] };
     Ok(config)
 }

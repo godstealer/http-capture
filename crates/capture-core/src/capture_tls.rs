@@ -11,6 +11,7 @@ pub(crate) struct CaptureTls {
     alpn: Option<Vec<u8>>,
     first: Mutex<Option<TlsStream<Stream>>>,
     created: Instant,
+    security:crate::certificates::Security,
 }
 tokio::task_local! { static CURRENT: Arc<CaptureTls>; }
 
@@ -22,13 +23,14 @@ impl Drop for PreparedConnectionGuard {
 impl CaptureTls {
     pub(crate) async fn prepare(engine: &crate::Engine, origin: &url::Url, offers: Vec<Vec<u8>>) -> Result<Arc<Self>> {
         let route = engine.upstream.snapshot();
-        let mut config = crate::tls_config::config(&TlsProfile::default(), &engine.upstream_roots, "auto")?;
+        let security=engine.certificates.security(origin)?;
+        let mut config = crate::certificates::configure(&TlsProfile::default(), &engine.upstream_roots, "auto",&security)?;
         config.alpn_protocols = offers;
         let tls = tokio::time::timeout(Duration::from_secs(10), dial(origin, route.as_ref(), config))
             .await.context("Upstream TLS negotiation timed out")??;
         let alpn = tls.get_ref().1.alpn_protocol().map(Vec::from);
         ensure!(alpn.as_deref().is_none_or(|p| p == b"h2" || p == b"http/1.1"), "Unsupported upstream ALPN");
-        Ok(Arc::new(Self { origin: origin.clone(), route, alpn, first: Mutex::new(Some(tls)), created: Instant::now() }))
+        Ok(Arc::new(Self { origin: origin.clone(), route, alpn, first: Mutex::new(Some(tls)), created: Instant::now(),security }))
     }
     pub(crate) fn downstream_alpn(&self) -> Vec<Vec<u8>> { self.alpn.iter().cloned().collect() }
     fn matches(&self, request: &RequestDraft, url: &url::Url, route: Option<&UpstreamProxy>) -> bool {
@@ -39,7 +41,7 @@ impl CaptureTls {
             _ => false,
         };
         let protocol_compatible = request.engine == "auto" || (request.engine == "native" && self.alpn.as_deref() != Some(b"h2"));
-        same_route && protocol_compatible && url.scheme() == self.origin.scheme()
+        same_route && protocol_compatible && self.security==crate::certificates::current() && url.scheme() == self.origin.scheme()
             && url.host() == self.origin.host() && url.port_or_known_default() == self.origin.port_or_known_default()
             && tls.preset == "native" && matches!(tls.version.as_deref(), None | Some("auto"))
             && tls.cipher_list.is_none() && tls.curves_list.is_none() && tls.sigalgs_list.is_none()

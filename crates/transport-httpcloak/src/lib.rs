@@ -43,10 +43,12 @@ struct Input<'a,S> {
  request:RequestInput<'a,S>,
  preset:&'a str,
  proxy:Option<&'a UpstreamProxyConfig>,
+ #[serde(skip_serializing_if="Option::is_none")]
+ security:Option<&'a transport_api::TlsMaterial>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct Capabilities { #[serde(default)] pub custom_client_hello: bool, pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>> }
+pub struct Capabilities { #[serde(default)] pub custom_client_hello: bool,#[serde(default)]pub certificate_roots:bool, pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>> }
 #[derive(Deserialize)]
 pub struct Reply { pub response: Option<CapturedResponse>, #[serde(default)] pub notes: Vec<String>, pub error: Option<String> }
 #[derive(Clone)]
@@ -59,8 +61,15 @@ impl Helper {
   Ok(Self{path,capabilities})
  }
  pub async fn send<S:Serialize>(&self,request:&RequestDraft<S>,preset:&str,proxy:Option<&transport_api::UpstreamProxyConfig>)->Result<(CapturedResponse,Vec<String>)>{
+  self.send_with_security(request,preset,proxy,None).await
+ }
+ pub async fn send_with_security<S:Serialize>(&self,request:&RequestDraft<S>,preset:&str,proxy:Option<&transport_api::UpstreamProxyConfig>,security:Option<&transport_api::TlsMaterial>)->Result<(CapturedResponse,Vec<String>)>{
   ensure!(request.tls.client_hello_hex.is_none() || self.capabilities.custom_client_hello,"This httpcloak helper does not support ClientHello Hex; rebuild the helper");
-  let input=serde_json::to_vec(&Input{request:request.into(),preset,proxy})?;
+  if let Some(security)=security{
+   ensure!(security.client_certificate_pem.is_none()&&security.client_private_key_pem.is_none(),"httpcloak 当前不支持客户端证书，请为此目标选择 Native/H2/H3 或 wreq；未忽略证书配置");
+   ensure!(security.trusted_ca_pem.is_empty()||self.capabilities.certificate_roots,"此 httpcloak helper 不支持自定义信任 CA，请重新构建 helper");
+  }
+  let input=serde_json::to_vec(&Input{request:request.into(),preset,proxy,security})?;
   let mut cmd=Command::new(&self.path);
   cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
   #[cfg(windows)] cmd.creation_flags(0x08000000);
@@ -82,6 +91,15 @@ impl Helper {
 mod tests {
  use super::*;
  use serde_json::{json,Value};
+
+ #[tokio::test]
+ async fn unsupported_certificate_material_is_rejected_before_spawning_helper(){
+  let helper=Helper{path:PathBuf::from("does-not-exist"),capabilities:serde_json::from_value(json!({"customClientHello":true,"protocolVersion":1,"browserVersions":{}})).unwrap()};
+  let request=draft();let security=transport_api::TlsMaterial{trusted_ca_pem:vec!["certificate".into()],..Default::default()};
+  let error=helper.send_with_security(&request,"chrome-155-windows",None,Some(&security)).await.err().unwrap().to_string();assert!(error.contains("不支持自定义信任 CA"));
+  let security=transport_api::TlsMaterial{client_private_key_pem:Some("secret fixture".into()),..Default::default()};
+  let error=helper.send_with_security(&request,"chrome-155-windows",None,Some(&security)).await.err().unwrap().to_string();assert!(error.contains("不支持客户端证书"));assert!(!error.contains("secret fixture"));
+ }
 
  // Deliberately has no Clone implementation: send must accept Serialize alone.
  #[derive(Serialize)]
@@ -113,7 +131,7 @@ mod tests {
  fn helper_input_preserves_the_complete_wire_contract_with_non_clone_scripts(){
   let request=draft();
   let proxy=UpstreamProxyConfig{url:"http://127.0.0.1:7897/".into(),username:"fixture-user".into(),password:"disposable-fixture-password".into()};
-  let bytes=serde_json::to_vec(&Input{request:(&request).into(),preset:"chrome-155-windows",proxy:Some(&proxy)}).unwrap();
+  let bytes=serde_json::to_vec(&Input{request:(&request).into(),preset:"chrome-155-windows",proxy:Some(&proxy),security:None}).unwrap();
   let wire:Value=serde_json::from_slice(&bytes).unwrap();
   assert_eq!(wire,json!({
    "request":{
@@ -146,7 +164,7 @@ mod tests {
   request.pseudo_headers.clear();
   request.body_base64=SharedBody::default();
   request.tls=TlsProfile::default();
-  let wire:Value=serde_json::from_slice(&serde_json::to_vec(&Input{request:(&request).into(),preset:"chrome-155-windows",proxy:None}).unwrap()).unwrap();
+  let wire:Value=serde_json::from_slice(&serde_json::to_vec(&Input{request:(&request).into(),preset:"chrome-155-windows",proxy:None,security:None}).unwrap()).unwrap();
   assert_eq!(wire["proxy"],Value::Null);
   assert_eq!(wire["request"]["upstreamProfileId"],Value::Null);
   assert_eq!(wire["request"]["headers"],json!([]));
@@ -162,7 +180,7 @@ mod tests {
   let mut request=draft();
   request.body_base64="A".repeat(2*1024*1024).into();
   let pointer=request.body_base64.as_ptr();
-  let input=Input{request:(&request).into(),preset:"chrome-155-windows",proxy:None};
+  let input=Input{request:(&request).into(),preset:"chrome-155-windows",proxy:None,security:None};
   assert!(std::ptr::eq(input.request.body_base64,&request.body_base64));
   assert!(std::ptr::eq(input.request.scripts,&request.scripts));
   let bytes=serde_json::to_vec(&input).unwrap();

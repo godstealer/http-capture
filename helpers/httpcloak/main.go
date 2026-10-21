@@ -37,12 +37,18 @@ type Proxy struct {
 	Password string `json:"password"`
 }
 type Input struct {
-	Proxy   *Proxy `json:"proxy"`
-	Request Draft  `json:"request"`
-	Preset  string `json:"preset"`
+	Security *Security `json:"security,omitempty"`
+	Proxy    *Proxy    `json:"proxy"`
+	Request  Draft     `json:"request"`
+	Preset   string    `json:"preset"`
 	// Optional helper-level constraint. The application currently omits this
 	// field, which means TCP ALPN negotiation; imported hellos remain strict.
 	Protocol string `json:"protocol,omitempty"`
+}
+type Security struct {
+	TrustedCAPEM         []string `json:"trustedCaPem"`
+	ClientCertificatePEM *string  `json:"clientCertificatePem"`
+	ClientPrivateKeyPEM  *string  `json:"clientPrivateKeyPem"`
 }
 
 func capabilities() map[string]any {
@@ -60,14 +66,38 @@ func capabilities() map[string]any {
 		}
 		sort.Sort(sort.Reverse(sort.IntSlice(versions[family])))
 	}
-	return map[string]any{"customClientHello": true, "protocolVersion": 1, "browserVersions": versions}
+	return map[string]any{"customClientHello": true, "certificateRoots": true, "protocolVersion": 1, "browserVersions": versions}
 }
 func execute(in Input) (map[string]any, error) {
 	return executeWithRoots(in, nil)
 }
 
-// Tests inject a local CA here without adding a trust override to the wire API.
+// Custom roots extend platform trust; verification and hostname checks stay enabled.
 func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
+	if in.Security != nil {
+		if in.Security.ClientCertificatePEM != nil || in.Security.ClientPrivateKeyPEM != nil {
+			return nil, fmt.Errorf("httpcloak does not support client certificate identities")
+		}
+		if len(in.Security.TrustedCAPEM) > 64 {
+			return nil, fmt.Errorf("too many custom trust certificates")
+		}
+		if len(in.Security.TrustedCAPEM) > 0 {
+			if roots == nil {
+				var err error
+				roots, err = x509.SystemCertPool()
+				if err != nil {
+					return nil, fmt.Errorf("cannot read system trust pool")
+				}
+			} else {
+				roots = roots.Clone()
+			}
+			for _, value := range in.Security.TrustedCAPEM {
+				if len(value) > 1024*1024 || !roots.AppendCertsFromPEM([]byte(value)) {
+					return nil, fmt.Errorf("invalid custom trust certificate")
+				}
+			}
+		}
+	}
 	if fingerprint.GetStrict(in.Preset) == nil {
 		return nil, fmt.Errorf("unsupported preset: %s", in.Preset)
 	}

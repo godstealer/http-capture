@@ -29,6 +29,7 @@ impl EngineContract<RequestDraft,crate::upstream::UpstreamProxy> for HttpcloakEn
   }
   let preset=format!("{}-{}-windows",draft.tls.preset,version);
   let proxy_config=match proxy{Some(p)=>Some(p.for_helper().await?),None=>None};
-  let (response,extra)=self.0.send(&outgoing,&preset,proxy_config.as_ref()).await?;notes.extend(extra);Ok((response,notes))
+  let material=crate::certificates::current().material();
+  let (response,extra)=self.0.send_with_security(&outgoing,&preset,proxy_config.as_ref(),material.as_ref()).await?;notes.extend(extra);Ok((response,notes))
  })}
 }

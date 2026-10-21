@@ -6,10 +6,17 @@ use std::{fs, io::Write, path::{Path, PathBuf}, sync::Arc};
 pub struct CertificateAuthority {
     cert: Certificate,
     key: KeyPair,
+    chain: Vec<rustls::pki_types::CertificateDer<'static>>,
     pub cert_path: PathBuf,
 }
 
 impl CertificateAuthority {
+    pub(crate) fn from_pem(pem:&str,private_key:&str,cert_path:PathBuf)->Result<Self>{
+        let key=KeyPair::from_pem(private_key)?;
+        let cert=CertificateParams::from_ca_cert_pem(pem)?.self_signed(&key)?;
+        let chain=rustls_pemfile::certs(&mut pem.as_bytes()).collect::<std::result::Result<Vec<_>,_>>()?;
+        Ok(Self{cert,key,cert_path,chain})
+    }
     pub fn load_or_create(dir: &Path) -> Result<Self> {
         fs::create_dir_all(dir)?;
         #[cfg(unix)] {
@@ -26,7 +33,7 @@ impl CertificateAuthority {
             let cert = params.self_signed(&key)?;
             // Re-signing identical CA parameters is only used as the issuer object;
             // the persisted CA certificate is the one installed by the user.
-            return Ok(Self { cert, key, cert_path });
+            return Ok(Self { cert, key, cert_path,chain:vec![] });
         }
         let key = KeyPair::generate()?;
         let mut params = CertificateParams::default();
@@ -43,7 +50,7 @@ impl CertificateAuthority {
         }
         options.open(&key_path)?.write_all(key.serialize_pem().as_bytes())?;
         fs::write(&cert_path, cert.pem())?;
-        Ok(Self { cert, key, cert_path })
+        Ok(Self { cert, key, cert_path,chain:vec![] })
     }
 
     pub fn server_config(&self, host: &str) -> Result<Arc<ServerConfig>> {
@@ -52,8 +59,9 @@ impl CertificateAuthority {
         params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         let key = KeyPair::generate()?;
         let cert = params.signed_by(&key, &self.cert, &self.key)?;
+        let mut certificates=vec![cert.der().clone()];certificates.extend(self.chain.iter().cloned());
         let mut config = ServerConfig::builder().with_no_client_auth()
-            .with_single_cert(vec![cert.der().clone()], PrivatePkcs8KeyDer::from(key.serialize_der()).into())
+            .with_single_cert(certificates, PrivatePkcs8KeyDer::from(key.serialize_der()).into())
             .context("Create MITM server configuration")?;
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
         Ok(Arc::new(config))

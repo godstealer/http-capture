@@ -1,6 +1,6 @@
 # 独立发送引擎与 httpcloak
 
-当前状态（2026-10-20）：[0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a) 已完成四平台正式发布与公开附件核验；wreq/httpcloak 已接入 HTTP/SOCKS5，httpcloak 默认浏览器预设按 ALPN 兼容 H2/H1。原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 有既有实测，TUN H3 接管仍未验收且暂缓。以下按日期保留历史验证；早期失败或不支持项不代表当前能力，真实安装和业务流程仍分别验收。
+当前开发状态（2026-10-21）：httpcloak 已升级到 **v1.7.3**，真实能力清单支持 Chrome **143–155**、Firefox **133、148**，本增量尚未发布。当前正式版为 0.1.33，仍附带 v1.7.2。wreq/httpcloak 已接入 HTTP/SOCKS5，httpcloak 默认浏览器预设按 ALPN 兼容 H2/H1。原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 有既有实测，TUN H3 接管仍未验收且暂缓。以下按日期保留历史验证；早期失败或不支持项不代表当前能力，真实安装和业务流程仍分别验收。
 
 
 ## 已完成的拆分
@@ -9,7 +9,7 @@
 - `crates/browser-profiles`：UA 主版本解析、显式版本、latest、可用版本校验；wreq 预设目录可选编译。
 - `crates/transport-wreq`：wreq 发送、ClientHello 配置和响应流读取；不依赖 capture-core。
 - `crates/transport-httpcloak`：独立进程 IPC 客户端；输入输出大小限制、取消后结束子进程。
-- `helpers/httpcloak`：锁定 httpcloak v1.7.2 的 Go 程序，标准输入/输出 JSON，不监听本地控制端口。
+- `helpers/httpcloak`：锁定 httpcloak v1.7.3 的 Go 程序，标准输入/输出 JSON，不监听本地控制端口。
 - `capture-core`：注册引擎、执行脚本/拦截、规范化请求、调用独立传输模块。native/h2/h3 暂仍位于 core，尚未迁入单独 transport-native crate。
 
 ## 构建与选择
@@ -20,13 +20,13 @@ Windows：运行 `scripts/build-httpcloak.ps1`（Go 1.26+，优先使用项目�
 
 用 `HTTP_CAPTURE_HTTPCLOAK` 指定辅助程序的绝对路径；旁边必须有同名 .json 能力清单。桌面打包时可置于主程序旁。开发环境自动发现 `.local/httpcloak/`。正式发布已在 Windows、Linux、macOS Intel / ARM 的原生 runner 构建并随安装包打包辅助程序及能力清单，不依赖用户源码目录。
 
-重启服务后，在请求 TLS 页选择 httpcloak、Chrome、浏览器 TLS 版本。默认跟随 UA，无对应 UA 时选择当前引擎可用最大版本；明确指定 150 不会修改 UA 152。当前清单 Chrome 143–152，Firefox 133、148，使用 Windows 平台预设，未按本机操作系统自动切换预设。
+重启服务后，在请求 TLS 页选择 httpcloak、Chrome、浏览器 TLS 版本。默认跟随 UA，无对应 UA 时选择当前引擎可用最大版本；明确指定 150 不会修改 UA 155。当前清单 Chrome 143–155，Firefox 133、148，使用 Windows 平台预设，未按本机操作系统自动切换预设。UA 是不支持的版本时会明确报错，不自动冒用其他版本。
 
 ## 更新 httpcloak
 
-普通用户通过更新 HTTP Capture 安装包获得新版 helper，无需单独安装 Go 库。当前项目锁定 `httpcloak v1.7.2`，没有独立自动更新库的功能。上游 [v1.7.3 固定版本更新记录](https://github.com/sardanioss/httpcloak/blob/v1.7.3/CHANGELOG.md) 可供评估；本项目尚未升级，需另行完成兼容回归。
+普通用户通过更新 HTTP Capture 安装包获得新版 helper，无需单独安装 Go 库。当前项目锁定 `httpcloak v1.7.3`，没有独立自动更新库的功能。[上游固定版本更新记录](https://github.com/sardanioss/httpcloak/blob/v1.7.3/CHANGELOG.md) 包含 Chrome 153–155 预设；本轮同时更新 `sardanioss/net` 至 v1.2.12、`sardanioss/quic-go` 至 v1.2.30，保留 Go 1.26.0 最低版本。升级不改变应用中由用户提供的 UA、Accept 等请求头。
 
-维护者在 `helpers/httpcloak` 中检查可用版本，再固定目标版本升级。例如以下 `v1.7.3` 是待验证的升级目标，命令说明不表示当前构建已经使用它：
+维护者在 `helpers/httpcloak` 中检查可用版本，再固定目标版本升级。下面使用本轮已升级的 `v1.7.3` 演示，未来替换为经过评估的具体版本：
 
 ```sh
 cd helpers/httpcloak
@@ -43,6 +43,8 @@ go test -mod=readonly ./...
 
 ## 边界与后续任务
 
+2026-10-21 v1.7.3 升级验证：Go 模块校验、helper 全部回归通过；新增 153/154/155 继承保护和 155 的实际 H2 Cookie/ALPN H1-H2 测试。Windows 本地 helper 已重建，其构建信息确认 v1.7.3，能力清单最高版本 155。Rust→Go 四项集成测试通过，覆盖 UA 155 跟随、latest、显式 155、显式 153/150，以及 UA/Accept/交错重复字段保持。安装包、其他平台实际运行和业务网站验收仍待后续处理。
+
 原生 h3 引擎更新（2026-10-01）：已支持 SOCKS5 UDP ASSOCIATE 出站及代理端目标 DNS，外部 cloudflare-quic.com 经本机 SOCKS5 返回 200 / HTTP3 / TLS1.3。HTTP CONNECT 不支持此路径；httpcloak 的 H3 能力仍未接入。详情见 [实测记录](tls-components-test.md)。
 
 - 已发布的 0.1.28 中 HTTPS 默认强制 HTTP/2，明文 HTTP 使用 HTTP/1.1。0.1.31 已发布修复，为默认浏览器预设补充 ALPN 协商：服务端选择 H1 或无 ALPN 时，在发送 HTTP 数据前将同一已验证 TLS 连接交给 H1，沿用原 HTTP CONNECT/SOCKS5 隧道，不重新握手或因普通网络/响应错误跨协议重发。显式 H2 和包含 H2 的导入 ClientHello 保持严格约束；不启用库的 Auto/H3 路径，HTTP/3 仍未接入此适配器。详见 [TODO 修复记录](todo-feedback-2026-10-20.md)。
@@ -51,7 +53,7 @@ go test -mod=readonly ./...
 - 响应字段为协议库解析结果，不标记为原始线上顺序。库的常规路径解压常见压缩响应，适配器移除已解码的 Content-Encoding 并更新长度；此路径不保留原压缩字节。0.1.31 新增的同连接 H1 移交路径则返回原编码字节，保留相应 Content-Encoding 和长度头，不声明已经解压。
 - httpcloak 支持按请求选择 HTTP / SOCKS5 上游代理，凭据通过 stdin 传递，不写入请求记录或命令行；拒绝后不回退直连，并校验代理解析地址避免监听回环。自定义 TLS 高级覆盖、显式伪头列表暂不支持，明确报错。
 - TLS 版本、协商密码套件、证书链来自验证回调，保持默认信任校验。握手广告字段未采集的值不伪造。
-- 自定义 JSON 预设编辑/导入尚未接入；当前支持库内已实现的 Chrome 152，不以改版本名冒充新版本。
+- 自定义 JSON 预设编辑/导入尚未接入；当前支持库内已实现的 Chrome 155，不以改版本名冒充新版本。
 
 ## 0.1.31 验证补充（2026-10-20）
 

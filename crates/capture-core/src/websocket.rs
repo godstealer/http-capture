@@ -86,7 +86,7 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
         let mut authorization = None;
         let mut tls_details = None;
         let stream: crate::replay::Stream = if url.scheme() == "https" {
-            let config = crate::tls_config::config(&request.tls, &engine.upstream_roots, "native")?;
+            let config = engine.certificates.config(&url,&request.tls, &engine.upstream_roots, "native")?;
             let tls = crate::capture_tls::connect(&request, &url, route.as_ref(), config).await?;
             let mut details = crate::tls_details::negotiated(tls.get_ref().1); details.server_name = Some(hostname(&url)); tls_details = Some(details);
             Box::new(tls)
