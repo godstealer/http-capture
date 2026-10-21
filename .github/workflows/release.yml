@@ -44,7 +44,9 @@ jobs:
               if(staged)core.notice('This source already has a staged public release. Complete missing platforms manually without rebuilding public packages.');
             } catch(error) {
               if(error.status!==404)throw error;
-              core.setOutput('staged','false');
+              const releases=await github.paginate(github.rest.repos.listReleases,{...context.repo,per_page:100});
+              const draft=releases.find(release=>release.tag_name===`build-${sha.slice(0,12)}`&&release.draft&&release.body?.includes('<!-- staged-platform-release -->'));
+              core.setOutput('staged',String(Boolean(draft)));
             }
       - uses: actions/checkout@v4
         if: steps.mode.outputs.staged != 'true'
