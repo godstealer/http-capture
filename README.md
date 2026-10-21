@@ -2,7 +2,7 @@
 
 跨平台 HTTP/HTTPS 调试代理。Rust/Tokio 内核，React 界面，Tauri 桌面外壳。
 
-状态更新：2026-10-20。正式版 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a) 已发布，四平台构建、原生更新测试及公开更新包验签通过，改动见 [正式版更新说明](docs/release-2026-10-20.md)。来源 `da127ea9ba1a27eeb6476bb3ebad81ec46f1bbd1`，[Check #31](https://github.com/godstealer/http-capture/actions/runs/39426567394) 与 [Release #26](https://github.com/godstealer/http-capture/actions/runs/39427236891) 均成功；公开 22 个附件、17 项 SHA256 和五个更新目标签名已核验。上一正式版 [0.1.28](https://github.com/godstealer/http-capture/releases/tag/build-19095a086601) 的说明与历史证据继续保留。开发状态见 [路线图](docs/roadmap.md)，协议边界见 [协议说明](docs/protocols.md)，实际安装、跨设备及业务流程待验项见 [本轮验收](docs/acceptance-2026-10-20.md)；TUN H3 实机排查继续暂停。
+状态更新：2026-10-21。正式版 [0.1.33](https://github.com/godstealer/http-capture/releases/tag/build-a59befecdc1c) 已发布，包含自动响应重写与按需正文预览，改动见[正式版更新说明](docs/release-2026-10-20-body-preview.md)。来源 `a59befecdc1cc4b35d134baad51195c7d149210b`，[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 与 [Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 均成功；公开 22 个附件、17 项 SHA256 和五个更新目标签名已核验。上一正式版 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a) 的更新与历史证据保留在[0.1.31 记录](docs/release-2026-10-20.md)，更早 0.1.28 记录继续保留。开发状态见[路线图](docs/roadmap.md)，协议边界见[协议说明](docs/protocols.md)，原生文件操作、安装、跨设备及业务待验项见[本轮说明](docs/release-2026-10-20-body-preview.md#待实机验收)和[历史验收](docs/acceptance-2026-10-20.md)；TUN H3 实机排查继续暂停。
 
 公开源码：[godstealer/http-capture](https://github.com/godstealer/http-capture)。功能实现、自动化验证和实机验收分别记录，不以编译通过代替跨平台可用。
 
@@ -16,9 +16,9 @@
 
 0.1.31 新增 MCP 工具输出契约、结构化结果、只读资源和本地写操作审计，交付请求延迟/频率限制与 64 KiB 正文范围读取；同时修复来源识别排队、httpcloak ALPN 协商、响应替换入口、窄屏上游按钮及 Linux portable 下载链接。完整大文件低内存、真实跨设备迁移与安装升级仍按清单继续处理。
 
-本轮合并候选（**尚未发布，不在 0.1.31 中**）包含 **自动响应重写**和 **P0 前端按需正文**：规则可整份替换响应或用文本/正则局部修改，上游仍正常访问；现代内核的元数据历史不携带四槽 HTTP 正文，选中实体按版本每页读取最多 64 KiB，完整复制、编辑、重放及导出继续保持完整内容语义。详见[本轮候选说明](docs/release-2026-10-20-body-preview.md)、[自动响应重写](docs/response-rewrite.md)和[正文内存改造](docs/body-memory.md)。最终版本、来源提交、跨平台 CI、安装包与公开附件核验结果均待本次流程确认，不提前指定版本号。
+0.1.33 已正式交付 **自动响应重写**和 **P0 前端按需正文**：规则可整份替换响应或用文本/正则局部修改，上游仍正常访问；现代内核的元数据历史不携带四槽 HTTP 正文，选中实体按版本每页读取最多 64 KiB，完整复制、编辑、重放及导出继续保持完整内容语义。详见[本轮正式说明](docs/release-2026-10-20-body-preview.md)、[自动响应重写](docs/response-rewrite.md)和[正文内存改造](docs/body-memory.md)。同一来源的跨平台 CI、四平台安装包及公开附件核验已完成，[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 三系统及前端全部通过，[Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 四平台构建、各平台 10 项原生更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。 实际安装与业务流程仍单独验收。
 
-原 0.1.32 候选来源 `d2d1ed7` 的 [Check #32 attempt 3](https://github.com/godstealer/http-capture/actions/runs/39441172083/attempts/3) 因 macOS runner 未分配而最终失败，对应 Release #29 已跳过；其未发布功能已合并进本轮候选。当前本地 **44 个前端回归脚本、国际化、TypeScript 和生产构建通过**，production-dist 合成记录的内置浏览器隔离验收已完成。完整会话导出、脚本/helper、内部模型、SSE/gRPC/WS 与并发峰值等边界仍待处理，**P0 全链路低内存未完成**；安装、升级及跨设备等人工验收继续保留。
+原 0.1.32 候选来源 `d2d1ed7` 的 [Check #32 attempt 3](https://github.com/godstealer/http-capture/actions/runs/39441172083/attempts/3) 因 macOS runner 未分配而最终失败，对应 Release #29 已跳过；其未发布功能现随 0.1.33 一并交付，旧候选本身没有发布。当前本地 **44 个前端回归脚本、国际化、TypeScript 和生产构建通过**，production-dist 合成记录的内置浏览器隔离验收已完成。完整会话导出、脚本/helper、内部模型、SSE/gRPC/WS 与并发峰值等边界仍待处理，**P0 全链路低内存未完成**；安装、升级及跨设备等人工验收继续保留。
 
 ## MCP 从哪里开始
 
@@ -97,7 +97,7 @@ curl --noproxy "" -x http://127.0.0.1:8080 --cacert .local/capture/certificates/
 | 查看和编辑 | 请求/响应正文格式化；SVG/图片适应窗口、缩放和双向滚动；清晰输入框；规则拦截和文件替换响应，右键可建立响应拦截 | HTML 静态预览禁用脚本与外部资源；响应文件替换界面当前限制 8 MiB；原始字节与解码展示区分 |
 | 阻止请求 | URL 包含/正则、精确域名及可选方法；抓包/全部范围；本地 403、规则落盘、右键添加 | 不终止已建立的 WS/流式会话；未解密 CONNECT 只能按不限定方法的精确域名阻止；不是系统防火墙 |
 | 故障模拟 | 请求延迟、每规则固定窗口频率限制、本地 429/Retry-After、版本保护及迁移后禁用 | 仅第一匹配规则；不限制正文带宽，不处理 WS、CONNECT 直通或系统级流量 |
-| 自动响应重写（开发版，未发布） | 整份替换或 UTF-8 文本/正则、响应头局部修改；全部匹配规则按顺序执行、逐规则回滚、版本保护及迁移后禁用 | 上游仍访问；8 MiB 正文限制，流式响应跳过；区别于已有手动响应断点，见[使用说明](docs/response-rewrite.md) |
+| 自动响应重写（0.1.33 已发布） | 整份替换或 UTF-8 文本/正则、响应头局部修改；全部匹配规则按顺序执行、逐规则回滚、版本保护及迁移后禁用 | 上游仍访问；8 MiB 正文限制，流式响应跳过；区别于已有手动响应断点，见[使用说明](docs/response-rewrite.md) |
 | 流式查看 | 原生 Auto/H1/H2 SSE 实时转发/事件查看；WS/WSS 双向帧查看，Native H1 主动消息发送 | H3/浏览器引擎 SSE、压缩 SSE 增量事件解析、WS 脚本/断点和完整大文件流式链路待补 |
 | 会话 | SQLite、工作区恢复、会话 JSON 保存/导入、HAR 导入、Ctrl/Command+A 和批量删除 | 首次全量读取，不分页；后续增量同步；HAR 导出、全库 SQLite 备份及虚拟列表已支持，大正文流式存储待完善 |
 | 界面 | 主题切换、中英文及跟随系统、可拖动分栏、虚拟列表；输入框/下拉框边界及焦点状态统一 | 部分桌面 WebView 和跨平台实际 GUI 回归待补 |
@@ -139,7 +139,7 @@ npm run build
 
 执行顺序：请求前脚本 → 请求拦截 → 发送 → 响应后脚本 → 响应拦截。直接使用手动拦截替换响应时不运行响应后脚本。已完成记录保留原始请求/响应；脚本日志显示在脚本标签及记录说明中。
 
-未发布的自动响应重写位于响应后插件/脚本之后、手动响应拦截之前；多规则逐条处理、每条失败回滚到该条之前的响应，最早原件继续保留。0.1.31 的管线不包含此新增步骤。
+0.1.33 的自动响应重写位于响应后插件/脚本之后、手动响应拦截之前；多规则逐条处理、每条失败回滚到该条之前的响应，最早原件继续保留。0.1.31 的管线不包含此新增步骤。
 
 API：`request.method`、`request.url`、`request.headers`、`request.bodyBase64`；`response.status`、`response.headers`、`response.bodyBase64`（响应后可修改）。头部是 `{name,value}[]` 有序数组，保留重复字段。`variables` 是字符串键值字典，支持 `console.log`、`assert(condition,message)`、`encodeText(text)`、`decodeText(base64)`、`sha256(text)`。正文保留原始内容编码，decodeText 不负责解压；替换响应正文需写入未压缩内容，内核会移除旧压缩头、重算长度。
 

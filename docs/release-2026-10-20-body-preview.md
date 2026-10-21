@@ -1,6 +1,6 @@
-# HTTP Capture 候选更新（2026-10-20，自动响应重写与按需正文预览）
+# HTTP Capture 0.1.33 正式更新（2026-10-21，自动响应重写与按需正文预览）
 
-**候选发布准备中，尚未正式发布。** 本批合并此前未发布的自动响应重写、编辑一致性和 P0 后端接口，以及本轮元数据历史、按需正文预览和完整数据操作保护。最终版本、来源提交、源 Check、Release 和公开附件核验结果将在本次流程完成后补记；版本来自成功源 Check 的编号，不提前指定下一版本号。当前正式 Latest 仍为 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a)，历史说明见[0.1.31 更新记录](release-2026-10-20.md)。
+本轮已正式发布为 [HTTP Capture 0.1.33 / build-a59befecdc1c](https://github.com/godstealer/http-capture/releases/tag/build-a59befecdc1c)，交付自动响应重写、编辑一致性、P0 历史/正文后端及前端按需预览。安装包与更新清单来源均为 `a59befecdc1cc4b35d134baad51195c7d149210b`。[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 三系统及前端全部通过，[Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 四平台构建、各平台 10 项原生更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。 上一正式版 0.1.31 的说明和证据完整保留在[历史记录](release-2026-10-20.md)。
 
 原 0.1.32 候选来源 `d2d1ed74bf96b21cc650b3229d0077e7cf48f4e5` 的 [Check #32 attempt 3](https://github.com/godstealer/http-capture/actions/runs/39441172083/attempts/3) 最终失败，macOS 托管 runner 未获分配，对应 Release #29 已跳过；未生成正式发布，也未推进 Latest。该来源的[七条原更新摘要](release-2026-10-20-response-rewrite.md) 不改写，本批用下面的新摘要描述完整合并范围。
 
@@ -26,7 +26,7 @@
 
 详细操作见[自动响应重写](response-rewrite.md)、[正文内存改造](body-memory.md)与[配置迁移](config-migration.md)。
 
-## 本地验证与待发布核验
+## 本地与发布验证结果
 
 当前本地 **44 个前端回归脚本、国际化检查、TypeScript 和 Vite 生产构建通过**。模型及真实组件回调覆盖 15,003 条历史、四槽正文缺失、真空实体、增量/删除/reset/重开、旧端点严格降级、版本冲突、并发旧结果、分页和 UTF-8/二进制边界、完整操作、原生/浏览器下载契约及隐藏 gRPC 会话保留。自动重写既有内核、真实本地 HTTP/H2、手动断点、迁移和摘要头回归保留在原候选记录中。
 
@@ -34,7 +34,7 @@
 
 **本轮内置浏览器隔离验收已完成。** 内置浏览器已完成 production-dist 隔离界面验收，使用四条合成记录：约 150 KB JSON 默认按片段显示，第 3 页可读到尾部，第 4 页报无效页码；显式完整处理后才进行完整 JSON 格式化。raw gzip 保留原始字节，跨 UTF-8 字符边界的片段禁用文本并转为 Hex；真正 0 字节的 originalRequest 显示空正文，63 字节的小响应默认完整格式化。小响应生成的整份替换模板与完整原文一致，真实横向/纵向滚动可到达分页。
 
-本次浏览器读取记录均为不超过 65536 字节、固定版本的 `read_flow_body`，未调用 `flows/get` 或旧完整历史接口；单响应模板也仅读取 response 实体。这是本地合成数据的界面证据，不代表原生文件选择、安装、跨设备或大文件峰值实测。 跨平台源 Check、四平台安装包构建、原生更新生命周期测试、公开附件/哈希/签名及兼容频道核验均待本次最终流程确认；不会用本地通过替代发布成功或目标机器安装验收。
+本次浏览器读取记录均为不超过 65536 字节、固定版本的 `read_flow_body`，未调用 `flows/get` 或旧完整历史接口；单响应模板也仅读取 response 实体。这是本地合成数据的界面证据，不代表原生文件选择、安装、跨设备或大文件峰值实测。 同一来源的 Check #33、Release #33、四平台各 10 项原生更新测试、22 附件/17 SHA256/五个更新目标签名及兼容频道均已核验；真实安装、跨设备和业务验收仍按下方清单保留。
 
 ## 范围和内存边界
 
@@ -50,3 +50,9 @@
 - [ ] 跨设备配置导入禁用、十套主题、中英文、窄窗口、缩放和真实安装升级。
 
 既有系统代理/证书、真实 AI 客户端及 ANA 业务 POST/订票流程验收继续保留；TUN H3 实机排查仍暂停。历史待验项见[0.1.31 验收记录](acceptance-2026-10-20.md)，后续开发见[路线图](roadmap.md)。
+
+## 本轮发布记录
+
+正式版 [0.1.33 / build-a59befecdc1c](https://github.com/godstealer/http-capture/releases/tag/build-a59befecdc1c)，来源 `a59befecdc1cc4b35d134baad51195c7d149210b`；[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 三系统及前端全部通过，[Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 四平台构建、各平台 10 项原生更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。
+
+GitHub Release 发布时间为 `2026-10-21T01:33:20Z`，更新清单 pub_date 为源 Check 时间 `2026-10-20T15:53:25Z`。Windows 首装选择 `windows-x64-HTTP-Capture_0.1.33_x64-setup.exe`；Mac 按 Intel/Apple Silicon 选择 DMG，Linux 按安装方式选择 deb、AppImage 或 portable。原生保存、实际安装升级、跨设备和大文件峰值仍待验；P0 全链路未完成。
