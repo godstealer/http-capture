@@ -2,11 +2,10 @@
 
 跨平台 HTTP/HTTPS 调试代理。Rust/Tokio 内核，React 界面，Tauri 桌面外壳。
 
-状态更新：2026-10-21。正式版 [0.1.33](https://github.com/godstealer/http-capture/releases/tag/build-a59befecdc1c) 已发布，包含自动响应重写与按需正文预览，改动见[正式版更新说明](docs/release-2026-10-20-body-preview.md)。来源 `a59befecdc1cc4b35d134baad51195c7d149210b`，[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 与 [Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 均成功；公开 22 个附件、17 项 SHA256 和五个更新目标签名已核验。上一正式版 [0.1.31](https://github.com/godstealer/http-capture/releases/tag/build-da127ea9ba1a) 的更新与历史证据保留在[0.1.31 记录](docs/release-2026-10-20.md)，更早 0.1.28 记录继续保留。开发状态见[路线图](docs/roadmap.md)，协议边界见[协议说明](docs/protocols.md)，原生文件操作、安装、跨设备及业务待验项见[本轮说明](docs/release-2026-10-20-body-preview.md#待实机验收)和[历史验收](docs/acceptance-2026-10-20.md)；TUN H3 实机排查继续暂停。
+状态更新：2026-10-21。Windows/Linux 正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 Check #34。该来源的前端、Windows、Linux 检查通过；[分平台构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和各 10 项原生更新测试通过。公开 11 个附件、9 项 SHA256、三个更新包及版本注释签名已核验。macOS 托管构建机容量不足，按用户要求延后补发；完整自动更新频道和 GitHub Latest 暂时保持 0.1.33。 本版包含三类证书管理和 httpcloak v1.7.3 / Chrome 155，详见[更新说明](docs/release-2026-10-21-certificates.md)；Mac 用户继续使用 [0.1.33](docs/release-2026-10-20-body-preview.md)。
 
 公开源码：[godstealer/http-capture](https://github.com/godstealer/http-capture)。功能实现、自动化验证和实机验收分别记录，不以编译通过代替跨平台可用。
 
-**本轮发布准备：证书管理与 Chrome 155。** 新增自定义抓包 CA、按域名/端口配置的 mTLS 客户端身份和上游信任 CA；httpcloak 升级 v1.7.3，支持 Chrome 143–155。正在准备正式发布，当前公开安装包仍为 0.1.33；本轮内容、支持边界和待验项目见[更新说明](docs/release-2026-10-21-certificates.md)。
 
 核心能力包括：请求页直接保存/更新/另存为，按语言和库导出 20 种代码示例，CodeMirror 6 拦截正文与可选粘贴格式化，正文类型/二进制编辑，头部复制，原生缩放修正，监听设置恢复，分组选项卡设置、十套主题及流量来源。代码导出与保存入口位于请求区上方右侧。使用与验证记录见 [使用反馈修复记录](docs/ui-feedback-2026-10-16.md) 和上述版本说明。
 
@@ -224,7 +223,7 @@ assert(plain === 'hello');
 
 ### 独立浏览器发送引擎
 
-httpcloak Go 辅助进程在当前开发代码中已更新至 v1.7.3，支持 Chrome 143–155；UA 版本与 TLS 预设可分别设置。使用 `scripts/build-httpcloak.ps1` 构建后重启开发服务；wreq、httpcloak 和原生引擎并存。本次依赖更新尚未发布，0.1.33 安装包仍使用 v1.7.2。模块拆分、验证结果、跨平台构建和限制见 [transport-engines.md](docs/transport-engines.md)。
+httpcloak Go 辅助进程在当前开发代码中已更新至 v1.7.3，支持 Chrome 143–155；UA 版本与 TLS 预设可分别设置。使用 `scripts/build-httpcloak.ps1` 构建后重启开发服务；wreq、httpcloak 和原生引擎并存。本次依赖更新已随 Windows/Linux 0.1.34 发布，macOS 延后；0.1.33 安装包仍使用 v1.7.2。模块拆分、验证结果、跨平台构建和限制见 [transport-engines.md](docs/transport-engines.md)。
 
 会话备份、HAR、请求集合、环境、脚本模板和表单编辑的用法及边界见 [会话与工作区](docs/sessions-workspaces.md)。
 

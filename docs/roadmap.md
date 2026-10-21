@@ -4,7 +4,7 @@
 
 执行顺序（2026-10-16 用户确认）：先完成本版全部平台发布，再按优先级继续开发未完成项；安装、跨版本更新、系统集成与桌面等实机验收先暂缓，保留未完成状态。发布后的首项开发为 P0 大文件低内存链路；代码改动所需的自动化回归仍须执行。
 
-## 发布后开发增量：证书管理（尚未发布）
+## 0.1.34：证书管理（Windows/Linux 已发布，Mac 待补）
 
 - [x] 总设置入口由“代理设置”改为“设置”；新增独立“证书管理”页。
 - [x] 自定义抓包 CA 证书与私钥导入、匹配/用途/有效期校验、显式切换及重启提示，保留内置 CA 供恢复。
@@ -13,19 +13,20 @@
 - [x] Native/Auto/H2/H3、gRPC/WS 与 wreq 接入；httpcloak 接入自定义根信任，匹配客户端身份时明确拒绝，不静默忽略。
 - [x] 本地完整 core/service/transport-httpcloak 回归通过（含 155 项 core 单测、证书 API 认证/CAS 和私钥隔离）；独立 Native/Auto/H2/H3/wreq mTLS、CONNECT 抓包及导入中间 CA 完整证书链握手通过。Go helper 全部回归、45 项前端脚本、TypeScript/Vite 构建及桌面 browser-replay 含测试代码编译通过。内置浏览器确认分类高亮及三种表单，未更改系统信任。
 - [ ] P12/PFX 与加密私钥直接导入，以及 httpcloak 客户端证书依赖适配，仍未实现；当前支持 PEM/DER 证书及未加密 PEM 私钥。[操作说明](certificates.md)。
-- [ ] 安装版原生文件选择、系统 CA 信任操作及 macOS/Linux 实机验收待用户方便时进行，本增量不标为已发布。
+- [ ] 安装版原生文件选择、系统 CA 信任操作及 macOS/Linux 实机验收待用户方便时进行，Windows/Linux 已随 0.1.34 发布；Mac 待补，实机项不勾选。
 
-## 发布后开发增量：httpcloak Chrome 155（尚未发布）
+## 0.1.34：httpcloak Chrome 155（Windows/Linux 已发布，Mac 待补）
 
 - [x] 固定升级 httpcloak v1.7.2 → v1.7.3，关联 net v1.2.12、quic-go v1.2.30；执行 `go mod tidy` 和模块校验。
 - [x] 重建本地 helper 及真实能力清单，Chrome 143–155、Firefox 133/148；前端沿用能力清单，无需伪造版本选项。
 - [x] 新增 Chrome 153–155 预设继承保护、155 实际 H2 Cookie 字段/ALPN H1-H2 与版本目录回归；现有自定义 ClientHello、信任 CA、压缩正文和代理回归通过。
 - [x] Rust→Go 四项集成回归通过：155 自动/latest/显式版本、150/153 旧版兼容、UA/Accept 和重复头部顺序保持、伪头再生成及代理失败不回退。二进制构建信息核实依赖 v1.7.3，未手工修改版本目录。
-- [ ] 四平台安装包发布和真实业务验收待后续处理，本轮本地验证不据此勾选。
+- [x] Windows/Linux 正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 Check #34。该来源的前端、Windows、Linux 检查通过；[分平台构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和各 10 项原生更新测试通过。公开 11 个附件、9 项 SHA256、三个更新包及版本注释签名已核验。macOS 托管构建机容量不足，按用户要求延后补发；完整自动更新频道和 GitHub Latest 暂时保持 0.1.33。
+- [ ] macOS 两种架构补发和真实业务验收待后续处理。
 
 发布顺序调整（2026-10-21 用户确认）：0.1.34 先发 Windows/Linux，macOS 换时间补发。来源固定 `20f9137572e00c4faa06d6290b94ac01f10c2105` / Check #34；前端、Windows、Linux 均已通过，Mac 托管 runner 容量不足。分平台构建入口要求相应平台源码检查成功，保留签名和原生更新测试；未齐四平台时不推进完整自动更新频道。Mac 与实机待验项继续保留。
 
-## 本次正式发布：0.1.33，自动响应重写与按需正文（2026-10-21）
+## 上一完整正式发布：0.1.33，自动响应重写与按需正文（2026-10-21）
 
 本轮增量已正式交付。正式版 [0.1.33 / build-a59befecdc1c](https://github.com/godstealer/http-capture/releases/tag/build-a59befecdc1c)，来源 `a59befecdc1cc4b35d134baad51195c7d149210b`；[Check #33](https://github.com/godstealer/http-capture/actions/runs/39452537340) 三系统及前端全部通过，[Release #33](https://github.com/godstealer/http-capture/actions/runs/39526059061) 四平台构建、各平台 10 项原生更新生命周期测试和公开发布全部成功。公开 22 个附件已下载独立核验，17 项 SHA256 一致，五个更新包的正文及版本注释签名公钥验证通过，兼容更新清单一致。 自动响应重写、P0 后端及前端阶段的范围见[本轮发布说明](release-2026-10-20-body-preview.md)。原 0.1.32 候选来源 `d2d1ed7` 的 Check #32 attempt 3 最终失败、Release #29 跳过的记录继续保留；其七条摘要不改写，本版采用新的十条摘要。真实安装与业务验收仍单列。
 
