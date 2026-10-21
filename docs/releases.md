@@ -37,6 +37,8 @@ gh workflow run release-platforms.yml -f check_run_id=<原始Check运行ID> -f p
 
 以后先让原 Check 的 macOS 检查通过，再用相同 run ID 和 `platforms=macos` 构建两种 Mac 架构。补发仅增加缺少的文件，不覆盖已公开的平台安装包；四平台齐全后，核验完整清单、全部签名和已有附件，再上传完整 `latest.json` 并推进更新频道/Latest。不能混用新来源、其他 Check 编号或重新签名产生的不同旧文件。该手动入口不改变默认全平台自动发布门槛。
 
+标准全平台工作流遇到已经公开、但尚无完整 `latest.json` 的分批标签，会保留手工补全路径并跳过重复构建；查询 API 出错时明确失败，不把网络错误当成“尚未发布”。
+
 安装包版本采用 `主版本.次版本.<源 Check run_number>`。主/次版本读取 `tauri.conf.json`，当前得到 `0.1.N`；`N` 来自成功的 **Check**，不使用 Release 的 run number 或重跑次数。同一次 Check 重跑、四个平台构建的版本完全相同。已公开的 `build-<sha12>` 版本和资产不覆盖；重跑时以已发布的 `latest.json` 为准，避免新生成的随机签名指向旧包。
 
 应用继续读取固定端点：[兼容频道 latest.json](https://github.com/godstealer/http-capture/releases/download/updater-preview/latest.json)。旧安装包已写入此地址，因此保留 `updater-preview` 标签。该频道仅存放当前完整清单，仍为预发布且设置 `latest=false`；清单下载地址固定指向对应 `build-<sha12>` 的正式资产。正式 build 以 `prerelease=false` 公开，合格的新版本再设为 GitHub Latest，标题为 `HTTP Capture <版本>`。

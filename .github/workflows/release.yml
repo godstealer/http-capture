@@ -28,28 +28,51 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.identity.outputs.version }}
+      staged: ${{ steps.mode.outputs.staged }}
     steps:
+      - name: Keep already staged releases on the manual completion path
+        id: mode
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha=context.payload.workflow_run.head_sha;
+            if(!/^[a-f0-9]{40}$/.test(sha))throw Error('Invalid source SHA');
+            try {
+              const {data:release}=await github.rest.repos.getReleaseByTag({...context.repo,tag:`build-${sha.slice(0,12)}`});
+              const staged=!release.draft&&!release.assets.some(asset=>asset.name==='latest.json');
+              core.setOutput('staged',String(staged));
+              if(staged)core.notice('This source already has a staged public release. Complete missing platforms manually without rebuilding public packages.');
+            } catch(error) {
+              if(error.status!==404)throw error;
+              core.setOutput('staged','false');
+            }
       - uses: actions/checkout@v4
+        if: steps.mode.outputs.staged != 'true'
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
+        if: steps.mode.outputs.staged != 'true'
         with:
           node-version: 22
       - name: Verify release and updater fixtures
+        if: steps.mode.outputs.staged != 'true'
         run: node --test scripts/test-release-updater.mjs scripts/test-verify-published-release.mjs
       - name: Require updater signing configuration
+        if: steps.mode.outputs.staged != 'true'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: node scripts/release-updater.mjs preflight
       - name: Fix version from the successful source Check
+        if: steps.mode.outputs.staged != 'true'
         id: identity
         shell: bash
         run: echo "version=$(node scripts/release-updater.mjs version)" >> "$GITHUB_OUTPUT"
 
   build:
     needs: preflight
+    if: needs.preflight.outputs.staged != 'true'
     strategy:
       fail-fast: false
       matrix:
