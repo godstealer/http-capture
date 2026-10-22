@@ -43,20 +43,21 @@ export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 
   progress('选择保存位置…');
   const name=`capture-${new Date().toISOString().replace(/[:.]/g, '-')}.${format}`;
   const handle=await chooseSave(name);if(handle===null)return t('已取消保存');
-  if(format==='json'&&handle){
+  if(handle){
     // File System Access writes each complete record before loading the next.
     // A failed versioned read aborts the draft, so a prefix is never reported
     // as a complete session export.
     const writer=await handle.createWritable();
     try{
-      await writer.write(new Blob(['{"format":"http-capture-session","version":1,"flows":[']));
+      await writer.write(new Blob([format==='json'?'{"format":"http-capture-session","version":1,"flows":[':'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[']));
       for(let index=0;index<flows.length;index++){
         progress('正在读取完整记录…');
         const full=await loadCompleteFlow(flows[index]);
-        await writer.write(new Blob([index?',':'',JSON.stringify(full)]));
+        const record=format==='json'?full:JSON.parse(await serializeHar([full],rawHar)).log.entries[0];
+        await writer.write(new Blob([index?',':'',JSON.stringify(record)]));
       }
       progress('正在保存文件…');
-      await writer.write(new Blob([']}']));
+      await writer.write(new Blob([format==='json'?']}':']}}']));
       await writer.close();
       return t('已保存：')+handle.name;
     }catch(error){await writer.abort().catch(()=>{});throw error;}
