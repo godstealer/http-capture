@@ -3,6 +3,16 @@ import { serializeHar } from './har';
 import {chooseSave,saveText} from './saveFile';
 import { encodeText, type Flow, type FlowRecord, type Header } from './types';
 import { loadCompleteFlow } from './flowRecords';
+import {isTauri,invoke} from '@tauri-apps/api/core';
+
+async function nativeExportChunk(id:string,content:string,offset:number):Promise<number>{
+  const bytes=new TextEncoder().encode(content);
+  for(let start=0;start<bytes.length;start+=65536){
+    const part=Array.from(bytes.subarray(start,start+65536));
+    offset=await invoke<number>('append_session_export',{id,offset,bytes:part});
+  }
+  return offset;
+}
 
 // HAR headers are arrays: keep duplicate names and their recorded order.
 export function readSession(text: string): Flow[] {
@@ -43,6 +53,25 @@ export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 
   progress('选择保存位置…');
   const name=`capture-${new Date().toISOString().replace(/[:.]/g, '-')}.${format}`;
   const handle=await chooseSave(name);if(handle===null)return t('已取消保存');
+  if(isTauri()){
+    const id=await invoke<string|null>('begin_session_export',{format});
+    if(id===null)return t('已取消保存');
+    let offset=0;
+    try{
+      offset=await nativeExportChunk(id,format==='json'?'{"format":"http-capture-session","version":1,"flows":[':'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[',offset);
+      for(let index=0;index<flows.length;index++){
+        progress('正在读取完整记录…');
+        const full=await loadCompleteFlow(flows[index]);
+        const record=format==='json'?full:JSON.parse(await serializeHar([full],rawHar)).log.entries[0];
+        offset=await nativeExportChunk(id,(index?',':'')+JSON.stringify(record),offset);
+      }
+      offset=await nativeExportChunk(id,format==='json'?']}':']}}',offset);
+      progress('正在保存文件…');
+      const path=await invoke<string|null>('finish_session_export',{id,commit:true});
+      if(!path)throw Error('Export file was not saved');
+      return t('已保存：')+path;
+    }catch(error){await invoke('finish_session_export',{id,commit:false}).catch(()=>{});throw error;}
+  }
   if(handle){
     // File System Access writes each complete record before loading the next.
     // A failed versioned read aborts the draft, so a prefix is never reported
