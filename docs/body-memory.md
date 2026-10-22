@@ -80,4 +80,4 @@
 
 P0 尚未完成，不能将本阶段称为全链路低内存或完整文件引用。
 
-2026-10-22 桌面增量验证：Rust 桌面 crate 编译、前端类型检查和生产构建通过；前端原生命令契约测试验证 JSON/HAR 分块、偏移与失败中止。本机曾在启动 Rust 桌面测试前移除其二进制，[功能分支 Check](https://github.com/godstealer/http-capture/actions/runs/39786975260) 的 Windows runner 已执行并通过该定向测试；目标机器原生文件选择仍需实机验收。H2 SSE 暂存的本地定向测试验证实时事件与最终 Base64 正文完全一致，现有 H2 模块回归通过；整进程峰值仍待测量。
+2026-10-22 桌面增量验证：Rust 桌面 crate 编译、前端类型检查和生产构建通过；前端原生命令契约测试验证 JSON/HAR 分块、偏移与失败中止。本机曾在启动 Rust 桌面测试前移除其二进制，[最新功能分支 Check](https://github.com/godstealer/http-capture/actions/runs/39789633389) 的 Windows runner 已执行并通过该定向测试，Linux、macOS、Windows 和前端任务全部成功；目标机器原生文件选择仍需实机验收。H2 SSE 暂存的本地定向测试验证实时事件与最终 Base64 正文完全一致，现有 H2 模块回归通过；整进程峰值仍待测量。
