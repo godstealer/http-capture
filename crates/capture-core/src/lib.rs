@@ -8,6 +8,7 @@ pub mod audit;
 pub mod fault_rules;
 pub mod response_rewrite;
 mod body_spool;
+mod body_base64;
 mod capture_tls;
 mod traffic_origin;
 mod traffic_process;
@@ -196,7 +197,7 @@ impl Engine {
         let security=self.certificates.security(&url::Url::parse(&flow.request.url)?)?;
         let send = certificates::CURRENT.scope(security,sse::UPDATES.scope(context, self.send_engines.send_via(&flow.request, route)));
         tokio::pin!(send);
-        let mut body = Vec::new();
+        let mut body = body_base64::GrowingBase64::default();
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
         let mut dirty = false;
         let mut completed = None;
@@ -215,10 +216,9 @@ impl Engine {
                             flow.notes.push("SSE 接收中".into());
                             flow.notes.push("SSE 实时流：最多 300 秒 / 8 MiB；停止或超限保留已接收正文。".into());
                         }
-                        sse::Event::Data(data) => body.extend_from_slice(data),
+                        sse::Event::Data(data) => body.append(data),
                     }
-                    use base64::Engine as _;
-                    if let Some(response) = &mut flow.response { response.body_base64 = base64::engine::general_purpose::STANDARD.encode(&body).into(); }
+                    if let Some(response) = &mut flow.response { response.body_base64 = body.snapshot().into(); }
                     dirty = true;
                     sse::downstream(event).await?;
                 }

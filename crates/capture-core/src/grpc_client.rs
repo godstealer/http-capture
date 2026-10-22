@@ -1,31 +1,11 @@
 //! Interactive native gRPC sessions. Request half-close is independent of response completion.
-use crate::{Engine,model::*,http1::*};
+use crate::{Engine,model::*,http1::*,body_base64::GrowingBase64};
 use anyhow::{Result,ensure};
 use base64::{Engine as _,engine::general_purpose::STANDARD};
 use std::{sync::{Arc,Mutex},collections::HashMap,time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
 use tokio::sync::{mpsc,oneshot};
 use bytes::Bytes;
 struct Action{body:Vec<u8>,end:bool,ack:oneshot::Sender<Result<(),String>>}
-#[derive(Default)]
-struct GrowingBase64 { encoded:String, pending:Vec<u8> }
-impl GrowingBase64 {
- fn append(&mut self, bytes:&[u8]) {
-  let mut remaining=bytes;
-  if !self.pending.is_empty() {
-   let take=(3-self.pending.len()).min(remaining.len());
-   self.pending.extend_from_slice(&remaining[..take]);remaining=&remaining[take..];
-   if self.pending.len()==3 {self.encoded.push_str(&STANDARD.encode(&self.pending));self.pending.clear();}
-  }
-  let complete=remaining.len()/3*3;
-  if complete>0 {self.encoded.push_str(&STANDARD.encode(&remaining[..complete]));}
-  self.pending.extend_from_slice(&remaining[complete..]);
- }
- fn snapshot(&self)->String {
-  let mut encoded=self.encoded.clone();
-  if !self.pending.is_empty(){encoded.push_str(&STANDARD.encode(&self.pending));}
-  encoded
- }
-}
 #[derive(Default)]pub struct Sessions(Mutex<HashMap<String,mpsc::Sender<Action>>>);
 struct Abort(tokio::task::JoinHandle<Result<()>>);
 impl Drop for Abort{fn drop(&mut self){self.0.abort()}}
@@ -96,22 +76,4 @@ async fn drive(engine:Arc<Engine>,flow:Arc<Mutex<Flow>>,initial:Vec<u8>,half_clo
   let trailers=recv.trailers().await?.map(|m|crate::multiplex::headers(&m)).unwrap_or_default();flow.lock().unwrap().response.as_mut().unwrap().trailers=trailers;Ok::<(),anyhow::Error>(())
  };tokio::pin!(receiving);
  tokio::select!{result=&mut receiving=>result,result=&mut upload.0=>{result??;receiving.await}}
-}
-
-#[cfg(test)]
-mod tests {
- use super::*;
- #[test]
- fn growing_base64_snapshots_match_whole_body_across_split_boundaries() {
-  let source:Vec<u8>=(0..1027).map(|n|(n%256) as u8).collect();
-  for chunk_size in [1,2,3,4,5,7,64,257] {
-   let mut growing=GrowingBase64::default();let mut expected=Vec::new();
-   assert_eq!(growing.snapshot(),"");
-   for chunk in source.chunks(chunk_size) {
-    growing.append(chunk);expected.extend_from_slice(chunk);
-    assert_eq!(growing.snapshot(),STANDARD.encode(&expected),"chunk size {chunk_size}, length {}",expected.len());
-   }
-   growing.append(&[]);assert_eq!(growing.snapshot(),STANDARD.encode(&expected));
-  }
- }
 }
