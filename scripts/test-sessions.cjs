@@ -9,3 +9,14 @@ assert.deepEqual(m.exports.readSession(JSON.stringify({format:'http-capture-sess
 assert.throws(()=>m.exports.readSession('{}'));
 entry.response.content.encoding='unsupported';assert.throws(()=>m.exports.readSession(JSON.stringify({log:{entries:[entry]}})));
 console.log('HAR import and session round-trip: passed');
+(async()=>{
+ global.window={};
+ let written='',closed=false,aborted=false,reads=0;
+ window.showSaveFilePicker=async()=>({name:'capture.json',createWritable:async()=>({write:async blob=>{written+=await blob.text();reads++;},close:async()=>{closed=true},abort:async()=>{aborted=true}})});
+ assert.match(await m.exports.saveSession([rows[0],rows[0]],'json'),/capture.json/);
+ assert.deepEqual(m.exports.readSession(written),[rows[0],rows[0]]);
+ assert.equal(reads,4);assert.equal(closed,true);assert.equal(aborted,false);
+ window.showSaveFilePicker=async()=>({name:'failed.json',createWritable:async()=>({write:async()=>{throw Error('disk full')},close:async()=>assert.fail('closed failed export'),abort:async()=>{aborted=true}})});
+ await assert.rejects(m.exports.saveSession(rows,'json'),/disk full/);assert.equal(aborted,true);
+ console.log('Session JSON picker streams one complete record at a time and aborts failed exports.');
+})().catch(error=>{console.error(error);process.exitCode=1});
