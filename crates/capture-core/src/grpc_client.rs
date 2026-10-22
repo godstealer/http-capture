@@ -6,6 +6,26 @@ use std::{sync::{Arc,Mutex},collections::HashMap,time::{Duration,Instant,SystemT
 use tokio::sync::{mpsc,oneshot};
 use bytes::Bytes;
 struct Action{body:Vec<u8>,end:bool,ack:oneshot::Sender<Result<(),String>>}
+#[derive(Default)]
+struct GrowingBase64 { encoded:String, pending:Vec<u8> }
+impl GrowingBase64 {
+ fn append(&mut self, bytes:&[u8]) {
+  let mut remaining=bytes;
+  if !self.pending.is_empty() {
+   let take=(3-self.pending.len()).min(remaining.len());
+   self.pending.extend_from_slice(&remaining[..take]);remaining=&remaining[take..];
+   if self.pending.len()==3 {self.encoded.push_str(&STANDARD.encode(&self.pending));self.pending.clear();}
+  }
+  let complete=remaining.len()/3*3;
+  if complete>0 {self.encoded.push_str(&STANDARD.encode(&remaining[..complete]));}
+  self.pending.extend_from_slice(&remaining[complete..]);
+ }
+ fn snapshot(&self)->String {
+  let mut encoded=self.encoded.clone();
+  if !self.pending.is_empty(){encoded.push_str(&STANDARD.encode(&self.pending));}
+  encoded
+ }
+}
 #[derive(Default)]pub struct Sessions(Mutex<HashMap<String,mpsc::Sender<Action>>>);
 struct Abort(tokio::task::JoinHandle<Result<()>>);
 impl Drop for Abort{fn drop(&mut self){self.0.abort()}}
@@ -58,21 +78,40 @@ async fn drive(engine:Arc<Engine>,flow:Arc<Mutex<Flow>>,initial:Vec<u8>,half_clo
  let (response,mut stream)=sender.ready().await?.send_request(head,false)?;
  let upload_engine=engine.clone();let upload_flow=flow.clone();
  let mut upload=Abort(tokio::spawn(async move{
-  crate::multiplex::send_h2_chunk(&mut stream,Bytes::from(initial.clone()),half_close).await?;
+  let mut all=GrowingBase64::default();all.append(&initial);
+  crate::multiplex::send_h2_chunk(&mut stream,Bytes::from(initial),half_close).await?;
   if half_close{return Ok(())}
-  let mut all=initial;
   while let Some(action)=rx.recv().await{
-   let result=crate::multiplex::send_h2_chunk(&mut stream,Bytes::from(action.body.clone()),action.end).await;
-   match result{Ok(())=>{all.extend_from_slice(&action.body);let mut f=upload_flow.lock().unwrap();f.request.body_base64=STANDARD.encode(&all).into();save(&upload_engine,&f)?;let _=action.ack.send(Ok(()));},Err(e)=>{let _=action.ack.send(Err(e.to_string()));return Err(e)}}
+   all.append(&action.body);
+   let result=crate::multiplex::send_h2_chunk(&mut stream,Bytes::from(action.body),action.end).await;
+   match result{Ok(())=>{let mut f=upload_flow.lock().unwrap();f.request.body_base64=all.snapshot().into();save(&upload_engine,&f)?;let _=action.ack.send(Ok(()));},Err(e)=>{let _=action.ack.send(Err(e.to_string()));return Err(e)}}
    if action.end{return Ok(())}
   }Ok(())
  }));
  let receiving=async{
   let response=response.await?;let status=response.status().as_u16();let headers=crate::multiplex::headers(response.headers());
   {let mut f=flow.lock().unwrap();f.state="receiving".into();f.response=Some(CapturedResponse{trailers:vec![],status,version:"HTTP/2".into(),headers,body_base64:Default::default(),raw_head_base64:None,tls_version:details.as_ref().and_then(|d|d.version.clone()),upstream_tls:details,sent_request_headers:Some(sent)});save(&engine,&f)?;}
-  let mut recv=response.into_body();let mut body=Vec::new();
-  while let Some(chunk)=recv.data().await{let chunk=chunk?;recv.flow_control().release_capacity(chunk.len())?;body.extend_from_slice(&chunk);let mut f=flow.lock().unwrap();f.response.as_mut().unwrap().body_base64=STANDARD.encode(&body).into();save(&engine,&f)?;}
+  let mut recv=response.into_body();let mut body=GrowingBase64::default();
+  while let Some(chunk)=recv.data().await{let chunk=chunk?;recv.flow_control().release_capacity(chunk.len())?;body.append(&chunk);let mut f=flow.lock().unwrap();f.response.as_mut().unwrap().body_base64=body.snapshot().into();save(&engine,&f)?;}
   let trailers=recv.trailers().await?.map(|m|crate::multiplex::headers(&m)).unwrap_or_default();flow.lock().unwrap().response.as_mut().unwrap().trailers=trailers;Ok::<(),anyhow::Error>(())
  };tokio::pin!(receiving);
  tokio::select!{result=&mut receiving=>result,result=&mut upload.0=>{result??;receiving.await}}
+}
+
+#[cfg(test)]
+mod tests {
+ use super::*;
+ #[test]
+ fn growing_base64_snapshots_match_whole_body_across_split_boundaries() {
+  let source:Vec<u8>=(0..1027).map(|n|(n%256) as u8).collect();
+  for chunk_size in [1,2,3,4,5,7,64,257] {
+   let mut growing=GrowingBase64::default();let mut expected=Vec::new();
+   assert_eq!(growing.snapshot(),"");
+   for chunk in source.chunks(chunk_size) {
+    growing.append(chunk);expected.extend_from_slice(chunk);
+    assert_eq!(growing.snapshot(),STANDARD.encode(&expected),"chunk size {chunk_size}, length {}",expected.len());
+   }
+   growing.append(&[]);assert_eq!(growing.snapshot(),STANDARD.encode(&expected));
+  }
+ }
 }
