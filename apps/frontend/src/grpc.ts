@@ -20,10 +20,27 @@ export function prepareGrpc(draft:RequestDraft,method:pb.Method,text:string):Req
  headers.push({name:'content-type',value:'application/grpc+proto'},{name:'te',value:'trailers'},{name:'grpc-accept-encoding',value:'identity,gzip'});
  return {...draft,method:'POST',engine:'h2',pseudoHeaders:[],url:url.toString(),headers,bodyBase64:base64(encodeMessage(method,text))};
 }
+const MAX_GRPC_DECODED_BYTES=8*1024*1024;
+async function decodeGzipMessage(data:Uint8Array,limit:number){
+ const stream=new Blob([new Uint8Array(data).buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+ const reader=stream.getReader();const chunks:Uint8Array[]=[];let size=0;
+ try {
+  while(true){const {done,value}=await reader.read();if(done)break;
+   size+=value.length;
+   if(size>limit){try{await reader.cancel()}catch{}throw Error('gRPC 解压后正文超过 8 MiB，请查看 Base64 或导出原始字节');}
+   chunks.push(value);
+  }
+ }finally{reader.releaseLock();}
+ const result=new Uint8Array(size);let offset=0;
+ for(const chunk of chunks){result.set(chunk,offset);offset+=chunk.length;}
+ return result;
+}
 export async function decodeMessages(body:string,method:pb.Method|undefined,headers:Header[],request=false,partial=false){
- const result=[];method?.resolve();const type=request?method?.resolvedRequestType:method?.resolvedResponseType;
+ const result=[];method?.resolve();const type=request?method?.resolvedRequestType:method?.resolvedResponseType;let decodedBytes=0;
  for(const message of frames(bytes(body),partial)){let data=message.data;
-  if(message.compressed){const encoding=headers.find(h=>h.name.toLowerCase()==='grpc-encoding')?.value;if(encoding!=='gzip')throw Error('Unsupported gRPC message encoding: '+encoding);const stream=new Blob([new Uint8Array(data).buffer]).stream().pipeThrough(new DecompressionStream('gzip'));data=new Uint8Array(await new Response(stream).arrayBuffer());}
+  if(message.compressed){const encoding=headers.find(h=>h.name.toLowerCase()==='grpc-encoding')?.value;if(encoding!=='gzip')throw Error('Unsupported gRPC message encoding: '+encoding);data=await decodeGzipMessage(data,MAX_GRPC_DECODED_BYTES-decodedBytes);}
+  if(data.length>MAX_GRPC_DECODED_BYTES-decodedBytes)throw Error('gRPC 解码正文超过 8 MiB，请查看 Base64 或导出原始字节');
+  decodedBytes+=data.length;
   result.push(type?type.toObject(type.decode(data),{longs:String,enums:String,bytes:String,defaults:true}):rawFields(data));
  }return result;
 }

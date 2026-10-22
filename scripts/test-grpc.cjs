@@ -8,6 +8,10 @@ assert.equal((await g.decodeMessages(g.base64(data),undefined,[]))[0][0].field,1
 assert.equal(g.grpcStatus([],[{name:'grpc-status',value:'7'},{name:'grpc-message',value:'no%20permission'}]).name,'PERMISSION_DENIED');assert.equal(g.grpcStatus([]).code,undefined);
 const gzip=require('node:zlib').gzipSync(data.subarray(5));const compressed=g.frame(gzip);compressed[0]=1;
 assert.equal((await g.decodeMessages(g.base64(compressed),method,[{name:'grpc-encoding',value:'gzip'}]))[0].text,'你好');
+const oversized=require('node:zlib').gzipSync(Buffer.alloc(8*1024*1024+1));const oversizedFrame=g.frame(oversized);oversizedFrame[0]=1;
+await assert.rejects(()=>g.decodeMessages(g.base64(oversizedFrame),method,[{name:'grpc-encoding',value:'gzip'}]),/超过 8 MiB/);
+const large=g.encodeMessage(method,JSON.stringify({text:'x'.repeat(4_300_000)}));
+await assert.rejects(()=>g.decodeMessages(g.base64(Buffer.concat([large,large])),method,[]),/超过 8 MiB/);
 console.log('gRPC: proto services, framing, JSON/int64/bytes, gzip, schema-free fields, malformed framing and status passed.');})().catch(e=>{console.error(e);process.exitCode=1});
 
 const envModule={exports:{}};new Function('module','exports','require',buildSync({entryPoints:['apps/frontend/src/grpcEnvironment.ts'],bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text)(envModule,envModule.exports,require);
