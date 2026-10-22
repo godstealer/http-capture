@@ -155,6 +155,45 @@ mod response_spool_tests {
     }
 
     #[tokio::test]
+    async fn h2_sse_spool_preserves_streamed_events_and_final_body() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (client_io, server_io) = tokio::io::duplex(16384);
+            let bytes: Vec<u8> = (0..100_003).map(|n| (n % 251) as u8).collect();
+            let expected = bytes.clone();
+            let server = tokio::spawn(async move {
+                let mut connection = h2::server::handshake(server_io).await.unwrap();
+                let (request, mut respond) = connection.accept().await.unwrap().unwrap();
+                assert_eq!(request.uri().path(), "/events");
+                let worker = tokio::spawn(async move {
+                    let mut send = respond.send_response(http::Response::builder().status(200).body(()).unwrap(), false).unwrap();
+                    let chunks: Vec<_> = expected.chunks(25_001).collect();
+                    for (index, chunk) in chunks.iter().enumerate() {
+                        send_h2_chunk(&mut send, Bytes::copy_from_slice(chunk), index + 1 == chunks.len()).await.unwrap();
+                    }
+                });
+                while connection.accept().await.is_some() {}
+                worker.await.unwrap();
+            });
+            let (mut sender, connection) = h2::client::handshake(client_io).await.unwrap();
+            let driver = tokio::spawn(connection);
+            let (response, _) = sender.send_request(http::Request::builder().uri("https://example.test/events").body(()).unwrap(), true).unwrap();
+            let mut response = response.await.unwrap().into_body();
+            let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+            let context = crate::sse::Context { tx, started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)) };
+            let encoded = crate::sse::UPDATES.scope(context, async {
+                recv_h2_sse_body_spooled(&mut response).await.unwrap().into_base64().await.unwrap()
+            }).await;
+            assert_eq!(encoded, STANDARD.encode(&bytes));
+            let mut observed = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                match event { crate::sse::Event::Data(chunk) => observed.extend_from_slice(&chunk), _ => panic!("unexpected SSE event") }
+            }
+            assert_eq!(observed, bytes);
+            driver.abort();drop(sender);server.await.unwrap();
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn head_no_content_and_not_modified_keep_headers_without_payload() {
         for (method, status) in [("HEAD", 200), ("GET", 204), ("GET", 304)] {
             let mut original = flow(method, status, "YWJj");
@@ -452,7 +491,7 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
     let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: Default::default(), raw_head_base64: None }).await?;
     let mut recv = response.into_body();
     let body_base64 = if streaming {
-        STANDARD.encode(recv_h2_body_observed(&mut recv, true).await?)
+        recv_h2_sse_body_spooled(&mut recv).await?.into_base64().await?
     } else {
         recv_h2_body_spooled(&mut recv).await?.into_base64().await?
     };
@@ -468,6 +507,17 @@ async fn recv_h2_body_spooled(stream: &mut h2::RecvStream) -> Result<BodySpool> 
         // Do not advertise space for more DATA until the current bytes are in
         // bounded memory or on disk. Disk pressure therefore propagates to h2.
         stream.flow_control().release_capacity(chunk.len())?;
+    }
+    Ok(body)
+}
+async fn recv_h2_sse_body_spooled(stream: &mut h2::RecvStream) -> Result<BodySpool> {
+    let mut body = BodySpool::empty();
+    while let Some(chunk) = stream.data().await {
+        let chunk = chunk?;
+        ensure!(chunk.len() as u64 <= MAX_BODY as u64 - body.len, "SSE body exceeds 8 MiB limit");
+        body.append(&chunk).await?;
+        stream.flow_control().release_capacity(chunk.len())?;
+        crate::sse::emit(crate::sse::Event::Data(chunk.to_vec())).await?;
     }
     Ok(body)
 }
