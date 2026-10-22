@@ -29,6 +29,9 @@ jobs:
       - run: cargo check --locked -p capture-service
       - run: cargo test --locked -p capture-service --bin capture-service
       - run: cargo test --locked -p capture-service --test mcp_stdio
+      - name: Verify native session export on Windows
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p http-capture-desktop --bin http-capture session_export::tests
   frontend:
     runs-on: ubuntu-latest
     steps:
