@@ -1,6 +1,6 @@
-# HTTP Capture 0.1.34 正式更新：证书管理与 Chrome 155（Windows/Linux，2026-10-21）
+# HTTP Capture 0.1.34 正式更新：证书管理与 Chrome 155（2026-10-21；Mac 补发于 2026-10-22）
 
-Windows/Linux 正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 Check #34。该来源的前端、Windows、Linux 检查通过；[分平台构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和各 10 项原生更新测试通过。公开 11 个附件、9 项 SHA256、三个更新包及版本注释签名已核验。macOS 托管构建机容量不足，按用户要求延后补发；完整自动更新频道和 GitHub Latest 暂时保持 0.1.33。 上一完整四平台正式版为 [0.1.33](release-2026-10-20-body-preview.md)。
+正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 四平台已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 [Check #34](https://github.com/godstealer/http-capture/actions/runs/39621202898)；Mac 源码检查现已通过。[Windows/Linux 构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和 [Mac 双架构构建](https://github.com/godstealer/http-capture/actions/runs/39700840500) 均通过，每个平台 10 项原生更新测试通过。22 个公开附件、17 项 SHA256、五个更新包及版本注释签名、兼容更新频道一致性已独立核验；自动更新频道与 GitHub Latest 已推进至 0.1.34。
 
 ## 更新内容
 
@@ -38,8 +38,8 @@ HTTP 重放的 TLS 页选择 **httpcloak → Chrome → 155**，或 UA 为 Chrom
 
 ## 发布记录
 
-Windows/Linux 正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 Check #34。该来源的前端、Windows、Linux 检查通过；[分平台构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和各 10 项原生更新测试通过。公开 11 个附件、9 项 SHA256、三个更新包及版本注释签名已核验。macOS 托管构建机容量不足，按用户要求延后补发；完整自动更新频道和 GitHub Latest 暂时保持 0.1.33。
+正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 四平台已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 [Check #34](https://github.com/godstealer/http-capture/actions/runs/39621202898)；Mac 源码检查现已通过。[Windows/Linux 构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和 [Mac 双架构构建](https://github.com/godstealer/http-capture/actions/runs/39700840500) 均通过，每个平台 10 项原生更新测试通过。22 个公开附件、17 项 SHA256、五个更新包及版本注释签名、兼容更新频道一致性已独立核验；自动更新频道与 GitHub Latest 已推进至 0.1.34。
 
-发布时间：`2026-10-21T15:47:45Z`。Windows 下载 `windows-x64-HTTP-Capture_0.1.34_x64-setup.exe`；Linux 按需要选择 deb、AppImage 或 portable。当前请手动下载安装；Mac 补发前不推进全局自动更新。自动化通过不替代上面的实机验收。
+Windows/Linux 首发时间：`2026-10-21T15:47:45Z`；Mac 补发于 2026-10-22。Windows 下载 `windows-x64-HTTP-Capture_0.1.34_x64-setup.exe`；Mac 根据芯片选择 `macos-arm64` 或 `macos-x64` DMG；Linux 按需要选择 deb、AppImage 或 portable。完整自动更新已开放，自动化通过不替代上面的实机验收。
 
 后续开发与待验项目见[功能路线图](roadmap.md)，打包与更新流程见[发布说明](releases.md)。

@@ -2,7 +2,7 @@
 
 跨平台 HTTP/HTTPS 调试代理。Rust/Tokio 内核，React 界面，Tauri 桌面外壳。
 
-状态更新：2026-10-21。Windows/Linux 正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 Check #34。该来源的前端、Windows、Linux 检查通过；[分平台构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和各 10 项原生更新测试通过。公开 11 个附件、9 项 SHA256、三个更新包及版本注释签名已核验。macOS 托管构建机容量不足，按用户要求延后补发；完整自动更新频道和 GitHub Latest 暂时保持 0.1.33。 本版包含三类证书管理和 httpcloak v1.7.3 / Chrome 155，详见[更新说明](docs/release-2026-10-21-certificates.md)；Mac 用户继续使用 [0.1.33](docs/release-2026-10-20-body-preview.md)。
+状态更新：2026-10-22。正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 四平台已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 [Check #34](https://github.com/godstealer/http-capture/actions/runs/39621202898)；Mac 源码检查现已通过。[Windows/Linux 构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和 [Mac 双架构构建](https://github.com/godstealer/http-capture/actions/runs/39700840500) 均通过，每个平台 10 项原生更新测试通过。22 个公开附件、17 项 SHA256、五个更新包及版本注释签名、兼容更新频道一致性已独立核验；自动更新频道与 GitHub Latest 已推进至 0.1.34。 本版包含三类证书管理和 httpcloak v1.7.3 / Chrome 155，详见[更新说明](docs/release-2026-10-21-certificates.md)；安装与业务验收继续单列。
 
 公开源码：[godstealer/http-capture](https://github.com/godstealer/http-capture)。功能实现、自动化验证和实机验收分别记录，不以编译通过代替跨平台可用。
 

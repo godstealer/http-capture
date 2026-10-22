@@ -1,6 +1,6 @@
 # 独立发送引擎与 httpcloak
 
-当前开发状态（2026-10-21）：httpcloak 已升级到 **v1.7.3**，真实能力清单支持 Chrome **143–155**、Firefox **133、148**，本增量已随 Windows/Linux 0.1.34 发布，macOS 延后补发；0.1.33 附带的仍为 v1.7.2。wreq/httpcloak 已接入 HTTP/SOCKS5，httpcloak 默认浏览器预设按 ALPN 兼容 H2/H1。原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 有既有实测，TUN H3 接管仍未验收且暂缓。以下按日期保留历史验证；早期失败或不支持项不代表当前能力，真实安装和业务流程仍分别验收。
+当前开发状态（2026-10-22）：httpcloak 已升级到 **v1.7.3**，真实能力清单支持 Chrome **143–155**、Firefox **133、148**，本增量已随 0.1.34 四平台发布；0.1.33 附带的仍为 v1.7.2。wreq/httpcloak 已接入 HTTP/SOCKS5，httpcloak 默认浏览器预设按 ALPN 兼容 H2/H1。原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 有既有实测，TUN H3 接管仍未验收且暂缓。以下按日期保留历史验证；早期失败或不支持项不代表当前能力，真实安装和业务流程仍分别验收。
 
 
 ## 已完成的拆分
@@ -43,7 +43,7 @@ go test -mod=readonly ./...
 
 ## 边界与后续任务
 
-2026-10-21 v1.7.3 升级验证：Go 模块校验、helper 全部回归通过；新增 153/154/155 继承保护和 155 的实际 H2 Cookie/ALPN H1-H2 测试。Windows 本地 helper 已重建，其构建信息确认 v1.7.3，能力清单最高版本 155。Rust→Go 四项集成测试通过，覆盖 UA 155 跟随、latest、显式 155、显式 153/150，以及 UA/Accept/交错重复字段保持。Windows/Linux 安装包、原生更新测试及公开附件核验已通过；Mac 补发、实际运行和业务网站验收仍待处理。
+2026-10-21 v1.7.3 升级验证：Go 模块校验、helper 全部回归通过；新增 153/154/155 继承保护和 155 的实际 H2 Cookie/ALPN H1-H2 测试。Windows 本地 helper 已重建，其构建信息确认 v1.7.3，能力清单最高版本 155。Rust→Go 四项集成测试通过，覆盖 UA 155 跟随、latest、显式 155、显式 153/150，以及 UA/Accept/交错重复字段保持。四平台安装包、每个平台 10 项原生更新测试及公开附件签名核验已通过；实际运行和业务网站验收仍待处理。
 
 原生 h3 引擎更新（2026-10-01）：已支持 SOCKS5 UDP ASSOCIATE 出站及代理端目标 DNS，外部 cloudflare-quic.com 经本机 SOCKS5 返回 200 / HTTP3 / TLS1.3。HTTP CONNECT 不支持此路径；httpcloak 的 H3 能力仍未接入。详情见 [实测记录](tls-components-test.md)。
 
