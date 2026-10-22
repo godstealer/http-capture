@@ -48,6 +48,28 @@ async fn manual_sse_is_live_and_cancel_preserves_partial_body() {
     }
 }
 #[tokio::test]
+async fn completed_sse_saves_every_event_in_final_body() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/events", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        http1::read_head(&mut BufReader::new(&mut socket)).await.unwrap();
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").await.unwrap();
+        for index in 0..64 {
+            socket.write_all(format!("data: {index}\n\n").as_bytes()).await.unwrap();
+            tokio::task::yield_now().await;
+        }
+    });
+    let dir = tempfile::tempdir().unwrap(); let engine = Engine::open(dir.path()).unwrap();
+    let flow = tokio::time::timeout(Duration::from_secs(5), engine.replay(draft(url), None, None)).await.unwrap().unwrap();
+    assert_eq!(flow.state, "completed");
+    let expected: String = (0..64).map(|index| format!("data: {index}\n\n")).collect();
+    assert_eq!(STANDARD.decode(flow.response.unwrap().body_base64).unwrap(), expected.as_bytes());
+    let saved = engine.store.get(&flow.id).unwrap().unwrap();
+    assert_eq!(STANDARD.decode(saved.response.unwrap().body_base64).unwrap(), expected.as_bytes());
+    server.await.unwrap();
+}
+#[tokio::test]
 async fn h1_capture_forwards_before_eof_and_can_stop_one_stream() {
     let dir = tempfile::tempdir().unwrap(); let engine = Engine::open(dir.path()).unwrap();
     let (url, server) = origin(true).await;

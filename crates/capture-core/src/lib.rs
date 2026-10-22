@@ -202,7 +202,10 @@ impl Engine {
         let mut dirty = false;
         let mut completed = None;
         loop {
-            if completed.is_some() && rx.is_empty() { return completed.take().unwrap(); }
+            if completed.is_some() && rx.is_empty() {
+                if let Some(response) = &mut flow.response { response.body_base64 = body.snapshot().into(); }
+                return completed.take().unwrap();
+            }
             tokio::select! {
                 biased;
                 Some(event) = rx.recv() => {
@@ -218,12 +221,16 @@ impl Engine {
                         }
                         sse::Event::Data(data) => body.append(data),
                     }
-                    if let Some(response) = &mut flow.response { response.body_base64 = body.snapshot().into(); }
                     dirty = true;
                     sse::downstream(event).await?;
                 }
                 result = &mut send, if completed.is_none() => completed = Some(result),
-                _ = tick.tick(), if dirty => { self.store.insert(flow)?; if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); } dirty = false; }
+                _ = tick.tick(), if dirty => {
+                    if let Some(response) = &mut flow.response { response.body_base64 = body.snapshot().into(); }
+                    self.store.insert(flow)?;
+                    if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }
+                    dirty = false;
+                }
             }
         }
     }

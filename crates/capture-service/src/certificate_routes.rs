@@ -24,7 +24,8 @@ pub(super) fn router()->Router<Shared>{Router::new().route("/certificates",get(l
   let body=body.to_string();let auth=if auth{"Authorization: Bearer certificate-test\r\n"}else{""};let mut socket=tokio::net::TcpStream::connect(address).await.unwrap();socket.write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();let mut bytes=vec![];socket.read_to_end(&mut bytes).await.unwrap();let split=bytes.windows(4).position(|v|v==b"\r\n\r\n").unwrap();(std::str::from_utf8(&bytes[..split]).unwrap().split_whitespace().nth(1).unwrap().parse().unwrap(),serde_json::from_slice(&bytes[split+4..]).unwrap_or(Value::Null))
  }
  #[tokio::test]async fn certificate_api_is_authenticated_versioned_and_never_returns_private_material(){
-  tokio::time::timeout(std::time::Duration::from_secs(20),async{
+  // Certificate generation and key import compete with other crypto tests on Windows CI.
+  tokio::time::timeout(std::time::Duration::from_secs(90),async{
    let dir=tempfile::tempdir().unwrap();let engine=capture_core::Engine::open(dir.path()).unwrap();let state=crate::Service::new(engine.clone(),"certificate-test".into()).unwrap();let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let server=tokio::spawn(async move{axum::serve(listener,crate::router(state)).await.unwrap()});
    assert_eq!(call(address,"GET","/certificates",Value::Null,false).await.0,401);
    let(_,snapshot)=call(address,"GET","/certificates",Value::Null,true).await;

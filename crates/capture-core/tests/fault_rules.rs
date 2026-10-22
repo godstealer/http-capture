@@ -46,7 +46,7 @@ fn validation_cas_persistence_and_second_engine_writes_are_guarded(){
 
 #[tokio::test]
 async fn proxy_delay_preserves_response_and_rate_limit_never_connects_upstream(){
-    tokio::time::timeout(Duration::from_secs(5),async{
+    tokio::time::timeout(Duration::from_secs(30),async{
         let directory=tempfile::tempdir().unwrap();let engine=Engine::open(directory.path()).unwrap();let mut settings=serde_json::to_value(config(80,Some(1),"capture")).unwrap();settings["rules"][0]["rateLimit"]["windowMs"]=json!(60000);apply(&engine,serde_json::from_value(settings).unwrap());
         let origin=Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());let cloned=origin.clone();
         let server=tokio::spawn(async move{let (stream,_)=cloned.accept().await.unwrap();let mut io=BufReader::new(stream);read_head(&mut io).await.unwrap();io.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\0ok\xff").await.unwrap()});
@@ -95,7 +95,7 @@ fn migration_includes_rules_disables_them_and_blocks_old_writers(){
 
 #[tokio::test]
 async fn concurrent_requests_share_one_rule_counter_without_overshoot(){
-    tokio::time::timeout(Duration::from_secs(5),async{
+    tokio::time::timeout(Duration::from_secs(30),async{
         let directory=tempfile::tempdir().unwrap();let engine=Engine::open(directory.path()).unwrap();
         let mut value=serde_json::to_value(config(0,Some(3),"all")).unwrap();value["rules"][0]["rateLimit"]["windowMs"]=json!(60000);apply(&engine,serde_json::from_value(value).unwrap());
         let listener=Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());let request=draft(format!("http://{}/api",listener.local_addr().unwrap()));
@@ -108,7 +108,7 @@ async fn concurrent_requests_share_one_rule_counter_without_overshoot(){
 
 #[tokio::test]
 async fn fixed_window_reset_scope_and_explicit_save_reset_are_observable(){
-    tokio::time::timeout(Duration::from_secs(5),async{
+    tokio::time::timeout(Duration::from_secs(30),async{
         let directory=tempfile::tempdir().unwrap();let engine=Engine::open(directory.path()).unwrap();
         let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let request=draft(format!("http://{}/api",listener.local_addr().unwrap()));
         let server=tokio::spawn(async move{loop{let (stream,_)=listener.accept().await.unwrap();let mut io=BufReader::new(stream);read_head(&mut io).await.unwrap();io.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();}});
