@@ -116,6 +116,9 @@ final class TunnelController: ObservableObject {
     @Published private(set) var bodyNextOffset: Int?
     @Published private(set) var bodyTotalBytes = 0
     @Published private(set) var bodyLoading = false
+    @Published private(set) var replayLoading = false
+    @Published private(set) var replayError: String?
+    @Published var replayDraft: ManualRequestDraft?
     @Published private(set) var certificateURL: URL?
     @Published private(set) var blockingEnabled = false
     @Published private(set) var blockingRules: [BlockingRule] = []
@@ -131,6 +134,7 @@ final class TunnelController: ObservableObject {
     private var urlFilter = ""
     private var requestGeneration: UInt64 = 0
     private var detailGeneration: UInt64 = 0
+    private var replayGeneration: UInt64 = 0
     private var bodyOffsetHistory: [Int] = []
     private var blockingScope = "capture"
     private var responseConfig: [String: Any] = [:]
@@ -303,8 +307,55 @@ final class TunnelController: ObservableObject {
         showBodyPreview(variant, offset: offset, history: bodyOffsetHistory + [bodyOffset])
     }
 
+    func copySelectedRequest() {
+        guard let selectedFlow, !replayLoading else { return }
+        replayError = nil
+        do {
+            let copy = try RecordedRequestCopy(flow: selectedFlow)
+            replayGeneration &+= 1
+            replayLoading = true
+            readCopyChunk(copy, generation: replayGeneration)
+        } catch {
+            replayError = error.localizedDescription
+        }
+    }
+
+    private func readCopyChunk(_ copy: RecordedRequestCopy, generation: UInt64) {
+        guard replayGeneration == generation else { return }
+        if copy.offset == copy.byteLength {
+            do {
+                replayDraft = try copy.draft()
+                replayLoading = false
+            } catch {
+                replayError = error.localizedDescription
+                replayLoading = false
+            }
+            return
+        }
+        send(["method": "body_preview", "id": copy.id, "variant": "request",
+              "revision": copy.revision, "offset": copy.offset], onFailure: { [weak self] in
+            guard let self, self.replayGeneration == generation else { return }
+            self.replayLoading = false
+            self.replayError = self.message
+        }) { [weak self] value in
+            guard let self, self.replayGeneration == generation else { return }
+            do {
+                guard let chunk = value as? [String: Any] else {
+                    throw RecordedRequestCopy.CopyError.invalid("请求正文读取失败")
+                }
+                var next = copy
+                _ = try next.append(chunk)
+                self.readCopyChunk(next, generation: generation)
+            } catch {
+                self.replayError = error.localizedDescription
+                self.replayLoading = false
+            }
+        }
+    }
+
     func clearDetail() {
         detailGeneration &+= 1
+        replayGeneration &+= 1
         selectedDetail = ""
         detailOpen = false
         selectedFlow = nil
@@ -312,6 +363,9 @@ final class TunnelController: ObservableObject {
         bodyOffsetHistory = []
         bodyNextOffset = nil
         bodyLoading = false
+        replayLoading = false
+        replayError = nil
+        replayDraft = nil
     }
 
     func refreshBlocking() {

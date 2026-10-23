@@ -44,6 +44,37 @@ do {
                                          fileName: "large", mimeType: nil)
         preconditionFailure("超大文件应被拒绝")
     } catch RequestBodyCodec.BodyError.invalid(_) { }
+
+    let flow: [String: Any] = [
+        "id": "recorded", "bodyRevision": "run:1",
+        "request": ["method": "POST", "url": "https://example.test/upload", "headers": [
+            ["name": ":authority", "value": "example.test"],
+            ["name": "X-Test", "value": "one"],
+            ["name": "X-Test", "value": "two"],
+            ["name": "X-Ignored", "value": "off", "disabled": true]
+        ]],
+        "bodyReferences": ["request": ["byteLength": 3]]
+    ]
+    var copy = try RecordedRequestCopy(flow: flow)
+    expect(copy.headers == "X-Test: one\nX-Test: two", "请求头顺序或重复项丢失")
+    let firstComplete = try copy.append(["offset": 0, "totalBytes": 3,
+                                         "bodyBase64": "AP8=", "nextOffset": 2])
+    expect(!firstComplete, "第一页提前结束")
+    let lastComplete = try copy.append(["offset": 2, "totalBytes": 3,
+                                        "bodyBase64": "Cg==", "nextOffset": NSNull()])
+    expect(lastComplete, "末页未完成")
+    let replay = try copy.draft()
+    expect(replay.method == "POST" && replay.bodyMode == .base64 && replay.body == "AP8K",
+           "二进制请求复制后字节改变")
+    let largestBinary = Data(repeating: 255, count: RequestBodyCodec.maxBodyBytes)
+    let largestEncoded = try RequestBodyCodec.compose(mode: .base64,
+        text: largestBinary.base64EncodedString(), file: nil, fileName: nil, mimeType: nil)
+    expect(largestEncoded.bytes == largestBinary, "64 KiB 二进制正文无法通过 Base64 编辑器重发")
+    do {
+        var invalid = try RecordedRequestCopy(flow: flow)
+        _ = try invalid.append(["offset": 1, "totalBytes": 3, "bodyBase64": "AP8=", "nextOffset": 3])
+        preconditionFailure("不连续的正文分段应被拒绝")
+    } catch RecordedRequestCopy.CopyError.invalid(_) { }
     print("iOS request body codec: PASS")
 } catch {
     fatalError(error.localizedDescription)

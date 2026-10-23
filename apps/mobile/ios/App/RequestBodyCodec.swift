@@ -23,7 +23,10 @@ enum RequestBodyCodec {
 
     static func compose(mode: ManualBodyMode, text: String, file: Data?,
                         fileName: String?, mimeType: String?) throws -> PreparedRequestBody {
-        guard text.utf8.count <= maxBodyBytes else { throw BodyError.invalid("文本输入最多 64 KiB") }
+        let maxInputBytes = mode == .base64 ? 96 * 1024 : maxBodyBytes
+        guard text.utf8.count <= maxInputBytes else {
+            throw BodyError.invalid(mode == .base64 ? "Base64 输入最多 96 KiB" : "文本输入最多 64 KiB")
+        }
         let bytes: Data
         let contentType: String?
         var replace = false

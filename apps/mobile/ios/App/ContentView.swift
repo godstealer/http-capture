@@ -91,6 +91,12 @@ struct ContentView: View {
                     .toolbar { Button("关闭") { tunnel.clearDetail() } }
                     .safeAreaInset(edge: .bottom) {
                         VStack(spacing: 8) {
+                            Button("复制到新请求") { tunnel.copySelectedRequest() }
+                                .disabled(tunnel.replayLoading)
+                            if tunnel.replayLoading { ProgressView("正在读取完整请求正文…") }
+                            if let error = tunnel.replayError {
+                                Text(error).font(.footnote).foregroundStyle(.red)
+                            }
                             HStack {
                                 if tunnel.hasRequestBody {
                                     Button("请求正文") { tunnel.showBodyPreview("request") }
@@ -114,6 +120,9 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                         .background(.regularMaterial)
                     }
+                }
+                .sheet(item: $tunnel.replayDraft) { draft in
+                    ManualRequestView(draft: draft).environmentObject(tunnel)
                 }
             }
             .sheet(isPresented: $showingManualRequest) {
@@ -279,6 +288,14 @@ private struct ManualRequestView: View {
     @State private var fileMimeType: String?
     @State private var showingFileImporter = false
     @State private var inputError: String?
+
+    init(draft: ManualRequestDraft = .empty) {
+        _method = State(initialValue: draft.method)
+        _url = State(initialValue: draft.url)
+        _headers = State(initialValue: draft.headers)
+        _requestBody = State(initialValue: draft.body)
+        _bodyMode = State(initialValue: draft.bodyMode)
+    }
 
     var body: some View {
         NavigationStack {
