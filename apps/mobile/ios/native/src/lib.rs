@@ -279,12 +279,13 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
                 Some(value) => value.as_u64().ok_or("Invalid body offset")?,
                 None => 0,
             };
-            let chunk = capture
+            let mut chunk = capture
                 .runtime
                 .engine
                 .store
                 .read_body_at_revision(id, variant, revision, offset, 16 * 1024)
                 .map_err(|e| format!("{e:#}"))?;
+            chunk.align_utf8_boundary().map_err(|e| e.to_string())?;
             serde_json::to_value(chunk).map_err(|e| e.to_string())
         }
         "blocking" => serde_json::to_value(capture.runtime.engine.blocking.snapshot())
@@ -503,7 +504,10 @@ mod tests {
             stream.write_all(
                 b"HTTP/1.1 201 Created\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n",
             ).unwrap();
-            stream.write_all(&vec![b'a'; 20_000]).unwrap();
+            let mut response_body = vec![b'a'; 20_000];
+            response_body[16 * 1024 - 1] = 0xC3;
+            response_body[16 * 1024] = 0xA9;
+            stream.write_all(&response_body).unwrap();
         });
         let url = format!("http://127.0.0.1:{origin_port}/mobile");
         let sent = command(
@@ -526,14 +530,18 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        assert_eq!(body["text"].as_str().unwrap().len(), 16 * 1024);
-        assert_eq!(body["nextOffset"], 16 * 1024);
+        assert_eq!(body["text"].as_str().unwrap().len(), 16 * 1024 - 1);
+        assert_eq!(body["nextOffset"], 16 * 1024 - 1);
         let second_chunk = command(&serde_json::json!({
             "method":"body_preview","id":id,"variant":"response",
-            "revision":metadata["bodyRevision"],"offset":16 * 1024
+            "revision":metadata["bodyRevision"],"offset":16 * 1024 - 1
         }).to_string()).unwrap();
-        assert_eq!(second_chunk["text"].as_str().unwrap().len(), 20_000 - 16 * 1024);
-        assert_eq!(second_chunk["offset"], 16 * 1024);
+        assert!(second_chunk["text"].as_str().unwrap().starts_with("é"));
+        assert_eq!(
+            second_chunk["text"].as_str().unwrap().len(),
+            20_000 - (16 * 1024 - 1)
+        );
+        assert_eq!(second_chunk["offset"], 16 * 1024 - 1);
         assert!(second_chunk["nextOffset"].is_null());
         assert!(command(&serde_json::json!({
             "method":"body_preview","id":id,"variant":"response",

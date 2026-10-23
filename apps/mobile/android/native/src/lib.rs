@@ -254,12 +254,13 @@ fn body_preview(
         .lock()
         .map_err(|_| "Capture state is unavailable")?;
     let capture = current.as_ref().ok_or("Capture is not running")?;
-    let chunk = capture
+    let mut chunk = capture
         .runtime
         .engine
         .store
         .read_body_at_revision(id, variant, revision, offset, 16 * 1024)
         .map_err(|error| format!("{error:#}"))?;
+    chunk.align_utf8_boundary().map_err(|error| error.to_string())?;
     serde_json::to_value(chunk).map_err(|error| error.to_string())
 }
 

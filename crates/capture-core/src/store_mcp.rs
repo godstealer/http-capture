@@ -29,6 +29,25 @@ pub struct McpBodyChunk {
     pub text: Option<String>,
     pub next_offset: Option<u64>,
 }
+impl McpBodyChunk {
+    /// Leave an incomplete trailing UTF-8 character for the next bounded read.
+    /// Binary data and chunks beginning inside a character retain their Base64 view.
+    pub fn align_utf8_boundary(&mut self) -> Result<()> {
+        if self.text.is_some() || self.next_offset.is_none() {
+            return Ok(());
+        }
+        let bytes = STANDARD.decode(&self.body_base64)?;
+        if let Err(error) = std::str::from_utf8(&bytes) {
+            if error.error_len().is_none() && error.valid_up_to() > 0 {
+                let valid = error.valid_up_to();
+                self.text = Some(std::str::from_utf8(&bytes[..valid])?.to_owned());
+                self.body_base64 = STANDARD.encode(&bytes[..valid]);
+                self.next_offset = Some(self.offset + valid as u64);
+            }
+        }
+        Ok(())
+    }
+}
 impl Store {
     pub fn mcp_list_requests(&self, filter: McpRequestFilter) -> Result<McpRequestPage> {
         ensure!((1..=200).contains(&filter.limit), "limit must be between 1 and 200");
@@ -143,6 +162,37 @@ mod tests {
             }
         }
         assert!(store.mcp_read_body("body-1","request",0,65537).is_err());
+    }
+    #[test]
+    fn mobile_chunks_keep_utf8_characters_whole_without_changing_binary_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("test.db")).unwrap();
+        let mut body = vec![b'a'; 20_000];
+        body[16 * 1024 - 1] = 0xE4;
+        body[16 * 1024] = 0xB8;
+        body[16 * 1024 + 1] = 0xAD;
+        store.insert(&flow("utf8", &body)).unwrap();
+        let mut first = store.mcp_read_body("utf8", "request", 0, 16 * 1024).unwrap();
+        first.align_utf8_boundary().unwrap();
+        assert_eq!(first.next_offset, Some((16 * 1024 - 1) as u64));
+        assert_eq!(first.text.as_deref().unwrap().len(), 16 * 1024 - 1);
+        let mut second = store.mcp_read_body("utf8", "request", first.next_offset.unwrap(), 16 * 1024).unwrap();
+        second.align_utf8_boundary().unwrap();
+        assert!(second.text.as_deref().unwrap().starts_with("中"));
+        let mut restored = STANDARD.decode(first.body_base64).unwrap();
+        restored.extend(STANDARD.decode(second.body_base64).unwrap());
+        assert_eq!(restored, body);
+
+        let mut binary = McpBodyChunk {
+            offset: 0,
+            total_bytes: 3,
+            body_base64: STANDARD.encode([0xFF, 0xFE]),
+            text: None,
+            next_offset: Some(2),
+        };
+        binary.align_utf8_boundary().unwrap();
+        assert_eq!(binary.next_offset, Some(2));
+        assert!(binary.text.is_none());
     }
     #[test]
     fn legacy_inline_ranges_validate_tail_and_selected_bytes_without_decoding_unselected_payload(){

@@ -5,12 +5,15 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.database.Cursor;
 import android.net.VpnService;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.graphics.Typeface;
 import android.view.Gravity;
@@ -27,10 +30,13 @@ import android.widget.TextView;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.OutputStream;
+import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.CodingErrorAction;
@@ -83,12 +89,39 @@ public final class MainActivity extends Activity {
     private final Set<String> selectedApps = new HashSet<>();
     private static final int SAVE_CA_REQUEST = 1201;
     private static final int VPN_REQUEST = 1202;
+    private static final int PICK_REQUEST_FILE = 1203;
+    private static final int MAX_REQUEST_BODY = 1024 * 1024;
+    private static final String[] BODY_MODES = {
+        "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
+    };
+    private ManualRequestDraft pendingFileRequest;
+
+    private static final class ManualRequestDraft {
+        String method = "GET";
+        String url = "";
+        String headers = "";
+        String body = "";
+        int bodyMode;
+        Uri fileUri;
+        String fileName;
+    }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         if (state != null) {
             vpnPermissionPending = state.getBoolean("vpnPermissionPending", false);
             pendingVpnPort = state.getInt("pendingVpnPort", 0);
+            if (state.getBoolean("requestFilePending", false)) {
+                pendingFileRequest = new ManualRequestDraft();
+                pendingFileRequest.method = state.getString("requestMethod", "GET");
+                pendingFileRequest.url = state.getString("requestUrl", "");
+                pendingFileRequest.headers = state.getString("requestHeaders", "");
+                pendingFileRequest.body = state.getString("requestBody", "");
+                pendingFileRequest.bodyMode = state.getInt("requestBodyMode", 0);
+                String fileUri = state.getString("requestFileUri");
+                if (fileUri != null) pendingFileRequest.fileUri = Uri.parse(fileUri);
+                pendingFileRequest.fileName = state.getString("requestFileName");
+            }
         }
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -655,10 +688,11 @@ public final class MainActivity extends Activity {
     }
 
     private void showBodyPreview(JSONObject flow, String variant) {
-        showBodyPreview(flow, variant, 0);
+        showBodyPreview(flow, variant, 0, new ArrayList<>());
     }
 
-    private void showBodyPreview(JSONObject flow, String variant, long offset) {
+    private void showBodyPreview(JSONObject flow, String variant, long offset,
+                                 ArrayList<Long> previousOffsets) {
         String id = flow.optString("id");
         String bodyRevision = flow.optString("bodyRevision");
         worker.execute(() -> {
@@ -686,20 +720,23 @@ public final class MainActivity extends Activity {
                 scroll.addView(content);
                 String label = "request".equals(variant) ? "请求正文" : "响应正文";
                 String position = totalBytes == 0 ? "0 / 0"
-                    : (currentOffset + 1) + "–" + Math.min(totalBytes, currentOffset + 16 * 1024)
+                    : (currentOffset + 1) + "–" + Math.min(totalBytes, nextOffset >= 0 ? nextOffset : totalBytes)
                         + " / " + totalBytes;
                 AlertDialog.Builder dialog = new AlertDialog.Builder(this)
                     .setTitle(label + " · " + position + " 字节")
                     .setView(scroll)
                     .setNeutralButton("关闭", null);
-                if (currentOffset > 0) {
-                    long previousOffset = Math.max(0, currentOffset - 16 * 1024);
+                if (!previousOffsets.isEmpty()) {
+                    ArrayList<Long> earlierOffsets = new ArrayList<>(previousOffsets);
+                    long previousOffset = earlierOffsets.remove(earlierOffsets.size() - 1);
                     dialog.setNegativeButton("上一段", (ignored, which) ->
-                        showBodyPreview(flow, variant, previousOffset));
+                        showBodyPreview(flow, variant, previousOffset, earlierOffsets));
                 }
                 if (nextOffset >= 0) {
+                    ArrayList<Long> laterOffsets = new ArrayList<>(previousOffsets);
+                    laterOffsets.add(currentOffset);
                     dialog.setPositiveButton("下一段", (ignored, which) ->
-                        showBodyPreview(flow, variant, nextOffset));
+                        showBodyPreview(flow, variant, nextOffset, laterOffsets));
                 }
                 dialog.show();
             });
@@ -769,11 +806,20 @@ public final class MainActivity extends Activity {
     }
 
     private void openManualRequest() {
-        openManualRequest("GET", "", "", "");
+        openManualRequest(new ManualRequestDraft());
     }
 
     private void openManualRequest(String initialMethod, String initialUrl,
                                    String initialHeaders, String initialBody) {
+        ManualRequestDraft draft = new ManualRequestDraft();
+        draft.method = initialMethod;
+        draft.url = initialUrl;
+        draft.headers = initialHeaders;
+        draft.body = initialBody;
+        openManualRequest(draft);
+    }
+
+    private void openManualRequest(ManualRequestDraft draft) {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         int inset = (int) (12 * getResources().getDisplayMetrics().density);
@@ -781,26 +827,41 @@ public final class MainActivity extends Activity {
         EditText method = new EditText(this);
         method.setHint("方法，例如 GET、POST");
         method.setSingleLine(true);
-        method.setText(initialMethod);
+        method.setText(draft.method);
         content.addView(method);
         EditText url = new EditText(this);
         url.setHint("https://example.com/");
         url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setSingleLine(true);
-        url.setText(initialUrl);
+        url.setText(draft.url);
         content.addView(url);
         EditText headers = new EditText(this);
         headers.setHint("请求头，每行一个：\nContent-Type: application/json");
         headers.setMinLines(3);
         headers.setGravity(Gravity.TOP);
-        headers.setText(initialHeaders);
+        headers.setText(draft.headers);
         content.addView(headers);
+        TextView modeLabel = new TextView(this);
+        modeLabel.setText("请求正文类型");
+        content.addView(modeLabel);
+        Spinner bodyMode = new Spinner(this);
+        bodyMode.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item, BODY_MODES));
+        bodyMode.setSelection(Math.max(0, Math.min(BODY_MODES.length - 1, draft.bodyMode)));
+        content.addView(bodyMode);
         EditText body = new EditText(this);
-        body.setHint("请求正文（UTF-8 文本）");
+        body.setHint("文本 / JSON：直接输入；表单：每行 名称=值；Base64：粘贴编码内容");
         body.setMinLines(4);
         body.setGravity(Gravity.TOP);
-        body.setText(initialBody);
+        body.setText(draft.body);
         content.addView(body);
+        TextView fileLabel = new TextView(this);
+        fileLabel.setText(draft.fileUri == null ? "未选择文件" : "文件："
+            + (draft.fileName == null ? "attachment.bin" : draft.fileName));
+        content.addView(fileLabel);
+        Button pickFile = new Button(this);
+        pickFile.setText("选择文件（文件 / Multipart）");
+        content.addView(pickFile);
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -809,18 +870,45 @@ public final class MainActivity extends Activity {
             .setNegativeButton("取消", null)
             .setPositiveButton("发送", null)
             .create();
+        pickFile.setOnClickListener(view -> {
+            draft.method = method.getText().toString();
+            draft.url = url.getText().toString();
+            draft.headers = headers.getText().toString();
+            draft.body = body.getText().toString();
+            draft.bodyMode = bodyMode.getSelectedItemPosition();
+            pendingFileRequest = draft;
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            pick.addCategory(Intent.CATEGORY_OPENABLE);
+            pick.setType("*/*");
+            dialog.dismiss();
+            startActivityForResult(pick, PICK_REQUEST_FILE);
+        });
+        bodyMode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                                                 int position, long id) {
+                body.setVisibility(position == 3 ? View.GONE : View.VISIBLE);
+                int fileVisibility = position == 3 || position == 4 ? View.VISIBLE : View.GONE;
+                pickFile.setVisibility(fileVisibility);
+                fileLabel.setVisibility(fileVisibility);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-            if (sendManualRequest(method.getText().toString(), url.getText().toString(),
-                    headers.getText().toString(), body.getText().toString())) {
+            draft.method = method.getText().toString();
+            draft.url = url.getText().toString();
+            draft.headers = headers.getText().toString();
+            draft.body = body.getText().toString();
+            draft.bodyMode = bodyMode.getSelectedItemPosition();
+            if (sendManualRequest(draft)) {
                 dialog.dismiss();
             }
         }));
         dialog.show();
     }
 
-    private boolean sendManualRequest(String methodText, String urlText, String headerText, String bodyText) {
-        String requestMethod = methodText.trim().toUpperCase(Locale.ROOT);
-        String requestUrl = urlText.trim();
+    private boolean sendManualRequest(ManualRequestDraft draft) {
+        String requestMethod = draft.method.trim().toUpperCase(Locale.ROOT);
+        String requestUrl = draft.url.trim();
         try {
             URI uri = new URI(requestUrl);
             if (requestMethod.isEmpty() || uri.getHost() == null
@@ -828,13 +916,15 @@ public final class MainActivity extends Activity {
                          || "https".equalsIgnoreCase(uri.getScheme()))) {
                 throw new IllegalArgumentException("请输入 HTTP(S) URL 和请求方法");
             }
-            byte[] bodyBytes = bodyText.getBytes(StandardCharsets.UTF_8);
-            if (bodyBytes.length > 64 * 1024
-                    || headerText.getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
-                throw new IllegalArgumentException("正文最多 64 KiB，请求头最多 16 KiB");
+            if (draft.body.getBytes(StandardCharsets.UTF_8).length > 64 * 1024
+                    || draft.headers.getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
+                throw new IllegalArgumentException("文本输入最多 64 KiB，请求头最多 16 KiB");
+            }
+            if (draft.bodyMode == 3 && draft.fileUri == null) {
+                throw new IllegalArgumentException("请先选择要发送的文件");
             }
             JSONArray headerRows = new JSONArray();
-            for (String line : headerText.split("\\r?\\n")) {
+            for (String line : draft.headers.split("\\r?\\n")) {
                 if (line.trim().isEmpty()) continue;
                 int separator = line.indexOf(':');
                 if (separator <= 0) throw new IllegalArgumentException("请求头需要按 名称: 值 填写");
@@ -842,28 +932,39 @@ public final class MainActivity extends Activity {
                     .put("name", line.substring(0, separator).trim())
                     .put("value", line.substring(separator + 1).trim()));
             }
-            JSONObject request = new JSONObject()
-                .put("method", requestMethod)
-                .put("url", requestUrl)
-                .put("engine", "auto")
-                .put("headers", headerRows)
-                .put("bodyBase64", Base64.encodeToString(bodyBytes, Base64.NO_WRAP));
             status.setText("正在发送请求…");
             worker.execute(() -> {
-                JSONObject reply = parseReply(NativeCapture.sendRequest(request.toString()));
-                main.post(() -> {
-                    if (!reply.optBoolean("ok")) {
-                        status.setText("发送失败：" + reply.optString("error"));
-                        return;
-                    }
-                    JSONObject value = reply.optJSONObject("value");
-                    if (value == null) return;
-                    status.setText(value.isNull("error")
-                        ? "已发送，响应状态 " + value.optString("status", "未知")
-                        : "请求失败：" + value.optString("error"));
-                    poll();
-                    showFlowDetail(value.optString("id"));
-                });
+                try {
+                    RequestBody requestBody = composeRequestBody(draft);
+                    JSONArray preparedHeaders = applyContentType(headerRows,
+                        requestBody.contentType, requestBody.replaceContentType);
+                    JSONObject request = new JSONObject()
+                        .put("method", requestMethod)
+                        .put("url", requestUrl)
+                        .put("engine", "auto")
+                        .put("headers", preparedHeaders)
+                        .put("bodyBase64", Base64.encodeToString(requestBody.bytes, Base64.NO_WRAP));
+                    JSONObject reply = parseReply(NativeCapture.sendRequest(request.toString()));
+                    main.post(() -> {
+                        if (!reply.optBoolean("ok")) {
+                            status.setText("发送失败：" + reply.optString("error"));
+                            if (!isFinishing() && !isDestroyed()) openManualRequest(draft);
+                            return;
+                        }
+                        JSONObject value = reply.optJSONObject("value");
+                        if (value == null) return;
+                        status.setText(value.isNull("error")
+                            ? "已发送，响应状态 " + value.optString("status", "未知")
+                            : "请求失败：" + value.optString("error"));
+                        poll();
+                        showFlowDetail(value.optString("id"));
+                    });
+                } catch (Exception error) {
+                    main.post(() -> {
+                        status.setText("发送失败：" + error.getMessage());
+                        if (!isFinishing() && !isDestroyed()) openManualRequest(draft);
+                    });
+                }
             });
             return true;
         } catch (Exception error) {
@@ -872,6 +973,153 @@ public final class MainActivity extends Activity {
                 .setPositiveButton("关闭", null).show();
             return false;
         }
+    }
+
+    private static final class RequestBody {
+        final byte[] bytes;
+        final String contentType;
+        final boolean replaceContentType;
+        RequestBody(byte[] bytes, String contentType, boolean replaceContentType) {
+            this.bytes = bytes;
+            this.contentType = contentType;
+            this.replaceContentType = replaceContentType;
+        }
+    }
+
+    private RequestBody composeRequestBody(ManualRequestDraft draft) throws Exception {
+        byte[] bytes;
+        String contentType = null;
+        boolean replaceContentType = false;
+        switch (draft.bodyMode) {
+            case 1: // JSON
+                if (!draft.body.trim().isEmpty()) {
+                    JSONTokener parser = new JSONTokener(draft.body);
+                    parser.nextValue();
+                    if (parser.nextClean() != 0) throw new IllegalArgumentException("JSON 后还有多余内容");
+                }
+                bytes = draft.body.getBytes(StandardCharsets.UTF_8);
+                contentType = "application/json; charset=utf-8";
+                break;
+            case 2: // application/x-www-form-urlencoded
+                StringBuilder encoded = new StringBuilder();
+                for (String line : draft.body.split("\\r?\\n")) {
+                    if (line.isEmpty()) continue;
+                    int separator = line.indexOf('=');
+                    if (separator <= 0) throw new IllegalArgumentException("表单每行须为 名称=值");
+                    if (encoded.length() > 0) encoded.append('&');
+                    encoded.append(URLEncoder.encode(line.substring(0, separator), "UTF-8"))
+                        .append('=')
+                        .append(URLEncoder.encode(line.substring(separator + 1), "UTF-8"));
+                }
+                bytes = encoded.toString().getBytes(StandardCharsets.US_ASCII);
+                contentType = "application/x-www-form-urlencoded";
+                break;
+            case 3: // Raw file
+                if (draft.fileUri == null) throw new IllegalArgumentException("请先选择要发送的文件");
+                bytes = readRequestFile(draft.fileUri);
+                contentType = safeMimeType(getContentResolver().getType(draft.fileUri));
+                break;
+            case 4: // Multipart form fields and optional file
+                String boundary = "----HttpCapture" + UUID.randomUUID().toString().replace("-", "");
+                ByteArrayOutputStream multipart = new ByteArrayOutputStream();
+                for (String line : draft.body.split("\\r?\\n")) {
+                    if (line.isEmpty()) continue;
+                    int separator = line.indexOf('=');
+                    if (separator <= 0) throw new IllegalArgumentException("Multipart 字段每行须为 名称=值");
+                    String name = safeMultipartToken(line.substring(0, separator));
+                    writeUtf8(multipart, "--" + boundary + "\r\nContent-Disposition: form-data; name=\""
+                        + name + "\"\r\n\r\n" + line.substring(separator + 1) + "\r\n");
+                }
+                if (draft.fileUri != null) {
+                    String name = safeMultipartToken(draft.fileName == null ? "attachment.bin" : draft.fileName);
+                    String mime = safeMimeType(getContentResolver().getType(draft.fileUri));
+                    writeUtf8(multipart, "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\""
+                        + name + "\"\r\nContent-Type: " + mime + "\r\n\r\n");
+                    multipart.write(readRequestFile(draft.fileUri));
+                    writeUtf8(multipart, "\r\n");
+                }
+                writeUtf8(multipart, "--" + boundary + "--\r\n");
+                bytes = multipart.toByteArray();
+                contentType = "multipart/form-data; boundary=" + boundary;
+                replaceContentType = true;
+                break;
+            case 5: // Raw bytes pasted as Base64
+                bytes = Base64.decode(draft.body.replaceAll("\\s", ""), Base64.DEFAULT);
+                break;
+            case 0:
+                bytes = draft.body.getBytes(StandardCharsets.UTF_8);
+                break;
+            default:
+                throw new IllegalArgumentException("未知的正文类型");
+        }
+        if (bytes.length > MAX_REQUEST_BODY) {
+            throw new IllegalArgumentException("请求正文最多 1 MiB");
+        }
+        return new RequestBody(bytes, contentType, replaceContentType);
+    }
+
+    private byte[] readRequestFile(Uri uri) throws Exception {
+        try (InputStream input = getContentResolver().openInputStream(uri);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            if (input == null) throw new IllegalArgumentException("无法打开所选文件");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (output.size() + count > MAX_REQUEST_BODY) {
+                    throw new IllegalArgumentException("文件超过 1 MiB，移动编辑器暂不支持发送");
+                }
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private static String safeMultipartToken(String value) {
+        String cleaned = value.replace('"', '_').replace('\r', '_').replace('\n', '_')
+            .replace('\\', '_').replace('/', '_').trim();
+        if (cleaned.isEmpty() || cleaned.length() > 128) {
+            throw new IllegalArgumentException("Multipart 字段名或文件名无效");
+        }
+        return cleaned;
+    }
+
+    private static String safeMimeType(String value) {
+        if (value == null || !value.matches("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+")) {
+            return "application/octet-stream";
+        }
+        return value;
+    }
+
+    private static void writeUtf8(ByteArrayOutputStream output, String value) throws Exception {
+        output.write(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static JSONArray applyContentType(JSONArray headers, String contentType,
+                                              boolean replace) throws JSONException {
+        if (contentType == null) return headers;
+        JSONArray result = new JSONArray();
+        boolean found = false;
+        for (int i = 0; i < headers.length(); i++) {
+            JSONObject header = headers.getJSONObject(i);
+            if ("Content-Type".equalsIgnoreCase(header.optString("name"))) {
+                if (replace) continue;
+                found = true;
+            }
+            result.put(header);
+        }
+        if (!found) result.put(new JSONObject().put("name", "Content-Type").put("value", contentType));
+        return result;
+    }
+
+    private String requestFileName(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri,
+                new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                if (name != null && !name.trim().isEmpty()) return name;
+            }
+        } catch (RuntimeException ignored) { }
+        return "attachment.bin";
     }
 
     private void loadBlocking() {
@@ -1394,6 +1642,17 @@ public final class MainActivity extends Activity {
             }
             return;
         }
+        if (requestCode == PICK_REQUEST_FILE) {
+            ManualRequestDraft draft = pendingFileRequest;
+            pendingFileRequest = null;
+            if (draft == null) return;
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                draft.fileUri = data.getData();
+                draft.fileName = requestFileName(draft.fileUri);
+            }
+            openManualRequest(draft);
+            return;
+        }
         if (requestCode != SAVE_CA_REQUEST || resultCode != RESULT_OK || data == null || data.getData() == null || certificatePem == null) return;
         final String pem = certificatePem;
         certificatePem = null;
@@ -1428,6 +1687,17 @@ public final class MainActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putBoolean("vpnPermissionPending", vpnPermissionPending);
         state.putInt("pendingVpnPort", pendingVpnPort);
+        if (pendingFileRequest != null) {
+            state.putBoolean("requestFilePending", true);
+            state.putString("requestMethod", pendingFileRequest.method);
+            state.putString("requestUrl", pendingFileRequest.url);
+            state.putString("requestHeaders", pendingFileRequest.headers);
+            state.putString("requestBody", pendingFileRequest.body);
+            state.putInt("requestBodyMode", pendingFileRequest.bodyMode);
+            state.putString("requestFileUri", pendingFileRequest.fileUri == null
+                ? null : pendingFileRequest.fileUri.toString());
+            state.putString("requestFileName", pendingFileRequest.fileName);
+        }
         super.onSaveInstanceState(state);
     }
 

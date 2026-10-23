@@ -131,6 +131,7 @@ final class TunnelController: ObservableObject {
     private var urlFilter = ""
     private var requestGeneration: UInt64 = 0
     private var detailGeneration: UInt64 = 0
+    private var bodyOffsetHistory: [Int] = []
     private var blockingScope = "capture"
     private var responseConfig: [String: Any] = [:]
     private var responseVersion = ""
@@ -247,6 +248,7 @@ final class TunnelController: ObservableObject {
             self.selectedFlow = flow
             self.detailOpen = true
             self.bodyVariant = nil
+            self.bodyOffsetHistory = []
             self.bodyNextOffset = nil
             self.bodyLoading = false
             self.selectedDetail = String(decoding: data, as: UTF8.self)
@@ -259,10 +261,10 @@ final class TunnelController: ObservableObject {
     var bodyPosition: String {
         guard bodyVariant != nil else { return "" }
         if bodyTotalBytes == 0 { return "0 / 0 字节" }
-        return "\(bodyOffset + 1)–\(min(bodyTotalBytes, bodyOffset + 16 * 1024)) / \(bodyTotalBytes) 字节"
+        return "\(bodyOffset + 1)–\(min(bodyTotalBytes, bodyNextOffset ?? bodyTotalBytes)) / \(bodyTotalBytes) 字节"
     }
 
-    func showBodyPreview(_ variant: String, offset: Int = 0) {
+    func showBodyPreview(_ variant: String, offset: Int = 0, history: [Int] = []) {
         guard let flow = selectedFlow,
               let id = flow["id"] as? String,
               let revision = flow["bodyRevision"] as? String,
@@ -283,6 +285,7 @@ final class TunnelController: ObservableObject {
             let text = chunk["text"] as? String
                 ?? "二进制内容（Base64）：\n" + (chunk["bodyBase64"] as? String ?? "")
             self.bodyVariant = variant
+            self.bodyOffsetHistory = history
             self.bodyOffset = currentOffset
             self.bodyTotalBytes = totalBytes
             self.bodyNextOffset = (chunk["nextOffset"] as? NSNumber)?.intValue
@@ -291,13 +294,13 @@ final class TunnelController: ObservableObject {
     }
 
     func previousBodyChunk() {
-        guard let variant = bodyVariant, bodyOffset > 0, !bodyLoading else { return }
-        showBodyPreview(variant, offset: max(0, bodyOffset - 16 * 1024))
+        guard let variant = bodyVariant, let previous = bodyOffsetHistory.last, !bodyLoading else { return }
+        showBodyPreview(variant, offset: previous, history: Array(bodyOffsetHistory.dropLast()))
     }
 
     func nextBodyChunk() {
         guard let variant = bodyVariant, let offset = bodyNextOffset, !bodyLoading else { return }
-        showBodyPreview(variant, offset: offset)
+        showBodyPreview(variant, offset: offset, history: bodyOffsetHistory + [bodyOffset])
     }
 
     func clearDetail() {
@@ -306,6 +309,7 @@ final class TunnelController: ObservableObject {
         detailOpen = false
         selectedFlow = nil
         bodyVariant = nil
+        bodyOffsetHistory = []
         bodyNextOffset = nil
         bodyLoading = false
     }
