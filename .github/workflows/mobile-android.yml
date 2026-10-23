@@ -17,6 +17,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.0.2'
+      - name: Verify manual request body bytes
+        run: |
+          mkdir -p "$RUNNER_TEMP/http-capture-body-tests"
+          javac -encoding UTF-8 -d "$RUNNER_TEMP/http-capture-body-tests" \
+            apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/RequestBodyCodec.java \
+            apps/mobile/android/tests/RequestBodyCodecTest.java
+          java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RequestBodyCodecTest
       - name: Install native dependencies
         run: |
           sudo apt-get update

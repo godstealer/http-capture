@@ -36,7 +36,6 @@ import java.io.OutputStream;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.charset.CodingErrorAction;
@@ -90,7 +89,6 @@ public final class MainActivity extends Activity {
     private static final int SAVE_CA_REQUEST = 1201;
     private static final int VPN_REQUEST = 1202;
     private static final int PICK_REQUEST_FILE = 1203;
-    private static final int MAX_REQUEST_BODY = 1024 * 1024;
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
@@ -1001,45 +999,19 @@ public final class MainActivity extends Activity {
                 contentType = "application/json; charset=utf-8";
                 break;
             case 2: // application/x-www-form-urlencoded
-                StringBuilder encoded = new StringBuilder();
-                for (String line : draft.body.split("\\r?\\n")) {
-                    if (line.isEmpty()) continue;
-                    int separator = line.indexOf('=');
-                    if (separator <= 0) throw new IllegalArgumentException("表单每行须为 名称=值");
-                    if (encoded.length() > 0) encoded.append('&');
-                    encoded.append(URLEncoder.encode(line.substring(0, separator), "UTF-8"))
-                        .append('=')
-                        .append(URLEncoder.encode(line.substring(separator + 1), "UTF-8"));
-                }
-                bytes = encoded.toString().getBytes(StandardCharsets.US_ASCII);
+                bytes = RequestBodyCodec.urlForm(draft.body);
                 contentType = "application/x-www-form-urlencoded";
                 break;
             case 3: // Raw file
                 if (draft.fileUri == null) throw new IllegalArgumentException("请先选择要发送的文件");
                 bytes = readRequestFile(draft.fileUri);
-                contentType = safeMimeType(getContentResolver().getType(draft.fileUri));
+                contentType = RequestBodyCodec.safeMimeType(getContentResolver().getType(draft.fileUri));
                 break;
             case 4: // Multipart form fields and optional file
                 String boundary = "----HttpCapture" + UUID.randomUUID().toString().replace("-", "");
-                ByteArrayOutputStream multipart = new ByteArrayOutputStream();
-                for (String line : draft.body.split("\\r?\\n")) {
-                    if (line.isEmpty()) continue;
-                    int separator = line.indexOf('=');
-                    if (separator <= 0) throw new IllegalArgumentException("Multipart 字段每行须为 名称=值");
-                    String name = safeMultipartToken(line.substring(0, separator));
-                    writeUtf8(multipart, "--" + boundary + "\r\nContent-Disposition: form-data; name=\""
-                        + name + "\"\r\n\r\n" + line.substring(separator + 1) + "\r\n");
-                }
-                if (draft.fileUri != null) {
-                    String name = safeMultipartToken(draft.fileName == null ? "attachment.bin" : draft.fileName);
-                    String mime = safeMimeType(getContentResolver().getType(draft.fileUri));
-                    writeUtf8(multipart, "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\""
-                        + name + "\"\r\nContent-Type: " + mime + "\r\n\r\n");
-                    multipart.write(readRequestFile(draft.fileUri));
-                    writeUtf8(multipart, "\r\n");
-                }
-                writeUtf8(multipart, "--" + boundary + "--\r\n");
-                bytes = multipart.toByteArray();
+                bytes = RequestBodyCodec.multipart(draft.body, boundary, draft.fileName,
+                    draft.fileUri == null ? null : getContentResolver().getType(draft.fileUri),
+                    draft.fileUri == null ? null : readRequestFile(draft.fileUri));
                 contentType = "multipart/form-data; boundary=" + boundary;
                 replaceContentType = true;
                 break;
@@ -1052,7 +1024,7 @@ public final class MainActivity extends Activity {
             default:
                 throw new IllegalArgumentException("未知的正文类型");
         }
-        if (bytes.length > MAX_REQUEST_BODY) {
+        if (bytes.length > RequestBodyCodec.MAX_BODY_BYTES) {
             throw new IllegalArgumentException("请求正文最多 1 MiB");
         }
         return new RequestBody(bytes, contentType, replaceContentType);
@@ -1065,33 +1037,13 @@ public final class MainActivity extends Activity {
             byte[] buffer = new byte[8192];
             int count;
             while ((count = input.read(buffer)) != -1) {
-                if (output.size() + count > MAX_REQUEST_BODY) {
+                if (output.size() + count > RequestBodyCodec.MAX_BODY_BYTES) {
                     throw new IllegalArgumentException("文件超过 1 MiB，移动编辑器暂不支持发送");
                 }
                 output.write(buffer, 0, count);
             }
             return output.toByteArray();
         }
-    }
-
-    private static String safeMultipartToken(String value) {
-        String cleaned = value.replace('"', '_').replace('\r', '_').replace('\n', '_')
-            .replace('\\', '_').replace('/', '_').trim();
-        if (cleaned.isEmpty() || cleaned.length() > 128) {
-            throw new IllegalArgumentException("Multipart 字段名或文件名无效");
-        }
-        return cleaned;
-    }
-
-    private static String safeMimeType(String value) {
-        if (value == null || !value.matches("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+")) {
-            return "application/octet-stream";
-        }
-        return value;
-    }
-
-    private static void writeUtf8(ByteArrayOutputStream output, String value) throws Exception {
-        output.write(value.getBytes(StandardCharsets.UTF_8));
     }
 
     private static JSONArray applyContentType(JSONArray headers, String contentType,
