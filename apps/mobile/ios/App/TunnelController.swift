@@ -496,7 +496,7 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    func sendManualRequest(method: String, url: String, headers: String, body: String) {
+    func sendManualRequest(method: String, url: String, headers: String, body: PreparedRequestBody) {
         let method = method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !method.isEmpty, let parsed = URLComponents(string: url),
@@ -504,8 +504,7 @@ final class TunnelController: ObservableObject {
             message = "请输入 HTTP(S) URL 和请求方法"
             return
         }
-        let bodyData = Data(body.utf8)
-        guard bodyData.count <= 64 * 1024, headers.utf8.count <= 16 * 1024 else {
+        guard body.bytes.count <= RequestBodyCodec.maxBodyBytes, headers.utf8.count <= 16 * 1024 else {
             message = "正文最多 64 KiB，请求头最多 16 KiB"
             return
         }
@@ -518,10 +517,29 @@ final class TunnelController: ObservableObject {
             headerRows.append(["name": String(line[..<colon]).trimmingCharacters(in: .whitespaces),
                                "value": String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)])
         }
+        if let contentType = body.contentType {
+            if body.replaceContentType {
+                headerRows.removeAll {
+                    ($0["name"] as? String)?.lowercased() == "content-type"
+                }
+            }
+            let hasContentType = headerRows.contains {
+                ($0["name"] as? String)?.lowercased() == "content-type"
+            }
+            if !hasContentType {
+                headerRows.append(["name": "Content-Type", "value": contentType])
+            }
+        }
         let draft: [String: Any] = ["method": method, "url": url, "engine": "auto",
-                                    "headers": headerRows, "bodyBase64": bodyData.base64EncodedString()]
+                                    "headers": headerRows, "bodyBase64": body.bytes.base64EncodedString()]
+        let command: [String: Any] = ["method": "send_request", "request": draft]
+        guard let commandData = try? JSONSerialization.data(withJSONObject: command),
+              commandData.count <= 128 * 1024 else {
+            message = "请求超过 VPN 扩展消息上限 128 KiB，请缩小正文或请求头"
+            return
+        }
         message = "正在发送请求…"
-        send(["method": "send_request", "request": draft]) { [weak self] value in
+        send(command) { [weak self] value in
             guard let self, let result = value as? [String: Any] else { return }
             if let error = result["error"] as? String { self.message = "请求失败：" + error }
             else { self.message = "请求已发送，状态 \(result["status"] ?? "未知")" }

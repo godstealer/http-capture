@@ -30,8 +30,10 @@ Android 的 `VpnService` 只负责获得虚拟网卡与用户授权；包转发�
 ## iOS 当前代码与构建入口
 
 - `apps/mobile/ios/native` 是 Rust `staticlib`，提供 C ABI：在 Packet Tunnel 扩展中启动同一个 `capture-core` 回环代理，将 `NEPacketTunnelFlow` 的 IP 包通过有界队列送入 `tun2proxy::run`，并将生成的包写回扩展。它支持虚拟 DNS、IPv4/IPv6、非 DNS UDP 直连及每页最多 50 条的请求摘要、请求元数据、按偏移每段 16 KiB 的正文读取、CA 公钥证书读取。C ABI 不允许宿主 App 再打开第二份代理/数据库，宿主通过 `sendProviderMessage` 与扩展通信。
-- `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、手动文本 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；二进制/文件请求和高级重放编辑器仍未实现，这些界面尚未经过 Xcode 编译和真机验证。
+- `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现，这些界面尚未经过 Xcode 编译和真机验证。
 - `apps/mobile/ios/project.yml` 由 XcodeGen 生成宿主和 Packet Tunnel 扩展工程；扩展构建前 `build-native.sh` 根据 iPhoneOS/Simulator 与架构编译 Rust 静态库。Rust 本地测试已覆盖扩展启停、阻止规则，以及本机 HTTP 请求发送、记录详情、正文预览，2026-10-24 共 4 项通过；扩展消息限长 128 KiB。需要 macOS、Xcode、Rust Apple target、XcodeGen，以及能用于 Packet Tunnel 的 Apple 签名权限。当前 Windows 环境无法执行 Xcode 编译，更不能证明扩展启动、系统流量、内存限制、证书信任或 App Store 分发通过。
+
+iOS 新建请求的正文编辑已增加文本、JSON、URL 表单、Base64、原始文件和带普通字段及单个文件的 Multipart。文件经系统文件选择器授权，最多只读取 64 KiB；最终正文也限制为 64 KiB，并在发送前按实际 JSON 消息大小检查 128 KiB 扩展上限。JSON 语法、表单编码、Multipart 边界/文件原始字节和非法 MIME 回退有独立 Swift 测试，已接入手动 iOS 构建工作流；当前 Windows 缺 Swift/Xcode，测试和宿主编译仍待 Mac 执行。超过 64 KiB 的文件需要后续分块 IPC 或其他传输方案，界面操作与实际发送仍待 iPhone 验收。
 
 iOS 扩展命令现接入共享内核的响应修改快照和版本校验保存，宿主可启停总开关与单条规则、设置作用范围、删除规则，并新增或编辑 UTF-8 整份响应替换及单操作正文文本/正则局部替换。编辑保留原规则 ID、启用状态，以及正文修改未展示的大小写/全部匹配参数；二进制、超出移动输入上限、多操作规则和不能无损回填的响应头禁用编辑入口。保存基于完整配置字典修改，保留界面尚未展示的高级规则字段；消息超过 128 KiB 时给出明确错误，不发送截断配置。Rust 本机测试验证了规则保存和旧版本拒绝；Swift 界面尚未经过 Xcode 编译或设备操作验证。移动端高级规则界面仍待补齐。
 iOS 正文桥接已接受字节偏移，详情页可逐段前后浏览完整请求/响应正文；零字节正文也不会因为文本为空而自动关闭详情。若 16 KiB 边界落在 UTF-8 字符中间，桥接会将不完整字节留给下一段，界面记录实际段起点用于返回上一段；非法二进制仍以 Base64 显示。Rust 桥接测试用 20,000 字节响应和跨段 UTF-8 字符验证连续读取与末段，负偏移被拒绝，2026-10-24 本机 4 项测试通过。Swift 界面及大正文实际内存占用仍需 Xcode 和设备验证。

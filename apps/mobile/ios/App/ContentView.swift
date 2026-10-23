@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject private var tunnel: TunnelController
@@ -272,6 +273,12 @@ private struct ManualRequestView: View {
     @State private var url = ""
     @State private var headers = ""
     @State private var requestBody = ""
+    @State private var bodyMode: ManualBodyMode = .text
+    @State private var fileData: Data?
+    @State private var fileName: String?
+    @State private var fileMimeType: String?
+    @State private var showingFileImporter = false
+    @State private var inputError: String?
 
     var body: some View {
         NavigationStack {
@@ -287,9 +294,35 @@ private struct ManualRequestView: View {
                 Section("请求头，每行 名称: 值") {
                     TextEditor(text: $headers).frame(minHeight: 100)
                 }
-                Section("正文（UTF-8 文本）") {
-                    TextEditor(text: $requestBody).frame(minHeight: 150)
+                Section("请求正文") {
+                    Picker("类型", selection: $bodyMode) {
+                        ForEach(ManualBodyMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    if bodyMode != .file {
+                        Text(bodyMode == .form || bodyMode == .multipart
+                             ? "表单每行填写 名称=值" : bodyMode == .base64
+                             ? "粘贴 Base64 编码的原始字节" : "输入正文")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        TextEditor(text: $requestBody).frame(minHeight: 150)
+                    }
+                    if bodyMode == .file || bodyMode == .multipart {
+                        Button("选择文件") { showingFileImporter = true }
+                        if let fileName {
+                            Text("已选择：\(fileName)（\(fileData?.count ?? 0) 字节）")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            Button("移除文件") {
+                                fileData = nil
+                                self.fileName = nil
+                                fileMimeType = nil
+                            }
+                        }
+                    }
+                    Text("正文最多 64 KiB，包含文件和 Multipart 边界。")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
+                if let inputError { Text(inputError).foregroundStyle(.red) }
                 Text(tunnel.message).font(.footnote).foregroundStyle(.secondary)
             }
             .navigationTitle("新建请求")
@@ -297,8 +330,36 @@ private struct ManualRequestView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("发送") {
-                        tunnel.sendManualRequest(method: method, url: url, headers: headers, body: requestBody)
+                        do {
+                            let prepared = try RequestBodyCodec.compose(
+                                mode: bodyMode, text: requestBody, file: fileData,
+                                fileName: fileName, mimeType: fileMimeType)
+                            inputError = nil
+                            tunnel.sendManualRequest(method: method, url: url,
+                                                     headers: headers, body: prepared)
+                        } catch {
+                            inputError = error.localizedDescription
+                        }
                     }
+                }
+            }
+            .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.item]) { result in
+                do {
+                    let file = try result.get()
+                    let access = file.startAccessingSecurityScopedResource()
+                    defer { if access { file.stopAccessingSecurityScopedResource() } }
+                    let handle = try FileHandle(forReadingFrom: file)
+                    defer { try? handle.close() }
+                    let bytes = try handle.read(upToCount: RequestBodyCodec.maxBodyBytes + 1) ?? Data()
+                    guard bytes.count <= RequestBodyCodec.maxBodyBytes else {
+                        throw RequestBodyCodec.BodyError.invalid("文件超过 64 KiB，当前 iOS 扩展消息暂不支持更大文件")
+                    }
+                    fileData = bytes
+                    fileName = file.lastPathComponent
+                    fileMimeType = UTType(filenameExtension: file.pathExtension)?.preferredMIMEType
+                    inputError = nil
+                } catch {
+                    inputError = error.localizedDescription
                 }
             }
         }

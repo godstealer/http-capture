@@ -9,6 +9,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Test request body codec
+        run: |
+          swiftc apps/mobile/ios/App/RequestBodyCodec.swift apps/mobile/ios/tests/main.swift -o /tmp/http-capture-ios-body-tests
+          /tmp/http-capture-ios-body-tests
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
