@@ -3,7 +3,7 @@ use anyhow::{Result, ensure, Context as _};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rquickjs::{Context, Runtime, Function, CatchResultExt};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::{Arc, Mutex}, time::{Instant, Duration}};
+use std::{collections::BTreeMap, io::Read, sync::{Arc, Mutex}, time::{Instant, Duration}};
 use sha2::{Digest, Sha256};
 use md5::Md5;
 use hmac::{Hmac, Mac};
@@ -76,9 +76,29 @@ impl ScriptState {
 }
 #[derive(Deserialize)]
 pub struct Output { pub request:RequestDraft, pub response:Option<CapturedResponse>, pub variables:BTreeMap<String,String>, pub logs:Vec<String>, pub error:Option<String> }
-// The old script input passed through serde_json::Value, which sorted every
-// object's keys. JavaScript can observe that order through Object.keys and
-// JSON.stringify. Keep small metadata in Value while borrowing the large body.
+#[derive(Deserialize)]
+struct ScriptOutput {
+ #[serde(flatten)] output: Output,
+ #[serde(rename="__requestBodyUnchanged")] request_body_unchanged: bool,
+ #[serde(rename="__responseBodyUnchanged")] response_body_unchanged: bool,
+}
+fn validated_response_body_len(body:&SharedBody)->Result<usize> {
+ const LIMIT:usize=8*1024*1024;
+ ensure!(body.len()<=LIMIT.div_ceil(3)*4,"响应正文超过 8 MiB");
+ let mut decoder=base64::read::DecoderReader::new(body.as_bytes(),&STANDARD);
+ let mut buffer=[0u8;16*1024];
+ let mut length=0usize;
+ loop {
+  let read=decoder.read(&mut buffer).context("响应正文不是有效 Base64")?;
+  if read==0 {break;}
+  length+=read;
+  ensure!(length<=LIMIT,"响应正文超过 8 MiB");
+ }
+ Ok(length)
+}
+// Keep only small, sorted metadata in the JSON input. JavaScript receives body
+// strings separately, then inserts them first to preserve Object.keys and
+// JSON.stringify behavior from the original sorted object.
 struct ScriptEntity<'a> {
  body: &'a SharedBody,
  metadata: serde_json::Map<String,serde_json::Value>,
@@ -104,6 +124,7 @@ impl<'a> From<&'a CapturedResponse> for ScriptEntity<'a> {
   Self{body:body_base64,metadata}
  }
 }
+#[cfg(test)]
 impl Serialize for ScriptEntity<'_> {
  fn serialize<S:serde::Serializer>(&self,serializer:S)->std::result::Result<S::Ok,S::Error> {
   use serde::ser::SerializeMap;
@@ -119,10 +140,17 @@ impl Serialize for ScriptEntity<'_> {
   map.end()
  }
 }
+#[cfg(test)]
 #[derive(Serialize)]
 struct Input<'a> {
  request: ScriptEntity<'a>,
  response: Option<ScriptEntity<'a>>,
+ variables: &'a BTreeMap<String,String>,
+}
+#[derive(Serialize)]
+struct MetadataInput<'a> {
+ request: &'a serde_json::Map<String,serde_json::Value>,
+ response: Option<&'a serde_json::Map<String,serde_json::Value>>,
  variables: &'a BTreeMap<String,String>,
 }
 fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse>,variables:BTreeMap<String,String>,modules:crate::script_tools::Modules,after:bool,stopped:Arc<std::sync::atomic::AtomicBool>)->Result<Output>{
@@ -133,9 +161,15 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
  let deadline=Instant::now()+Duration::from_secs(2);
  runtime.set_interrupt_handler(Some(Box::new(move||stopped.load(std::sync::atomic::Ordering::Relaxed)||Instant::now()>deadline)));
  let context=Context::full(&runtime)?;
- let input=serde_json::to_string(&Input{request:(&request).into(),response:response.as_ref().map(Into::into),variables:&variables})?;
+ let request_entity=ScriptEntity::from(&request);
+ let response_entity=response.as_ref().map(ScriptEntity::from);
+ let input=serde_json::to_string(&MetadataInput{
+  request:&request_entity.metadata,response:response_entity.as_ref().map(|entity|&entity.metadata),variables:&variables,
+ })?;
  let output=context.with(|ctx|->Result<String>{
   ctx.globals().set("__input",input)?;
+  ctx.globals().set("__requestBody",request.body_base64.as_str())?;
+  ctx.globals().set("__responseBody",response.as_ref().map(|value|value.body_base64.as_str()).unwrap_or(""))?;
   ctx.globals().set("encodeText",Function::new(ctx.clone(),|s:String| STANDARD.encode(s.as_bytes()))?)?;
   ctx.globals().set("decodeText",Function::new(ctx.clone(),|s:String|->rquickjs::Result<String>{
    let b=STANDARD.decode(s).map_err(|e|rquickjs::Error::new_from_js_message("Base64","UTF-8",e.to_string()))?;
@@ -155,7 +189,9 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
   })?)?;
   ctx.eval::<(),_>(format!("const __modules=JSON.parse(__modulesJson);{}",crate::script_tools::BOOTSTRAP)).catch(&ctx).map_err(|e|anyhow::anyhow!("脚本环境初始化失败：{e}"))?;
   let source=format!(r#"(() => {{
-   const data=JSON.parse(__input), request=data.request, response=data.response, variables=data.variables;
+   const data=JSON.parse(__input), request={{bodyBase64:__requestBody,...data.request}};
+   const response=data.response===null?null:{{bodyBase64:__responseBody,...data.response}}, variables=data.variables;
+   const originalRequestBody=request.bodyBase64, originalResponseBody=response?.bodyBase64;
    const logs=[]; let error=null;
    const console=Object.freeze({{log:(...args)=>{{if(logs.length<100)logs.push(args.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ').slice(0,2048));}}}});
    const assert=(condition,message='断言失败')=>{{if(!condition)throw new Error(message);}};
@@ -163,13 +199,26 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
 {code}
    }}).call(undefined); if(result && typeof result.then==='function')throw new Error('仅支持同步脚本，不支持 Promise / async');
    }} catch(e) {{error=(String(e)+'\n'+String(e.stack||'')).slice(0,8192);}}
-   return JSON.stringify({{request,response,variables,logs,error}});
+   // Preserve the script-visible object through execution. Omit unchanged body
+   // strings only from the private result envelope; Rust reuses their buffers.
+   const __requestBodyUnchanged=request?.bodyBase64===originalRequestBody;
+   const __responseBodyUnchanged=response!=null && response.bodyBase64===originalResponseBody;
+   if(__requestBodyUnchanged)request.bodyBase64='';
+   if(__responseBodyUnchanged)response.bodyBase64='';
+   return JSON.stringify({{request,response,variables,logs,error,__requestBodyUnchanged,__responseBodyUnchanged}});
   }})()"#);
   ctx.eval::<String,_>(source).catch(&ctx).map_err(|e|anyhow::anyhow!("脚本执行失败（限时 2 秒、内存 64 MiB）：{e}"))
  })?;
  ensure!(!runtime.is_job_pending(),"仅支持同步脚本，不支持异步任务");
  ensure!(output.len()<=24*1024*1024,"脚本结果过大");
- let mut result:Output=serde_json::from_str(&output).context("脚本输出格式无效：请保留 request / response 结构，变量值应为字符串")?;
+ let envelope:ScriptOutput=serde_json::from_str(&output).context("脚本输出格式无效：请保留 request / response 结构，变量值应为字符串")?;
+ let mut result=envelope.output;
+ if envelope.request_body_unchanged { result.request.body_base64=request.body_base64.clone(); }
+ if envelope.response_body_unchanged {
+  let original=response.as_ref().context("响应脚本没有响应")?;
+  let returned=result.response.as_mut().context("不能删除响应")?;
+  returned.body_base64=original.body_base64.clone();
+ }
  ensure!(serde_json::to_vec(&result.variables)?.len()<=64*1024,"脚本变量超过 64 KiB");
  if result.error.is_some(){return Ok(result);}
  if after {
@@ -178,19 +227,18 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
   let r=result.response.as_mut().context("不能删除响应")?;
   r.retain_enabled_headers();
   ensure!((200..=599).contains(&r.status),"响应状态码必须为 200–599");
-  let bytes=STANDARD.decode(&r.body_base64).context("响应正文不是有效 Base64")?;
-  ensure!(bytes.len()<=8*1024*1024,"响应正文超过 8 MiB");
+  let body_len=validated_response_body_len(&r.body_base64)?;
   ensure!(r.headers.iter().map(|h|h.name.len()+h.value.len()+4).sum::<usize>()<=64*1024,"响应头超过 64 KiB");
   for h in &r.headers {let _:http::HeaderName=h.name.parse()?;let _:http::HeaderValue=h.value.parse()?;}
   let changed=r.body_base64!=original.body_base64;
   if !changed { r.body_base64=original.body_base64; }
-  if changed {r.headers.retain(|h|!["content-encoding","content-length","transfer-encoding"].contains(&h.name.to_ascii_lowercase().as_str()));r.headers.push(Header { disabled: false,name:"Content-Length".into(),value:bytes.len().to_string()});}
+  if changed {r.headers.retain(|h|!["content-encoding","content-length","transfer-encoding"].contains(&h.name.to_ascii_lowercase().as_str()));r.headers.push(Header { disabled: false,name:"Content-Length".into(),value:body_len.to_string()});}
   r.version=original.version;r.tls_version=original.tls_version;r.upstream_tls=original.upstream_tls;r.sent_request_headers=original.sent_request_headers;r.raw_head_base64=None;
  } else {
   if result.request.body_base64==request.body_base64 { result.request.body_base64=request.body_base64; }
   result.request.scripts=request.scripts;
   result.request.retain_enabled_headers();
-  crate::http1::prepare(&result.request).context("请求脚本生成了无效请求")?;
+  crate::http1::validate_draft(&result.request).context("请求脚本生成了无效请求")?;
   result.response=response;
  }
  Ok(result)
@@ -199,6 +247,7 @@ fn run(code:String,mut request:RequestDraft,mut response:Option<CapturedResponse
 #[cfg(test)]
 mod input_tests {
  use super::*;
+ use base64::Engine as _;
  use serde_json::{json,Value};
 
  fn request()->RequestDraft {
@@ -234,8 +283,8 @@ mod input_tests {
   let variables=BTreeMap::from([("z".into(),"last".into()),("a".into(),"中文\0".into())]);
   for response in [None,Some(&response)] {
    let input=Input{request:(&request).into(),response:response.map(Into::into),variables:&variables};
-   // This full-model Value is only the legacy test oracle. Production excludes
-   // bodyBase64 from metadata and serializes the shared string directly.
+   // This full-model Value is only the legacy test oracle. Production sends
+   // bodyBase64 separately and reconstructs the same script-visible object.
    let legacy=serde_json::to_string(&json!({"request":&request,"response":response,"variables":&variables})).unwrap();
    let actual=serde_json::to_string(&input).unwrap();
    assert_eq!(actual,legacy);
@@ -273,5 +322,33 @@ mod input_tests {
    assert_eq!(serde_json::to_string(&entity).unwrap(),serde_json::to_string(&legacy).unwrap());
    assert_eq!(body.as_ptr(),pointer);
   }
+ }
+
+ #[test]
+ fn metadata_input_excludes_bodies_but_retains_other_fields() {
+  let mut request=request();
+  request.body_base64=SharedBody::from("QUJD".repeat(64*1024));
+  let response=response();
+  let request_entity=ScriptEntity::from(&request);
+  let response_entity=ScriptEntity::from(&response);
+  let variables=BTreeMap::new();
+  let input=MetadataInput{request:&request_entity.metadata,response:Some(&response_entity.metadata),variables:&variables};
+  let json=serde_json::to_string(&input).unwrap();
+  assert!(json.len()<16*1024);
+  let parsed:Value=serde_json::from_str(&json).unwrap();
+  assert!(parsed["request"].get("bodyBase64").is_none());
+  assert!(parsed["response"].get("bodyBase64").is_none());
+  assert_eq!(parsed["request"]["method"],request.method);
+  assert_eq!(parsed["response"]["status"],response.status);
+ }
+
+ #[test]
+ fn response_body_validation_streams_without_a_second_complete_decode_buffer() {
+  let exact=SharedBody::from(STANDARD.encode(vec![7u8;8*1024*1024]));
+  assert_eq!(validated_response_body_len(&exact).unwrap(),8*1024*1024);
+  let too_large=SharedBody::from(STANDARD.encode(vec![7u8;8*1024*1024+1]));
+  assert!(validated_response_body_len(&too_large).unwrap_err().to_string().contains("8 MiB"));
+  let malformed=SharedBody::from("YQ==!".to_string());
+  assert!(validated_response_body_len(&malformed).unwrap_err().to_string().contains("Base64"));
  }
 }

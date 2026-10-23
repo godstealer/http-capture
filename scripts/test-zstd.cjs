@@ -14,4 +14,14 @@ for (const fixture of fixtures.filter(f => !f.encoding)) {
 assert.throws(() => decodeZstd(Buffer.from([1, 2, 3])));
 const a = fixtures[1];
 assert.deepEqual(Buffer.from(decodeZstd(Buffer.from(a.compressed.repeat(2), 'hex'))), Buffer.from(a.input.repeat(2), 'hex'));
-console.log('Zstd: empty, Unicode, compressed blocks, concatenated frames, limit, truncation and corrupt input passed.');
+const hugeSingleSegment = Buffer.from(fixtures[2].compressed, 'hex');
+hugeSingleSegment.set([0, 0, 0, 4], 5); // Advertise 64 MiB from a tiny compressed frame.
+assert.throws(() => decodeZstd(hugeSingleSegment), /解压窗口超过 8 MiB/);
+const hugeWindow = Buffer.from('28b52ffd00a0010000', 'hex'); // Non-single-segment frame advertises a 1 GiB window.
+assert.throws(() => decodeZstd(hugeWindow), /解压窗口超过 8 MiB/);
+const normal = Buffer.from(a.compressed, 'hex');
+assert.throws(() => decodeZstd(Buffer.concat([normal, hugeWindow])), /解压窗口超过 8 MiB/);
+const skippable = Buffer.from('502a4d1800000000', 'hex');
+assert.deepEqual(Buffer.from(decodeZstd(Buffer.concat([skippable, normal]))), Buffer.from(a.input, 'hex'));
+assert.throws(() => decodeZstd(Buffer.concat([skippable.subarray(0, 7), normal])), /不完整或已损坏/);
+console.log('Zstd: empty, Unicode, compressed blocks, concatenated/skippable frames, window preflight, limit, truncation and corrupt input passed.');

@@ -9,12 +9,12 @@ mod session_export;
 use capture_core::{model::{Flow, ProxyStatus, RequestDraft}, CaptureRuntime, Engine};
 use capture_mcp::{server::ServerManager, client::ClientManager};
 use std::sync::{Arc, atomic::Ordering};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 #[tauri::command]
 fn grpc_poll(state:State<'_,AppState>,id:String)->Result<Option<Flow>,String>{state.engine.store.get(&id).map_err(|e|e.to_string())}
 #[tauri::command]
-fn grpc_start(state:State<'_,AppState>,request:RequestDraft,half_close:bool)->Result<String,String>{let _lifecycle=state.network_lifecycle.try_lock().map_err(|_|"网络设置正在变更，请稍后重试")?;state.ensure_network_ready()?;capture_core::grpc_client::start(state.engine.clone(),request,half_close).map_err(|e|e.to_string())}
+async fn grpc_start(state:State<'_,AppState>,request:RequestDraft,half_close:bool)->Result<String,String>{let _lifecycle=state.network_lifecycle.lock().await;state.ensure_network_ready()?;capture_core::grpc_client::start(state.engine.clone(),request,half_close).await.map_err(|e|e.to_string())}
 #[tauri::command]
 async fn grpc_send(state:State<'_,AppState>,id:String,body:String,end:bool)->Result<(),String>{capture_core::grpc_client::send(&state.engine,&id,&body,end).await.map_err(|e|e.to_string())}
 #[tauri::command]
@@ -150,6 +150,12 @@ async fn tun_status(state:State<'_,AppState>)->Result<capture_core::tun::TunStat
 async fn start_tun(config:capture_core::tun::TunConfig,state:State<'_,AppState>)->Result<(),String> {let _lifecycle=state.network_lifecycle.lock().await;state.ensure_network_ready()?;state.engine.tun.start(state.engine.clone(),config).await.map_err(|e|format!("{e:#}"))}
 #[tauri::command]
 async fn stop_tun(state:State<'_,AppState>)->Result<(),String> {state.engine.tun.stop().await.map_err(|e|format!("{e:#}"))}
+#[tauri::command]
+async fn reverse_quic_status(state:State<'_,AppState>)->Result<capture_core::runtime::ReverseQuicStatus,String> {Ok(state.runtime.reverse_quic_status().await)}
+#[tauri::command]
+async fn start_reverse_quic(target:String,port:u16,state:State<'_,AppState>)->Result<capture_core::runtime::ReverseQuicStatus,String> {state.runtime.start_reverse_quic(target,port).await}
+#[tauri::command]
+async fn stop_reverse_quic(state:State<'_,AppState>)->Result<capture_core::runtime::ReverseQuicStatus,String> {state.runtime.stop_reverse_quic().await}
 #[tauri::command]
 async fn network_interfaces() -> Result<Vec<capture_core::network::InterfaceAddress>, String> {
     tauri::async_runtime::spawn_blocking(||capture_core::network::interfaces().map_err(|e|format!("{e:#}"))).await.map_err(|e|e.to_string())?
@@ -305,13 +311,28 @@ fn main() {
             app.manage(AppState { runtime, mcp_server, mcp_clients });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![session_export::begin_session_export,session_export::append_session_export,session_export::finish_session_export,certificate_commands::certificates,certificate_commands::import_certificate,certificate_commands::change_certificate,body_commands::flow_metadata_changes,body_commands::flow_metadata,body_commands::get_flow,body_commands::read_flow_body,body_commands::save_flow_body,response_rewrite_commands::response_rewrite,response_rewrite_commands::configure_response_rewrite,config_migration_commands::config_status,config_migration_commands::config_export,config_migration_commands::config_preview,config_migration_commands::config_import,config_migration_commands::config_recovery,config_migration_commands::config_restart,config_migration_commands::config_save_file,mcp_commands::workspace_revisions,mcp_commands::mcp_status,mcp_commands::mcp_configure,mcp_commands::mcp_connection_info,mcp_commands::mcp_clients,mcp_commands::mcp_save_client,mcp_commands::mcp_remove_client,mcp_commands::mcp_connect_client,mcp_commands::mcp_disconnect_client,mcp_commands::mcp_client_tools,mcp_commands::mcp_call_tool,mcp_commands::plugins_validate,app_update::open_update_download,app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking,fault_rules,configure_fault_rules,mcp_audit, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![session_export::begin_session_export,session_export::append_session_export,session_export::finish_session_export,certificate_commands::certificates,certificate_commands::import_certificate,certificate_commands::change_certificate,body_commands::flow_metadata_changes,body_commands::flow_metadata,body_commands::get_flow,body_commands::read_flow_body,body_commands::save_flow_body,response_rewrite_commands::response_rewrite,response_rewrite_commands::configure_response_rewrite,config_migration_commands::config_status,config_migration_commands::config_export,config_migration_commands::config_preview,config_migration_commands::config_import,config_migration_commands::config_recovery,config_migration_commands::config_restart,config_migration_commands::config_save_file,mcp_commands::workspace_revisions,mcp_commands::mcp_status,mcp_commands::mcp_configure,mcp_commands::mcp_connection_info,mcp_commands::mcp_clients,mcp_commands::mcp_save_client,mcp_commands::mcp_remove_client,mcp_commands::mcp_connect_client,mcp_commands::mcp_disconnect_client,mcp_commands::mcp_client_tools,mcp_commands::mcp_call_tool,mcp_commands::plugins_validate,app_update::open_update_download,app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, reverse_quic_status, start_reverse_quic, stop_reverse_quic, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking,fault_rules,configure_fault_rules,mcp_audit, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
-        .run(|app,event| { if let tauri::RunEvent::Exit = event {
-            let state=app.state::<AppState>();
-            if let Err(error)=tauri::async_runtime::block_on(state.shutdown_network()){eprintln!("Network shutdown: {error}");}
-        }});
+        .run(|app,event| match event {
+            // The application menu's Quit action can bypass the WebView's
+            // CloseRequested event. Route it through the same save guard as
+            // the title-bar close. A destroyed window has already passed that
+            // guard, and programmatic exits (including updater restart) keep
+            // their existing behavior.
+            tauri::RunEvent::ExitRequested { code: None, api, .. }
+                if app.get_webview_window("main").is_some() => {
+                    api.prevent_exit();
+                    if let Err(error) = app.emit_to("main", "desktop-close-requested", ()) {
+                        eprintln!("Desktop close request: {error}");
+                    }
+                }
+            tauri::RunEvent::Exit => {
+                let state=app.state::<AppState>();
+                if let Err(error)=tauri::async_runtime::block_on(state.shutdown_network()){eprintln!("Network shutdown: {error}");}
+            }
+            _ => {}
+        });
 }
 
 #[tauri::command]

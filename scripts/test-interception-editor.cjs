@@ -157,6 +157,7 @@ function mount(stage = 'request') {
   return {
     calls,
     find,
+    has: (fn) => { render(); return nodes(tree).some(fn); },
     render,
     body: () => find((n) => n.type === Body),
     headers: () => find((n) => n.type === Headers),
@@ -184,6 +185,11 @@ function mount(stage = 'request') {
 }
 (async () => {
   const response = mount('response');
+  assert.equal(response.has(n => n.type === 'pre'), false, 'closed original details must not render a full-body JSON copy');
+  response.find(n => n.type === 'details' && n.props.className === 'interception-original').onToggle({ currentTarget: { open: true } });
+  assert.equal(response.has(n => n.type === 'pre'), true, 'original JSON remains available when opened');
+  response.find(n => n.type === 'details' && n.props.className === 'interception-original').onToggle({ currentTarget: { open: false } });
+  assert.equal(response.has(n => n.type === 'pre'), false, 'closing original details releases the rendered JSON');
   assert.equal(response.headers().context, 'response');
   response.body().onChange('{"replacement":true}');
   response.render();

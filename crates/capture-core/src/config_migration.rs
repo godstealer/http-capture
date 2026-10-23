@@ -6,6 +6,9 @@ use serde::{Deserialize,Serialize};
 use serde_json::{json,Value};
 use std::{collections::{BTreeMap,BTreeSet},io::Write,time::{SystemTime,UNIX_EPOCH}};
 use crate::{store::{Store,Library,Workspace},scripts::Scripts,plugins::Plugin};
+mod crypto;
+mod merge;
+pub use crypto::{decrypt_document,encrypt_document,is_encrypted_document,validate_encrypted_document,MAX_ENCRYPTED_DOCUMENT_BYTES};
 #[cfg(test)]
 #[path="config_migration_response_rewrite_tests.rs"]
 mod response_rewrite_tests;
@@ -25,10 +28,12 @@ pub struct ExportOptions {pub include_request_data:bool,pub include_code:bool,pu
 struct Package {format:String,schema_version:u32,export_id:String,exported_at:u64,source_version:String,sections:BTreeMap<String,Section>,#[serde(default)]warnings:Vec<String>}
 #[derive(Clone,Serialize,Deserialize)]#[serde(deny_unknown_fields)]struct Section {version:u32,data:Value}
 #[derive(Clone,Serialize)]pub struct SectionSummary {pub id:String,pub count:usize}
+#[derive(Clone,Serialize)]#[serde(rename_all="camelCase")]
+pub struct MergeConflict {pub id:String,pub section:String,pub label:String}
 #[derive(Clone,Serialize)]pub struct Summary {pub sections:Vec<SectionSummary>,pub warnings:Vec<String>}
 #[derive(Serialize)]pub struct Exported {pub document:String,pub summary:Summary}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
-pub struct Preview {pub expected_revision:String,pub sections:Vec<SectionSummary>,pub warnings:Vec<String>,pub requires_restart:bool,pub source_version:String,pub exported_at:u64}
+pub struct Preview {pub expected_revision:String,pub sections:Vec<SectionSummary>,pub warnings:Vec<String>,pub conflicts:Vec<MergeConflict>,pub requires_restart:bool,pub source_version:String,pub exported_at:u64}
 #[derive(Serialize)]#[serde(rename_all="camelCase")]
 pub struct Imported {pub epoch:String,pub imported_sections:Vec<String>,pub preferences:BTreeMap<String,String>,pub requires_restart:bool,pub recovery_available:bool,pub warnings:Vec<String>}
 
@@ -71,7 +76,7 @@ fn summary(package:&Package)->Summary {Summary{sections:package.sections.iter().
 fn serialize(package:Package)->Result<Exported>{let result=Exported{summary:summary(&package),document:serde_json::to_string_pretty(&package)?};ensure!(result.document.len()<=MAX_DOCUMENT_BYTES,"Configuration file exceeds 16 MiB; exclude request bodies or workspace");Ok(result)}
 
 #[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Listener {host:String,port:u16}
-#[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Template {name:String,hex:String}
+#[derive(Clone,Serialize,Deserialize)]#[serde(deny_unknown_fields)]struct Template {name:String,hex:String}
 pub fn validate_preferences(values:&BTreeMap<String,String>)->Result<()> {
     ensure!(values.len()<=PREF_KEYS.len(),"Too many UI preferences");
     for (key,value) in values {
@@ -259,6 +264,24 @@ fn make_package(snapshot:&Snapshot,mut preferences:BTreeMap<String,String>,optio
     Ok(package)
 }
 pub fn export(store:&Store,preferences:BTreeMap<String,String>,options:ExportOptions,source_version:&str)->Result<Exported>{serialize(make_package(&store.configuration_snapshot()?,preferences,&options,source_version)?)}
+pub fn export_protected(store:&Store,preferences:BTreeMap<String,String>,options:ExportOptions,source_version:&str,passphrase:Option<&str>)->Result<Exported>{
+    let mut package=make_package(&store.configuration_snapshot()?,preferences,&options,source_version)?;
+    if let Some(passphrase)=passphrase {
+        package.warnings.retain(|warning|!warning.contains("明文保留"));
+        warning(&mut package.warnings,"配置文件已加密；请妥善保存密码，遗失后无法恢复。");
+        let mut exported=serialize(package)?;
+        exported.document=encrypt_document(&exported.document,passphrase)?;
+        return Ok(exported);
+    }
+    serialize(package)
+}
+fn opened_document<'a>(document:&'a str,passphrase:Option<&str>)->Result<std::borrow::Cow<'a,str>>{
+    if is_encrypted_document(document){
+        let passphrase=passphrase.context("Encrypted configuration requires a passphrase")?;
+        Ok(std::borrow::Cow::Owned(decrypt_document(document,passphrase)?))
+    }else{Ok(std::borrow::Cow::Borrowed(document))}
+}
+pub fn preview_protected(store:&Store,document:&str,passphrase:Option<&str>)->Result<Preview>{preview(store,&opened_document(document,passphrase)?)}
 pub fn preview(store:&Store,document:&str)->Result<Preview>{
     let package=parse_document(document)?;let snapshot=store.configuration_snapshot()?;
     let mut warnings=package.warnings.clone();warning(&mut warnings,"导入会替换勾选的类别，不会合并；提交后需要重启应用。");
@@ -266,10 +289,31 @@ pub fn preview(store:&Store,document:&str)->Result<Preview>{
     warning(&mut warnings,"无论是否勾选 MCP 类别，本机 MCP 服务和所有 MCP 操作权限都会关闭，需在重启后重新授权。");
     if package.sections.contains_key("library"){warning(&mut warnings,"替换集合时，现有标签中指向已删除收藏的关联会清除。");}
     if package.sections.contains_key("upstream"){warning(&mut warnings,"替换代理会为导入代理生成新 ID；现有未导入请求的代理关联会清除，需要重新选择代理。");}
-    Ok(Preview{expected_revision:snapshot.revision,sections:summary(&package).sections,warnings,requires_restart:true,source_version:package.source_version,exported_at:package.exported_at})
+    Ok(Preview{expected_revision:snapshot.revision,sections:summary(&package).sections,warnings,conflicts:Vec::new(),requires_restart:true,source_version:package.source_version,exported_at:package.exported_at})
+}
+pub fn preview_merge(store:&Store,document:&str,selected:Option<&[String]>,current_preferences:BTreeMap<String,String>,source_version:&str)->Result<Preview>{
+    preview_merge_with_choices(store,document,selected,current_preferences,source_version,&BTreeMap::new())
+}
+pub fn preview_merge_with_choices(store:&Store,document:&str,selected:Option<&[String]>,current_preferences:BTreeMap<String,String>,source_version:&str,choices:&BTreeMap<String,String>)->Result<Preview>{
+    let mut result=preview(store,document)?;
+    let chosen=selected.map(|values|values.to_vec()).unwrap_or_else(||result.sections.iter().map(|section|section.id.clone()).collect());
+    let planned=prepare_import_merge_with_choices(store,document,&chosen,&result.expected_revision,current_preferences,source_version,choices)?;
+    result.sections.retain(|section|chosen.contains(&section.id));
+    result.warnings.retain(|item|!item.contains("导入会替换")&&!item.contains("替换集合")&&!item.contains("替换代理"));
+    warning(&mut result.warnings,"合并会保留本机项目；同名不同内容的导入项另存为副本，重复导入跳过已有副本。本机内容已修改的副本保留并列为冲突。");
+    warning(&mut result.warnings,"合并支持当前配置类别；全局脚本按前置/后置代码和变量分别合并，有冲突时保留本机值。新增代码或变量后全局脚本关闭，需审阅后手动启用。");
+    result.conflicts=planned.conflicts;
+    for message in planned.result.warnings {if message.contains("合并")||message.contains("在本机已修改")||message.contains("范围与本机不同"){warning(&mut result.warnings,&message);}}
+    Ok(result)
+}
+pub fn preview_merge_protected(store:&Store,document:&str,selected:Option<&[String]>,current_preferences:BTreeMap<String,String>,source_version:&str,passphrase:Option<&str>)->Result<Preview>{
+    preview_merge_with_choices(store,&opened_document(document,passphrase)?,selected,current_preferences,source_version,&BTreeMap::new())
+}
+pub fn preview_merge_protected_with_choices(store:&Store,document:&str,selected:Option<&[String]>,current_preferences:BTreeMap<String,String>,source_version:&str,passphrase:Option<&str>,choices:&BTreeMap<String,String>)->Result<Preview>{
+    preview_merge_with_choices(store,&opened_document(document,passphrase)?,selected,current_preferences,source_version,choices)
 }
 
-pub struct PreparedImport {expected:String,updates:BTreeMap<String,Value>,recovery:Value,result:Imported}
+pub struct PreparedImport {expected:String,updates:BTreeMap<String,Value>,recovery:Value,result:Imported,conflicts:Vec<MergeConflict>}
 fn remap_proxy(draft:&mut crate::model::RequestDraft,ids:&BTreeMap<String,String>,imported:bool,replace_proxies:bool){
     if imported {draft.upstream_profile_id=draft.upstream_profile_id.as_ref().and_then(|id|ids.get(id).cloned());draft.scripts.enabled=false;}
     else if replace_proxies {draft.upstream_profile_id=None;}
@@ -327,7 +371,149 @@ pub fn prepare_import(store:&Store,document:&str,selected:&[String],expected:&st
     updates.insert("mcp.server.v1".into(),json!({"enabled":false,"port":port,"allowSend":false,"allowCaptureControl":false,"includeSensitiveHeaders":false,"allowWorkspaceWrite":false,"allowRulesWrite":false,"allowScriptsWrite":false}));
     if chosen.contains("mcp") {let mcp:PortableMcp=serde_json::from_value(package.sections["mcp"].data.clone())?;let clients=mcp.clients.into_iter().map(|c|json!({"id":uuid::Uuid::new_v4().to_string(),"name":c.name,"transport":"http","url":c.url,"command":"","args":[],"tokenRequired":c.token_required})).collect::<Vec<_>>();updates.insert("mcp.clients.v1".into(),json!(clients));}
     warning(&mut warnings,"配置已导入。重启后生效；请先补填缺失数据，再手动启用网络、脚本和 MCP 权限。");
-    Ok(PreparedImport{expected:expected.into(),updates,recovery,result:Imported{epoch:uuid::Uuid::new_v4().to_string(),imported_sections:selected.to_vec(),preferences,requires_restart:true,recovery_available:true,warnings}})
+    Ok(PreparedImport{expected:expected.into(),updates,recovery,result:Imported{epoch:uuid::Uuid::new_v4().to_string(),imported_sections:selected.to_vec(),preferences,requires_restart:true,recovery_available:true,warnings},conflicts:Vec::new()})
+}
+pub fn prepare_import_protected(store:&Store,document:&str,selected:&[String],expected:&str,current_preferences:BTreeMap<String,String>,source_version:&str,passphrase:Option<&str>)->Result<PreparedImport>{
+    prepare_import(store,&opened_document(document,passphrase)?,selected,expected,current_preferences,source_version)
+}
+/// Additive merge for identity-bearing collections, upstream profiles,
+/// request tabs, UI preferences, portable MCP clients, ordered rule lists,
+/// plugins and the single global script slot. Conflicting local script fields are preserved.
+pub fn prepare_import_merge(store:&Store,document:&str,selected:&[String],expected:&str,current_preferences:BTreeMap<String,String>,source_version:&str)->Result<PreparedImport>{
+    prepare_import_merge_with_choices(store,document,selected,expected,current_preferences,source_version,&BTreeMap::new())
+}
+pub fn prepare_import_merge_with_choices(store:&Store,document:&str,selected:&[String],expected:&str,current_preferences:BTreeMap<String,String>,source_version:&str,choices:&BTreeMap<String,String>)->Result<PreparedImport>{
+    ensure!(!selected.is_empty()&&selected.iter().all(|id|matches!(id.as_str(),"library"|"upstream"|"workspace"|"preferences"|"decryption"|"mcp"|"blocking"|"faults"|"responseRewrite"|"plugins"|"interception"|"scripts")),"Unsupported merge category");
+    let package=parse_document(document)?;
+    let local_preferences=current_preferences.clone();
+    let mut prepared=prepare_import(store,document,selected,expected,current_preferences,source_version)?;
+    let snapshot=store.configuration_snapshot()?;
+    ensure!(snapshot.revision==expected,"Configuration changed after preview; preview the file again before importing");
+    prepared.updates.remove("library.v1");prepared.updates.remove("workspace.v1");prepared.updates.remove("upstream.profiles.v1");prepared.updates.remove(PREF_KEY);prepared.updates.remove("decryption.bypass.v1");
+    let chosen=selected.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let mut proxy_ids=BTreeMap::new();let mut request_ids=BTreeMap::new();let mut editor_ids=BTreeMap::new();
+    if chosen.contains("upstream") {
+        let source:Vec<PortableProxy>=serde_json::from_value(package.sections["upstream"].data.clone())?;
+        let local:Vec<Value>=saved(&snapshot,"upstream.profiles.v1")?;
+        let merged=merge::merge_proxies(local,&source,&package.export_id,choices)?;
+        proxy_ids=merged.ids;
+        if merged.added>0{prepared.updates.insert("upstream.profiles.v1".into(),serde_json::to_value(merged.profiles)?);}
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("代理合并：新增 {}，已存在 {}。",merged.added,merged.skipped));
+    }
+    if chosen.contains("library") {
+        let source:Library=serde_json::from_value(package.sections["library"].data.clone())?;
+        if !chosen.contains("upstream")&&source.requests.iter().any(|request|request.draft.upstream_profile_id.is_some()){
+            warning(&mut prepared.result.warnings,"未合并上游代理；导入请求中的代理关联已清除，发送前需要重新选择。");
+        }
+        let local:Library=saved(&snapshot,"library.v1")?;
+        let merged=merge::merge_library(local,&source,&package.export_id,&proxy_ids,choices)?;
+        request_ids=merged.ids;
+        if merged.added>0 {let mut library=merged.library;library.revision=library.revision.checked_add(1).context("Library revision overflow")?;prepared.updates.insert("library.v1".into(),serde_json::to_value(library)?);}
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("集合合并：新增 {}，已存在 {}。",merged.added,merged.skipped));
+    }
+    if chosen.contains("workspace") {
+        let source:Workspace=serde_json::from_value(package.sections["workspace"].data.clone())?;
+        if !chosen.contains("library")&&source.editors.iter().any(|editor|editor.saved_request_id.is_some()){
+            warning(&mut prepared.result.warnings,"未合并集合；导入标签中的收藏请求关联已清除。");
+        }
+        if !chosen.contains("upstream")&&source.editors.iter().any(|editor|editor.draft.upstream_profile_id.is_some()){
+            warning(&mut prepared.result.warnings,"未合并上游代理；导入标签中的代理关联已清除。");
+        }
+        let local:Workspace=saved(&snapshot,"workspace.v1")?;
+        let merged=merge::merge_workspace(local,&source,&package.export_id,&request_ids,&proxy_ids,choices)?;
+        editor_ids=merged.ids;
+        if merged.added>0 {let mut workspace=merged.workspace;workspace.revision=workspace.revision.checked_add(1).context("Workspace revision overflow")?;prepared.updates.insert("workspace.v1".into(),serde_json::to_value(workspace)?);}
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("请求标签合并：新增 {}，已存在 {}。",merged.added,merged.skipped));
+    }
+    if chosen.contains("preferences") {
+        let source:BTreeMap<String,String>=serde_json::from_value(package.sections["preferences"].data.clone())?;
+        let saved_preferences:BTreeMap<String,String>=saved(&snapshot,PREF_KEY)?;
+        let local=if local_preferences.is_empty(){saved_preferences.clone()}else{local_preferences};
+        let merged=merge::merge_preferences(local,&source,&editor_ids,choices)?;
+        if merged.preferences!=saved_preferences{prepared.updates.insert(PREF_KEY.into(),serde_json::to_value(&merged.preferences)?);}
+        prepared.result.preferences=merged.preferences;
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("界面偏好合并：新增 {}，已存在 {}。",merged.added,merged.skipped));
+    }
+    if chosen.contains("decryption") {
+        let source:Vec<String>=serde_json::from_value(package.sections["decryption"].data.clone())?;
+        let local:Vec<String>=saved(&snapshot,"decryption.bypass.v1")?;
+        let merged=merge::merge_decryption(local,&source)?;
+        if merged.added>0{prepared.updates.insert("decryption.bypass.v1".into(),serde_json::to_value(merged.hosts)?);}
+        warning(&mut prepared.result.warnings,&format!("解密绕过列表合并：新增 {}，已存在 {}。",merged.added,merged.skipped));
+    }
+    if chosen.contains("mcp") {
+        let source:PortableMcp=serde_json::from_value(package.sections["mcp"].data.clone())?;
+        let local:Vec<Value>=saved(&snapshot,"mcp.clients.v1")?;
+        let merged=merge::merge_mcp(local,&source,&package.export_id,choices)?;
+        prepared.updates.remove("mcp.clients.v1");
+        if merged.added>0{prepared.updates.insert("mcp.clients.v1".into(),serde_json::to_value(merged.clients)?);}
+        prepared.conflicts.extend(merged.decisions);
+        let local_port=snapshot.settings.get("mcp.server.v1").and_then(|v|v["port"].as_u64()).unwrap_or(1422);
+        prepared.updates.insert("mcp.server.v1".into(),json!({"enabled":false,"port":local_port,"allowSend":false,"allowCaptureControl":false,"includeSensitiveHeaders":false,"allowWorkspaceWrite":false,"allowRulesWrite":false,"allowScriptsWrite":false}));
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("MCP 服务合并：新增 {}，已存在 {}；本机端口保留，权限关闭。",merged.added,merged.skipped));
+    }
+    for (section,key) in [("blocking","blocking.v1"),("faults","fault-rules.v1"),("responseRewrite","response-rewrite.v1")] {
+        if !chosen.contains(section){continue;}
+        let local=match section {
+            "blocking"=>serde_json::to_value(saved::<crate::blocking::Config>(&snapshot,key)?)?,
+            "faults"=>serde_json::to_value(saved::<crate::fault_rules::Config>(&snapshot,key)?)?,
+            _=>serde_json::to_value(saved::<crate::response_rewrite::Config>(&snapshot,key)?)?,
+        };
+        let merged=merge::merge_id_rules(local,&package.sections[section].data,&package.export_id,section,choices)?;
+        prepared.updates.remove(key);
+        if merged.added>0{prepared.updates.insert(key.into(),merged.config);}
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("{section} 规则合并：写入 {}，保留 {}；导入规则默认禁用。",merged.added,merged.skipped));
+    }
+    if chosen.contains("plugins") {
+        let source:Vec<Plugin>=serde_json::from_value(package.sections["plugins"].data.clone())?;
+        let local:Vec<Plugin>=saved(&snapshot,"plugins.v1")?;
+        let merged=merge::merge_plugins(local,&source,&package.export_id,choices)?;
+        prepared.updates.remove("plugins.v1");
+        if merged.added>0{prepared.updates.insert("plugins.v1".into(),serde_json::to_value(merged.plugins)?);}
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("插件合并：写入 {}，保留 {}；导入插件默认禁用。",merged.added,merged.skipped));
+    }
+    if chosen.contains("interception") {
+        let source:crate::intercept::Config=serde_json::from_value(package.sections["interception"].data.clone())?;
+        let local:crate::intercept::Config=snapshot.settings.get("interception.v1").cloned().map(serde_json::from_value).transpose()?.unwrap_or(crate::intercept::Config{scope:"all".into(),..Default::default()});
+        let merged=merge::merge_interception(local,&source,&package.export_id,choices)?;
+        prepared.updates.remove("interception.v1");
+        if merged.added>0{prepared.updates.insert("interception.v1".into(),serde_json::to_value(merged.config)?);}
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("断点规则合并：写入 {}，保留 {}；新增规则默认禁用。",merged.added,merged.skipped));
+    }
+    if chosen.contains("scripts") {
+        let source:Scripts=serde_json::from_value(package.sections["scripts"].data.clone())?;
+        let local:Scripts=saved(&snapshot,"capture-scripts.v1")?;
+        let merged=merge::merge_scripts(local,&source,choices)?;
+        prepared.updates.remove("capture-scripts.v1");
+        if merged.added>0{prepared.updates.insert("capture-scripts.v1".into(),serde_json::to_value(merged.scripts)?);}
+        prepared.conflicts.extend(merged.decisions);
+        for conflict in merged.conflicts{warning(&mut prepared.result.warnings,&conflict);}
+        warning(&mut prepared.result.warnings,&format!("全局脚本合并：新增 {}，已存在 {}；新增内容后脚本关闭。",merged.added,merged.skipped));
+    }
+    ensure!(choices.is_empty()||["scripts","preferences","plugins","blocking","faults","responseRewrite","upstream","workspace","library","mcp","interception"].iter().any(|section|chosen.contains(*section)),"Merge choices require selecting the corresponding category");
+    ensure!(choices.iter().all(|(id,choice)|["local","imported"].contains(&choice.as_str())&&prepared.conflicts.iter().any(|conflict|&conflict.id==id)),"Unknown or stale merge conflict choice; preview again");
+    Ok(prepared)
+}
+pub fn prepare_import_merge_protected(store:&Store,document:&str,selected:&[String],expected:&str,current_preferences:BTreeMap<String,String>,source_version:&str,passphrase:Option<&str>)->Result<PreparedImport>{
+    prepare_import_merge_with_choices(store,&opened_document(document,passphrase)?,selected,expected,current_preferences,source_version,&BTreeMap::new())
+}
+pub fn prepare_import_merge_protected_with_choices(store:&Store,document:&str,selected:&[String],expected:&str,current_preferences:BTreeMap<String,String>,source_version:&str,passphrase:Option<&str>,choices:&BTreeMap<String,String>)->Result<PreparedImport>{
+    prepare_import_merge_with_choices(store,&opened_document(document,passphrase)?,selected,expected,current_preferences,source_version,choices)
 }
 pub fn commit_import(store:&Store,prepared:PreparedImport)->Result<Imported>{
     let mut pending=json!({"epoch":prepared.result.epoch,"importedSections":prepared.result.imported_sections,"warnings":prepared.result.warnings});
@@ -340,11 +526,23 @@ pub fn status(store:&Store)->Result<Value>{
     store.configuration_migration_status()
 }
 pub fn recovery(store:&Store)->Result<Exported>{let value:Value=store.setting("config-migration.recovery.v1")?.context("No configuration recovery point is available")?;serialize(serde_json::from_value(value)?)}
+pub fn recovery_protected(store:&Store,passphrase:Option<&str>)->Result<Exported>{
+    if let Some(passphrase)=passphrase {
+        let value:Value=store.setting("config-migration.recovery.v1")?.context("No configuration recovery point is available")?;
+        let mut package:Package=serde_json::from_value(value)?;
+        package.warnings.retain(|warning|!warning.contains("明文保留"));
+        warning(&mut package.warnings,"恢复点文件已加密；请妥善保存密码。");
+        let mut exported=serialize(package)?;
+        exported.document=encrypt_document(&exported.document,passphrase)?;
+        return Ok(exported);
+    }
+    recovery(store)
+}
 
 /// Write a user-selected JSON file with one filesystem rename. NamedTempFile
 /// removes incomplete output automatically on cancellation/error paths.
 pub fn save_atomic(path:&std::path::Path,document:&str)->Result<()> {
-    validate_document(document)?;
+    if is_encrypted_document(document){validate_encrypted_document(document)?;}else{validate_document(document)?;}
     let parent=path.parent().context("Invalid configuration file destination")?;
     let mut temporary=tempfile::NamedTempFile::new_in(parent)?;
     temporary.write_all(document.as_bytes())?;temporary.flush()?;temporary.as_file().sync_all()?;
@@ -437,6 +635,279 @@ mod tests {
         let dir=tempfile::tempdir().unwrap();let target=store(dir.path());populate(&target,"Target");let document=export(&target,preferences(),all_options(),"0.1.99").unwrap().document;let before=serde_json::to_value(target.library().unwrap()).unwrap();
         let plan=preview(&target,&document).unwrap();let prepared=prepare_import(&target,&document,&["preferences".into()],&plan.expected_revision,BTreeMap::new(),"0.1.99").unwrap();let result=commit_import(&target,prepared).unwrap();
         assert_eq!(serde_json::to_value(target.library().unwrap()).unwrap(),before);assert!(!result.preferences.contains_key("http-capture.request-modes"));assert_eq!(target.setting::<Value>("mcp.server.v1").unwrap().unwrap()["allowSend"],false);assert_eq!(target.setting::<String>("mcp.server.token.v1").unwrap().unwrap(),"Target-local-only-token");
+    }
+    #[test]
+    fn additive_merge_preserves_local_requests_maps_proxies_and_does_not_duplicate_reimport(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());populate(&source,"Source");
+        source.save_setting("blocking.v1",&json!({"enabled":true,"scope":"all","rules":[{"id":"source-block","enabled":true,"matchType":"urlContains","pattern":"/source"}]})).unwrap();
+        source.save_setting("plugins.v1",&json!([{"id":"source-plugin","name":"Plugin","version":"1.0.0","apiVersion":1,"enabled":true,"scope":"all","urlPattern":".*","before":"request.headers.push({name:'X-Imported',value:'1'});"}])).unwrap();
+        source.save_setting("interception.v1",&json!({"request":true,"response":true,"scope":"all","rules":[{"urlContains":"/source-breakpoint"}]})).unwrap();
+        source.save_setting("capture-scripts.v1",&json!({"enabled":true,"before":"sourceBefore();","after":"sourceAfter();","variables":{"password":"private-global-var","imported":"new-value"}})).unwrap();
+        let document=export(&source,preferences(),all_options(),"0.1.99").unwrap().document;
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());populate(&target,"Target");target.save_setting("decryption.bypass.v1",&vec!["local.invalid"]).unwrap();
+        target.save_setting("mcp.server.v1",&json!({"enabled":true,"port":1555,"allowSend":true,"allowCaptureControl":true,"includeSensitiveHeaders":true,"allowWorkspaceWrite":true,"allowRulesWrite":true,"allowScriptsWrite":true})).unwrap();
+        let original=target.library().unwrap();let original_proxy:Value=target.setting("upstream.profiles.v1").unwrap().unwrap();
+        let selected=["library".into(),"upstream".into(),"workspace".into(),"preferences".into(),"decryption".into(),"mcp".into(),"blocking".into(),"plugins".into(),"interception".into(),"scripts".into()];
+        let plan=preview(&target,&document).unwrap();
+        let prepared=prepare_import_merge(&target,&document,&selected,&plan.expected_revision,BTreeMap::from([("http-capture.theme".into(),"sakura".into())]),"0.1.99").unwrap();
+        let imported=commit_import(&target,prepared).unwrap();assert!(imported.warnings.iter().any(|warning|warning.contains("集合合并")));
+        assert_eq!(imported.preferences["http-capture.theme"],"sakura");assert_eq!(imported.preferences["http-capture.zoom"],"125");
+        let first=target.library().unwrap();let profiles:Value=target.setting("upstream.profiles.v1").unwrap().unwrap();let workspace=target.workspace().unwrap();
+        assert_eq!(first.collections.len(),2);assert_eq!(first.requests.len(),2);assert_eq!(first.requests[0].id,original.requests[0].id);
+        assert_eq!(profiles.as_array().unwrap().len(),2);assert_eq!(profiles[0],original_proxy[0]);
+        assert_eq!(first.requests[0].draft.upstream_profile_id.as_deref(),Some("proxy-old"));
+        assert_eq!(first.requests[1].draft.upstream_profile_id.as_deref(),profiles[1]["id"].as_str());
+        assert_eq!(workspace.editors.len(),2);assert_eq!(workspace.editors[1].saved_request_id.as_deref(),Some(first.requests[1].id.as_str()));
+        assert_eq!(target.setting::<Vec<String>>("decryption.bypass.v1").unwrap().unwrap(),vec!["local.invalid","*.example.invalid"]);
+        let mcp_clients:Vec<Value>=target.setting("mcp.clients.v1").unwrap().unwrap();
+        assert_eq!(mcp_clients.len(),3);assert_eq!(mcp_clients[0]["id"],"http-client");assert_eq!(mcp_clients[1]["id"],"stdio-client");
+        assert_eq!(mcp_clients[2]["url"],"https://mcp.example.invalid/mcp");
+        let mcp_server:Value=target.setting("mcp.server.v1").unwrap().unwrap();assert_eq!(mcp_server["port"],1555);assert_eq!(mcp_server["enabled"],false);assert_eq!(mcp_server["allowSend"],false);
+        let blocking:Value=target.setting("blocking.v1").unwrap().unwrap();assert_eq!(blocking["enabled"],true);assert_eq!(blocking["scope"],"capture");
+        assert_eq!(blocking["rules"][0]["id"],"block-one");assert_eq!(blocking["rules"][1]["pattern"],"/source");assert_eq!(blocking["rules"][1]["enabled"],false);
+        let plugins:Vec<Plugin>=target.setting("plugins.v1").unwrap().unwrap();assert_eq!(plugins.len(),2);
+        assert!(plugins[0].enabled);assert!(!plugins[1].enabled);assert_eq!(plugins[1].name,"Plugin（导入）");
+        let interception:crate::intercept::Config=target.setting("interception.v1").unwrap().unwrap();
+        assert!(interception.request&&interception.response);assert_eq!(interception.scope,"capture");assert_eq!(interception.rules.len(),2);
+        assert!(!interception.rules[0].disabled);assert!(interception.rules[1].disabled);assert_eq!(interception.rules[1].url_contains,"/source-breakpoint");
+        let scripts:Scripts=target.setting("capture-scripts.v1").unwrap().unwrap();assert!(!scripts.enabled);
+        assert!(scripts.before.contains("private-global-code"));assert_eq!(scripts.after,"sourceAfter();");assert_eq!(scripts.variables["imported"],"new-value");
+        drop(target);let reopened=store(target_dir.path());let plan=preview(&reopened,&document).unwrap();
+        commit_import(&reopened,prepare_import_merge(&reopened,&document,&selected,&plan.expected_revision,BTreeMap::new(),"0.1.99").unwrap()).unwrap();
+        assert_eq!(reopened.setting::<Vec<Value>>("mcp.clients.v1").unwrap().unwrap().len(),3);
+        assert_eq!(reopened.setting::<Value>("blocking.v1").unwrap().unwrap()["rules"].as_array().unwrap().len(),2);
+        assert_eq!(reopened.setting::<Vec<Plugin>>("plugins.v1").unwrap().unwrap().len(),2);
+        assert_eq!(reopened.setting::<crate::intercept::Config>("interception.v1").unwrap().unwrap().rules.len(),2);
+        assert_eq!(reopened.setting::<Scripts>("capture-scripts.v1").unwrap().unwrap().after,"sourceAfter();");
+        assert_eq!(reopened.library().unwrap().requests.len(),2);assert_eq!(reopened.workspace().unwrap().editors.len(),2);
+        assert_eq!(reopened.setting::<Value>("upstream.profiles.v1").unwrap().unwrap().as_array().unwrap().len(),2);
+        assert_eq!(reopened.setting::<Vec<String>>("decryption.bypass.v1").unwrap().unwrap().len(),2);
+    }
+    #[test]
+    fn breakpoint_conflict_choice_is_previewed_and_committed_without_enabling(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        source.save_setting("interception.v1",&json!({"request":true,"response":true,"scope":"all","rules":[{"urlContains":"/source"}]})).unwrap();
+        let document=export(&source,preferences(),all_options(),"0.1.99").unwrap().document;
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());
+        let selected=["interception".to_owned()];
+        let initial=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        commit_import(&target,prepare_import_merge(&target,&document,&selected,&initial.expected_revision,BTreeMap::new(),"0.1.99").unwrap()).unwrap();
+        drop(target);let target=store(target_dir.path());
+        let mut local:crate::intercept::Config=target.setting("interception.v1").unwrap().unwrap();
+        local.rules[0].url_contains="/edited".into();local.rules[0].disabled=false;
+        target.save_setting("interception.v1",&local).unwrap();
+        let preview=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        assert_eq!(preview.conflicts.len(),1);
+        let choices=BTreeMap::from([(preview.conflicts[0].id.clone(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        assert!(chosen.warnings.iter().any(|warning|warning.contains("已选择导入规则")));
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap();
+        commit_import(&target,prepared).unwrap();
+        let imported:crate::intercept::Config=target.setting("interception.v1").unwrap().unwrap();
+        assert_eq!(imported.rules.len(),1);assert_eq!(imported.rules[0].url_contains,"/source");
+        assert!(imported.rules[0].disabled);assert!(!imported.request&&!imported.response);
+    }
+    #[test]
+    fn script_conflict_choice_is_previewed_and_applied_before_freeze(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());populate(&source,"Source");
+        source.save_setting("capture-scripts.v1",&json!({"enabled":true,"before":"sourceBefore();","variables":{"password":"source"}})).unwrap();
+        let document=export(&source,preferences(),all_options(),"0.1.99").unwrap().document;
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());populate(&target,"Target");
+        let selected=["scripts".to_owned()];
+        let plan=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        assert!(plan.conflicts.iter().any(|conflict|conflict.id=="scripts.before"));
+        let choices=BTreeMap::from([("scripts.before".to_owned(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        assert!(chosen.warnings.iter().any(|warning|warning.contains("已选择导入代码")));
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap();
+        commit_import(&target,prepared).unwrap();
+        let scripts:Scripts=target.setting("capture-scripts.v1").unwrap().unwrap();
+        assert_eq!(scripts.before,"sourceBefore();");assert!(!scripts.enabled);assert_eq!(scripts.variables["password"],"private-global-var");
+    }
+    #[test]
+    fn plugin_conflict_choice_is_previewed_imported_disabled_and_persisted(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        source.save_setting("plugins.v1",&json!([{"id":"source","name":"Plugin","version":"1.0.0","apiVersion":1,"enabled":true,"scope":"all","urlPattern":".*","before":"request.headers.push({name:'X-Source',value:'1'});"}])).unwrap();
+        let document=export(&source,preferences(),all_options(),"0.1.99").unwrap().document;
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());
+        target.save_setting("plugins.v1",&json!([{"id":"local","name":"Plugin","version":"1.0.0","apiVersion":1,"enabled":true,"scope":"all","urlPattern":".*","before":"request.headers.push({name:'X-Local',value:'1'});"}])).unwrap();
+        let selected=["plugins".to_owned()];
+        let first=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        commit_import(&target,prepare_import_merge(&target,&document,&selected,&first.expected_revision,BTreeMap::new(),"0.1.99").unwrap()).unwrap();
+        drop(target);
+        let target=store(target_dir.path());
+        let mut plugins:Vec<Plugin>=target.setting("plugins.v1").unwrap().unwrap();
+        assert_eq!(plugins.len(),2);assert!(!plugins[1].enabled);
+        plugins[1].before="request.headers.push({name:'X-Edited',value:'1'});".into();
+        plugins[1].enabled=true;
+        target.save_setting("plugins.v1",&plugins).unwrap();
+        let plan=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        let conflict=plan.conflicts.iter().find(|conflict|conflict.section=="plugins").unwrap();
+        assert_eq!(conflict.id,format!("plugins.{}",plugins[1].id));
+        assert!(plan.warnings.iter().any(|warning|warning.contains("保留本机版本")));
+        let choices=BTreeMap::from([(conflict.id.clone(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        assert!(chosen.warnings.iter().any(|warning|warning.contains("已选择导入版本")));
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap();
+        commit_import(&target,prepared).unwrap();
+        drop(target);
+        let reopened=store(target_dir.path());
+        let saved:Vec<Plugin>=reopened.setting("plugins.v1").unwrap().unwrap();
+        assert_eq!(saved.len(),2);assert!(saved[0].enabled);
+        assert_eq!(saved[1].id,plugins[1].id);assert_eq!(saved[1].name,plugins[1].name);
+        assert_eq!(saved[1].before,"request.headers.push({name:'X-Source',value:'1'});");
+        assert!(!saved[1].enabled);
+    }
+    #[test]
+    fn rule_conflict_choices_apply_to_blocking_faults_and_response_rewrite(){
+        let cases=[
+            ("blocking","blocking.v1",json!({"enabled":true,"scope":"all","rules":[{"id":"source-block","enabled":true,"matchType":"urlContains","pattern":"/source"}]})),
+            ("faults","fault-rules.v1",json!({"enabled":true,"scope":"all","rules":[{"id":"source-fault","enabled":true,"matchType":"urlContains","pattern":"/source","delayMs":500}]})),
+            ("responseRewrite","response-rewrite.v1",json!({"enabled":true,"scope":"all","rules":[{"id":"source-rewrite","name":"Rewrite","enabled":true,"matchType":"urlContains","pattern":"/source","action":"replace","replacement":{"status":200,"headers":[],"bodyBase64":""}}]})),
+        ];
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        for (_,key,value) in &cases{source.save_setting(key,value).unwrap();}
+        let document=export(&source,preferences(),all_options(),"0.1.99").unwrap().document;
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());
+        let selected=cases.iter().map(|(section,_,_)|section.to_string()).collect::<Vec<_>>();
+        let first=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        commit_import(&target,prepare_import_merge(&target,&document,&selected,&first.expected_revision,BTreeMap::new(),"0.1.99").unwrap()).unwrap();
+        drop(target);
+        let target=store(target_dir.path());
+        let mut ids=BTreeMap::new();
+        for (section,key,_) in &cases{
+            let mut current:Value=target.setting(key).unwrap().unwrap();
+            ids.insert(*section,current["rules"][0]["id"].as_str().unwrap().to_owned());
+            current["rules"][0]["pattern"]=json!("/locally-edited");
+            current["rules"][0]["enabled"]=json!(true);
+            current["enabled"]=json!(true);
+            target.save_setting(key,&current).unwrap();
+        }
+        let plan=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        assert_eq!(plan.conflicts.len(),3);
+        let choices=plan.conflicts.iter().map(|conflict|(conflict.id.clone(),"imported".to_owned())).collect::<BTreeMap<_,_>>();
+        for (section,_,_) in &cases{assert!(plan.conflicts.iter().any(|conflict|conflict.section==*section&&conflict.id==format!("{section}.{}",ids[section])));}
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        assert_eq!(chosen.conflicts.len(),3);
+        commit_import(&target,prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap()).unwrap();
+        drop(target);
+        let reopened=store(target_dir.path());
+        for (section,key,_) in &cases{
+            let saved:Value=reopened.setting(key).unwrap().unwrap();
+            assert_eq!(saved["rules"].as_array().unwrap().len(),1);
+            assert_eq!(saved["rules"][0]["id"],ids[section]);
+            assert_eq!(saved["rules"][0]["pattern"],"/source");
+            assert_eq!(saved["rules"][0]["enabled"],false);
+            assert_eq!(saved["enabled"],true);
+        }
+    }
+    #[test]
+    fn preference_conflict_choice_is_previewed_and_imported(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        let document=export(&source,preferences(),ExportOptions::default(),"0.1.99").unwrap().document;
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());
+        let selected=["preferences".to_owned()];
+        let current=BTreeMap::from([("http-capture.theme".to_owned(),"sakura".to_owned())]);
+        let plan=preview_merge(&target,&document,Some(&selected),current.clone(),"0.1.99").unwrap();
+        let theme=plan.conflicts.iter().find(|conflict|conflict.label.contains("http-capture.theme")).unwrap();
+        assert_eq!(theme.section,"preferences");
+        let choices=BTreeMap::from([(theme.id.clone(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),current.clone(),"0.1.99",&choices).unwrap();
+        assert_eq!(chosen.conflicts.len(),1);
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,current,"0.1.99",&choices).unwrap();
+        let imported=commit_import(&target,prepared).unwrap();
+        assert_eq!(imported.preferences["http-capture.theme"],"matrix");
+        assert_eq!(imported.preferences["http-capture.zoom"],"125");
+    }
+    #[test]
+    fn proxy_conflict_choice_is_previewed_and_committed_without_old_password(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        source.save_setting("upstream.profiles.v1",&json!([{"id":"source","name":"Proxy","url":"http://127.0.0.1:7897/","username":"new-user","authEnabled":true,"rememberPassword":false}])).unwrap();
+        let document=export(&source,BTreeMap::new(),all_options(),"0.1.99").unwrap().document;
+        let package=parse_document(&document).unwrap();
+        let portable:Vec<PortableProxy>=serde_json::from_value(package.sections["upstream"].data.clone()).unwrap();
+        let initial=merge::merge_proxies(Vec::new(),&portable,&package.export_id,&BTreeMap::new()).unwrap();
+        let mut edited=initial.profiles;
+        edited[0]["url"]=json!("http://127.0.0.1:8000/");edited[0]["password"]=json!("old-secret");edited[0]["rememberPassword"]=json!(true);
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());
+        target.save_setting("upstream.profiles.v1",&edited).unwrap();
+        let selected=["upstream".to_owned()];
+        let preview=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        assert_eq!(preview.conflicts.len(),1);assert_eq!(preview.conflicts[0].section,"upstream");
+        let choices=BTreeMap::from([(preview.conflicts[0].id.clone(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap();
+        commit_import(&target,prepared).unwrap();
+        let profiles:Vec<Value>=target.setting("upstream.profiles.v1").unwrap().unwrap();
+        assert_eq!(profiles[0]["url"],"http://127.0.0.1:7897/");
+        assert_eq!(profiles[0]["username"],"new-user");
+        assert_eq!(profiles[0]["rememberPassword"],false);
+        assert!(profiles[0].get("password").is_none());
+    }
+    #[test]
+    fn workspace_conflict_choice_is_previewed_and_clears_record_links(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        source.save_workspace(serde_json::from_value(json!({"revision":0,"activeEditor":"source-tab","editors":[{"id":"source-tab","draft":{"method":"GET","url":"https://example.invalid/","headers":[],"bodyBase64":""}}]})).unwrap()).unwrap();
+        let document=export(&source,BTreeMap::new(),all_options(),"0.1.99").unwrap().document;
+        let package=parse_document(&document).unwrap();
+        let exported:Workspace=serde_json::from_value(package.sections["workspace"].data.clone()).unwrap();
+        let initial=merge::merge_workspace(Workspace::default(),&exported,&package.export_id,&BTreeMap::new(),&BTreeMap::new(),&BTreeMap::new()).unwrap();
+        let mut edited=initial.workspace;
+        edited.editors[0].draft.url="https://edited.invalid/".into();
+        edited.editors[0].selected=Some("old-flow".into());
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());target.save_workspace(edited).unwrap();
+        let selected=["workspace".to_owned()];
+        let preview=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        assert_eq!(preview.conflicts.len(),1);assert_eq!(preview.conflicts[0].section,"workspace");
+        let choices=BTreeMap::from([(preview.conflicts[0].id.clone(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap();
+        commit_import(&target,prepared).unwrap();
+        let result=target.workspace().unwrap();
+        assert_eq!(result.editors[0].draft.url,"https://example.invalid/");
+        assert!(result.editors[0].selected.is_none()&&result.editors[0].parent_id.is_none());
+    }
+    #[test]
+    fn library_conflict_choice_is_previewed_and_committed(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        source.save_library(serde_json::from_value(json!({"revision":0,"collections":[{"id":"collection","name":"Flights"}],"environments":[{"id":"environment","name":"Production","variables":{"host":"source"}}],"scripts":[],"requests":[]})).unwrap()).unwrap();
+        let document=export(&source,BTreeMap::new(),all_options(),"0.1.99").unwrap().document;
+        let package=parse_document(&document).unwrap();let exported:Library=serde_json::from_value(package.sections["library"].data.clone()).unwrap();
+        let initial=merge::merge_library(Library::default(),&exported,&package.export_id,&BTreeMap::new(),&BTreeMap::new()).unwrap();
+        let mut edited=initial.library;edited.environments[0].variables.insert("host".into(),"local".into());
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());target.save_library(edited).unwrap();
+        let selected=["library".to_owned()];
+        let preview=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        assert_eq!(preview.conflicts.len(),1);assert_eq!(preview.conflicts[0].section,"library");
+        let choices=BTreeMap::from([(preview.conflicts[0].id.clone(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap();
+        commit_import(&target,prepared).unwrap();
+        let library=target.library().unwrap();assert_eq!(library.environments[0].variables["host"],"source");
+    }
+    #[test]
+    fn mcp_conflict_choice_imports_definition_without_local_token_or_permissions(){
+        let source_dir=tempfile::tempdir().unwrap();let source=store(source_dir.path());
+        source.save_setting("mcp.clients.v1",&json!([{"id":"source","name":"Assistant","transport":"http","url":"https://source.example.invalid/mcp","command":"","args":[],"tokenRequired":true}])).unwrap();
+        let document=export(&source,BTreeMap::new(),ExportOptions::default(),"0.1.99").unwrap().document;
+        let package=parse_document(&document).unwrap();let exported:PortableMcp=serde_json::from_value(package.sections["mcp"].data.clone()).unwrap();
+        let initial=merge::merge_mcp(Vec::new(),&exported,&package.export_id,&BTreeMap::new()).unwrap();
+        let mut edited=initial.clients;edited[0]["url"]=json!("https://local.example.invalid/mcp");edited[0]["token"]=json!("local-secret");
+        let target_dir=tempfile::tempdir().unwrap();let target=store(target_dir.path());
+        target.save_setting("mcp.clients.v1",&edited).unwrap();
+        target.save_setting("mcp.server.v1",&json!({"enabled":true,"port":1422,"allowSend":true})).unwrap();
+        let selected=["mcp".to_owned()];
+        let preview=preview_merge(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99").unwrap();
+        assert_eq!(preview.conflicts.len(),1);assert_eq!(preview.conflicts[0].section,"mcp");
+        let choices=BTreeMap::from([(preview.conflicts[0].id.clone(),"imported".to_owned())]);
+        let chosen=preview_merge_with_choices(&target,&document,Some(&selected),BTreeMap::new(),"0.1.99",&choices).unwrap();
+        let prepared=prepare_import_merge_with_choices(&target,&document,&selected,&chosen.expected_revision,BTreeMap::new(),"0.1.99",&choices).unwrap();
+        commit_import(&target,prepared).unwrap();
+        let clients:Vec<Value>=target.setting("mcp.clients.v1").unwrap().unwrap();
+        assert_eq!(clients[0]["url"],"https://source.example.invalid/mcp");
+        assert!(clients[0].get("token").is_none());
+        let server:Value=target.setting("mcp.server.v1").unwrap().unwrap();
+        assert_eq!(server["enabled"],false);assert_eq!(server["allowSend"],false);
     }
     #[test]
     fn old_database_connections_cannot_overwrite_import_but_new_connections_can(){

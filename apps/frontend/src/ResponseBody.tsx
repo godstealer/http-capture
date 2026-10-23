@@ -1,16 +1,19 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { t } from './i18n';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { Header } from './types';
 import { parseSse } from './sse';
 import ImagePreview from './ImagePreview';
+import { exceedsInlineResponseBudget } from './responseBodyBudget';
+import { parseSseEncodings } from './sseEncoding';
 const CodeView = lazy(() => import('./CodeView'));
 
 interface Result { raw: string; formatted: string; language: string; error: string; binary?: boolean; kind?: string; mime?: string; blob?: Blob; size?: number; decodedBlob?: Blob }
-export default function ResponseBody({ body, headers, onCopy }: { body: string; headers: Header[]; onCopy: (text: string) => void }) {
+export default function ResponseBody({ body, headers, onCopy, complete = true }: { body: string; headers: Header[]; onCopy: (text: string) => void; complete?: boolean }) {
   const [mode, setMode] = useState('pretty');
   const [parser, setParser] = useState('auto');
   const [result, setResult] = useState<Result | null>(null);
+  const liveWorker = useRef<{ worker: Worker; encoding: string } | null>(null);
   const [downloadMessage, setDownloadMessage] = useState('');
   async function download(original: boolean) {
     try {
@@ -47,7 +50,7 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
     return () => URL.revokeObjectURL(url);
   }, [result]);
   const contentType = headers.find(h => h.name.toLowerCase() === 'content-type')?.value ?? '';
-  const encoding = headers.find(h => h.name.toLowerCase() === 'content-encoding')?.value ?? '';
+  const encoding = headers.filter(h => !h.disabled && h.name.toLowerCase() === 'content-encoding').map(h => h.value).join(',');
   const isSse = contentType.split(';')[0].trim().toLowerCase() === 'text/event-stream';
   const isSvg = contentType.split(';')[0].trim().toLowerCase() === 'image/svg+xml' || /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(result?.raw ?? '');
   const canPreview = !!result && (result.language === 'html' || isSvg) && !result.binary;
@@ -55,15 +58,36 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
   // Place CSP before untrusted markup so resources cannot phone home.
   const preview = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"><meta charset="utf-8">${result?.raw ?? ''}`;
   useEffect(() => {
+    const liveEncoding = encoding.trim().toLowerCase();
+    if (isSse && !complete && parseSseEncodings(liveEncoding) && !exceedsInlineResponseBudget(body)) {
+      if (!liveWorker.current || liveWorker.current.encoding !== liveEncoding) {
+        liveWorker.current?.worker.terminate();
+        const worker = new Worker(new URL('./sseLive.worker.ts', import.meta.url), { type: 'module' });
+        worker.onmessage = event => { if (event.data.reset) setResult(null); else setResult(event.data); };
+        worker.onerror = () => setResult({ raw: '', formatted: '', language: 'text', error: t('正文处理失败，请查看 Base64'), binary: true });
+        liveWorker.current = { worker, encoding: liveEncoding };
+      }
+      liveWorker.current.worker.postMessage({ body, encoding: liveEncoding });
+      return;
+    }
+    liveWorker.current?.worker.terminate();
+    liveWorker.current = null;
     setResult(null);
+    if (exceedsInlineResponseBudget(body)) {
+      setResult({ raw: '', formatted: '', language: 'text', error: t('正文超过 8 MiB，请查看 Base64 或下载原始字节'), binary: true });
+      return;
+    }
     const worker = new Worker(new URL('./response.worker.ts', import.meta.url), { type: 'module' });
     const timer = setTimeout(() => { worker.terminate(); setResult({ raw: '', formatted: '', language: 'text', error: t("处理超时，请查看 Base64"), binary: true }); }, 8000);
     worker.onmessage = event => { clearTimeout(timer); setResult(event.data); };
     worker.onerror = () => { clearTimeout(timer); setResult({ raw: '', formatted: '', language: 'text', error: t("正文处理失败，请查看 Base64"), binary: true }); };
     worker.postMessage({ body, contentType, encoding, parser });
     return () => { clearTimeout(timer); worker.terminate(); };
-  }, [body, contentType, encoding, parser]);
+  }, [body, contentType, encoding, parser, complete, isSse]);
+  useEffect(() => () => { liveWorker.current?.worker.terminate(); }, []);
   const text = mode === 'base64' || result?.binary ? body : mode === 'raw' ? result?.raw ?? '' : result?.formatted ?? '';
+  const oversized = exceedsInlineResponseBudget(body);
+  const displayedText = oversized && (mode === 'base64' || result?.binary) ? text.slice(0, 65536) : text;
   if (result?.blob) {
     const media = ['image', 'audio', 'video'].includes(result.kind ?? '');
     const showPreview = media && !['hex', 'base64'].includes(mode);
@@ -97,8 +121,9 @@ export default function ResponseBody({ body, headers, onCopy }: { body: string; 
       {downloads}<button disabled={!result && mode !== 'base64'} onClick={() => onCopy(text)}>{t("复制当前内容")}</button>
     </div>
     {result?.error && <div className="format-note" role="status">{t(result.error)}{result.binary ? t("（当前显示 Base64）") : ''}</div>}
-    {isSse && mode === 'pretty' && result && !result.binary ? <div className="formatted-scroll"><div className="format-note">{t('SSE 事件 · 收到空行后显示完整事件；原文包含心跳和未完成事件。')}</div>{parseSse(result.raw).map((event, i) => <details key={i} open><summary>#{i + 1} · {event.event}{event.id ? ` · ID: ${event.id}` : ''}{event.retry ? ` · retry: ${event.retry} ms` : ''}</summary><pre>{event.data}</pre></details>)}</div> : mode === 'preview' && canPreview ? <div className="response-preview"><div className="format-note">{t("静态 HTML / SVG 预览 · 脚本与外部资源已禁用")}</div>{isSvg ? <ImagePreview src={mediaUrl} /> : <iframe title={t("响应 HTML 预览")} sandbox="" referrerPolicy="no-referrer" srcDoc={preview} />}</div> : <div className="formatted-scroll">{!result && mode !== 'base64' ? <p>{t("正在处理正文…")}</p> : text
-      ? <Suspense fallback={<pre>{text}</pre>}><CodeView text={text} language={mode === 'base64' || result?.binary ? 'text' : result?.language ?? 'text'} /></Suspense> : <p>{t("（空正文）")}</p>}</div>
+    {oversized && <div className="format-note">{t('界面仅显示前 64 KiB Base64；复制按钮可复制完整编码正文。')}</div>}
+    {isSse && mode === 'pretty' && result && !result.binary ? <div className="formatted-scroll"><div className="format-note">{t('SSE 事件 · 收到空行后显示完整事件；原文包含心跳和未完成事件。')}</div>{parseSse(result.raw).map((event, i) => <details key={i} open><summary>#{i + 1} · {event.event}{event.id ? ` · ID: ${event.id}` : ''}{event.retry ? ` · retry: ${event.retry} ms` : ''}</summary><pre>{event.data}</pre></details>)}</div> : mode === 'preview' && canPreview ? <div className="response-preview"><div className="format-note">{t("静态 HTML / SVG 预览 · 脚本与外部资源已禁用")}</div>{isSvg ? <ImagePreview src={mediaUrl} /> : <iframe title={t("响应 HTML 预览")} sandbox="" referrerPolicy="no-referrer" srcDoc={preview} />}</div> : <div className="formatted-scroll">{!result && mode !== 'base64' ? <p>{t("正在处理正文…")}</p> : displayedText
+      ? <Suspense fallback={<pre>{displayedText}</pre>}><CodeView text={displayedText} language={mode === 'base64' || result?.binary ? 'text' : result?.language ?? 'text'} /></Suspense> : <p>{t("（空正文）")}</p>}</div>
     }
   </div>;
 }

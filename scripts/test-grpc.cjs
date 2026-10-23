@@ -8,6 +8,15 @@ assert.equal((await g.decodeMessages(g.base64(data),undefined,[]))[0][0].field,1
 assert.equal(g.grpcStatus([],[{name:'grpc-status',value:'7'},{name:'grpc-message',value:'no%20permission'}]).name,'PERMISSION_DENIED');assert.equal(g.grpcStatus([]).code,undefined);
 const gzip=require('node:zlib').gzipSync(data.subarray(5));const compressed=g.frame(gzip);compressed[0]=1;
 assert.equal((await g.decodeMessages(g.base64(compressed),method,[{name:'grpc-encoding',value:'gzip'}]))[0].text,'你好');
+for(const size of [1,2,4,5,7,65536]){
+ const combined=Buffer.concat([data,compressed]);
+ async function* pages(){for(let offset=0;offset<combined.length;offset+=size)yield combined.subarray(offset,offset+size)}
+ const decoded=await g.decodeMessageChunks(pages(),method,[{name:'grpc-encoding',value:'gzip'}]);
+ assert.equal(decoded.length,2);assert.equal(decoded[0].text,'你好');assert.equal(decoded[1].text,'你好');
+}
+async function* incomplete(){yield data.subarray(0,data.length-1)}
+await assert.rejects(()=>g.decodeMessageChunks(incomplete(),method,[]),/Incomplete gRPC message body/);
+assert.equal((await g.decodeMessageChunks(incomplete(),method,[],false,true)).length,0);
 const oversized=require('node:zlib').gzipSync(Buffer.alloc(8*1024*1024+1));const oversizedFrame=g.frame(oversized);oversizedFrame[0]=1;
 await assert.rejects(()=>g.decodeMessages(g.base64(oversizedFrame),method,[{name:'grpc-encoding',value:'gzip'}]),/超过 8 MiB/);
 const large=g.encodeMessage(method,JSON.stringify({text:'x'.repeat(4_300_000)}));

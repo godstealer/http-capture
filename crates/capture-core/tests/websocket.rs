@@ -3,6 +3,17 @@ use tokio::{net::{TcpListener, TcpStream}, io::{AsyncRead, AsyncReadExt, AsyncWr
 use std::{sync::Arc, time::Duration};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
+#[tokio::test]
+async fn oversized_interactive_frames_are_rejected_before_base64_decode() {
+ let dir=tempfile::tempdir().unwrap();let engine=Engine::open(dir.path()).unwrap();
+ let large="!".repeat((8usize*1024*1024).div_ceil(3)*4+4);
+ let error=capture_core::websocket_client::send(&engine,"missing",2,&large).await.unwrap_err();
+ assert!(error.to_string().contains("8 MiB"),"{error:#}");
+ let control="!".repeat(125usize.div_ceil(3)*4+4);
+ let error=capture_core::websocket_client::send(&engine,"missing",9,&control).await.unwrap_err();
+ assert!(error.to_string().contains("125 bytes"),"{error:#}");
+}
+
 fn roots(ca: &CertificateAuthority) -> rustls::RootCertStore {
     let mut roots = rustls::RootCertStore::empty(); let pem = std::fs::read(&ca.cert_path).unwrap();
     for cert in rustls_pemfile::certs(&mut &pem[..]) { roots.add(cert.unwrap()).unwrap(); } roots

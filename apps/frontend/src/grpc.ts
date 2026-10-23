@@ -21,6 +21,8 @@ export function prepareGrpc(draft:RequestDraft,method:pb.Method,text:string):Req
  return {...draft,method:'POST',engine:'h2',pseudoHeaders:[],url:url.toString(),headers,bodyBase64:base64(encodeMessage(method,text))};
 }
 const MAX_GRPC_DECODED_BYTES=8*1024*1024;
+const MAX_GRPC_FRAME_BYTES=16*1024*1024;
+const MAX_GRPC_MESSAGES=10000;
 async function decodeGzipMessage(data:Uint8Array,limit:number){
  const stream=new Blob([new Uint8Array(data).buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
  const reader=stream.getReader();const chunks:Uint8Array[]=[];let size=0;
@@ -36,13 +38,40 @@ async function decodeGzipMessage(data:Uint8Array,limit:number){
  return result;
 }
 export async function decodeMessages(body:string,method:pb.Method|undefined,headers:Header[],request=false,partial=false){
- const result=[];method?.resolve();const type=request?method?.resolvedRequestType:method?.resolvedResponseType;let decodedBytes=0;
- for(const message of frames(bytes(body),partial)){let data=message.data;
-  if(message.compressed){const encoding=headers.find(h=>h.name.toLowerCase()==='grpc-encoding')?.value;if(encoding!=='gzip')throw Error('Unsupported gRPC message encoding: '+encoding);data=await decodeGzipMessage(data,MAX_GRPC_DECODED_BYTES-decodedBytes);}
+ async function* oneChunk(){yield bytes(body)}
+ return decodeMessageChunks(oneChunk(),method,headers,request,partial);
+}
+/** Parse complete gRPC messages from bounded byte ranges without joining the whole body. */
+export async function decodeMessageChunks(chunks:AsyncIterable<Uint8Array>,method:pb.Method|undefined,headers:Header[],request=false,partial=false){
+ const result:unknown[]=[];method?.resolve();const type=request?method?.resolvedRequestType:method?.resolvedResponseType;let decodedBytes=0;
+ const head=new Uint8Array(5);let headLength=0;let payload:Uint8Array|null=null;let payloadLength=0;
+ async function finish(){
+  let data=payload!;
+  if(head[0]===1){const encoding=headers.find(h=>h.name.toLowerCase()==='grpc-encoding')?.value;if(encoding!=='gzip')throw Error('Unsupported gRPC message encoding: '+encoding);data=await decodeGzipMessage(data,MAX_GRPC_DECODED_BYTES-decodedBytes);}
   if(data.length>MAX_GRPC_DECODED_BYTES-decodedBytes)throw Error('gRPC 解码正文超过 8 MiB，请查看 Base64 或导出原始字节');
   decodedBytes+=data.length;
+  if(result.length>=MAX_GRPC_MESSAGES)throw Error('gRPC 消息超过 10000 条，请导出原始字节');
   result.push(type?type.toObject(type.decode(data),{longs:String,enums:String,bytes:String,defaults:true}):rawFields(data));
- }return result;
+  headLength=0;payload=null;payloadLength=0;
+ }
+ for await(const chunk of chunks){
+  let offset=0;
+  while(offset<chunk.length){
+   if(headLength<5){const take=Math.min(5-headLength,chunk.length-offset);head.set(chunk.subarray(offset,offset+take),headLength);headLength+=take;offset+=take;
+    if(headLength<5)continue;
+    if(head[0]>1)throw Error('Invalid gRPC compression flag (gRPC-Web is not supported)');
+    const size=new DataView(head.buffer).getUint32(1);
+    if(size>MAX_GRPC_FRAME_BYTES)throw Error('gRPC 消息帧超过 16 MiB，请导出原始字节');
+    payload=new Uint8Array(size);
+    if(!size){await finish();continue;}
+   }
+   const take=Math.min(payload!.length-payloadLength,chunk.length-offset);
+   payload!.set(chunk.subarray(offset,offset+take),payloadLength);payloadLength+=take;offset+=take;
+   if(payloadLength===payload!.length)await finish();
+  }
+ }
+ if(!partial&&headLength)throw Error(headLength<5?'Incomplete gRPC message header':'Incomplete gRPC message body');
+ return result;
 }
 /** Schema-free view: field numbers and wire values, never invented field names/types. */
 export function rawFields(data:Uint8Array){const r=pb.Reader.create(data),fields:unknown[]=[];while(r.pos<r.len){const tag=r.uint32(),field=tag>>>3,wire=tag&7;if(!field)throw Error('Invalid protobuf field 0');let value:unknown;switch(wire){case 0:value=r.uint64().toString();break;case 1:value=r.fixed64().toString();break;case 2:{const b=r.bytes();let text:string|undefined;try{text=new TextDecoder('utf-8',{fatal:true}).decode(b)}catch{}value={base64:base64(b),...(text===undefined?{}:{text})};break;}case 5:value=r.fixed32();break;default:throw Error('Unsupported protobuf wire type '+wire)}fields.push({field,wire,value})}return fields}

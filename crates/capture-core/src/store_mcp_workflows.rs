@@ -143,10 +143,11 @@ impl Store {
         let encoded:String=tx.query_row("SELECT json_extract(data,'$.request.bodyBase64') FROM flows WHERE id=?1",[id],|row|row.get(0))?;
         let encoded=if encoded.starts_with("@body:") {
             ensure!(encoded=="@body:request","Invalid stored body reference");
-            let rowid:i64=tx.query_row("SELECT rowid FROM flow_bodies WHERE flow_id=?1 AND slot='request'",[id],|row|row.get(0))?;
+            let (rowid,length):(i64,usize)=tx.query_row("SELECT rowid,coalesce(logical_length,length(body)) FROM flow_bodies WHERE flow_id=?1 AND slot='request'",[id],|row|Ok((row.get(0)?,row.get(1)?)))?;
             let blob=tx.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,true)?;
-            ensure!(blob.len()<=65536,"Captured request body exceeds 65536 bytes; compose it in the application");
-            let mut bytes=vec![0;blob.len()];if !bytes.is_empty(){blob.read_at_exact(&mut bytes,0)?;}STANDARD.encode(bytes)
+            ensure!(length<=blob.len(),"Stored body length exceeds BLOB capacity");
+            ensure!(length<=65536,"Captured request body exceeds 65536 bytes; compose it in the application");
+            let mut bytes=vec![0;length];if !bytes.is_empty(){blob.read_at_exact(&mut bytes,0)?;}STANDARD.encode(bytes)
         } else {ensure!(STANDARD.decode(&encoded)?.len()<=65536,"Captured request body exceeds 65536 bytes; compose it in the application");encoded};
         draft["bodyBase64"]=json!(encoded);
         tx.commit()?;

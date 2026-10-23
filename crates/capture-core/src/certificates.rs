@@ -2,6 +2,7 @@
 //! request JSON, configuration migration, or API snapshots.
 use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use openssl::{pkcs12::Pkcs12,pkey::PKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex}};
@@ -23,7 +24,7 @@ pub struct CertificateEntry { pub id:String,pub name:String,pub kind:String,pub 
 pub struct Snapshot {pub entries:Vec<CertificateEntry>,pub version:String,pub selected_ca:Option<String>,pub active_ca:Option<String>,pub restart_required:bool}
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub struct Import { pub name:String,pub kind:String,#[serde(default)]pub host:String,#[serde(default="https_port")]pub port:u16,pub certificate_base64:String,#[serde(default)]pub private_key_pem:String,pub expected_version:String }
+pub struct Import { pub name:String,pub kind:String,#[serde(default)]pub host:String,#[serde(default="https_port")]pub port:u16,pub certificate_base64:String,#[serde(default)]pub private_key_pem:String,#[serde(default)]pub container_format:Option<String>,#[serde(default)]pub password:Option<String>,pub expected_version:String }
 fn https_port()->u16{443}
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -52,6 +53,39 @@ pub(crate) fn key(pem:&str)->Result<PrivateKeyDer<'static>>{
  rustls_pemfile::private_key(&mut pem.as_bytes()).context("私钥 PEM 格式无效")?.context("缺少 PEM 私钥")
 }
 fn pem(label:&str,bytes:&[u8])->String{let b64=STANDARD.encode(bytes);format!("-----BEGIN {label}-----\n{}\n-----END {label}-----\n",b64.as_bytes().chunks(64).map(|c|std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join("\n"))}
+fn imported_material(input:&Import,data:&[u8])->Result<(String,String)>{
+ ensure!(input.password.as_ref().is_none_or(|value|value.len()<=1024),"证书密码不能超过 1024 字节");
+ ensure!(input.password.as_ref().is_none_or(|value|!value.contains('\0')),"证书密码不能包含空字符");
+ if let Some(format)=input.container_format.as_deref(){
+  ensure!(format=="p12","证书容器格式无效");
+  ensure!(input.private_key_pem.is_empty(),"P12/PFX 已包含私钥，请勿再选择单独的私钥文件");
+  let parsed=Pkcs12::from_der(data).and_then(|container|container.parse2(input.password.as_deref().unwrap_or("")))
+   .map_err(|_|anyhow::anyhow!("P12/PFX 无法解锁或格式无效"))?;
+  let certificate=parsed.cert.context("P12/PFX 缺少证书")?;
+  let mut certificate_pem=String::from_utf8(certificate.to_pem()?)?;
+  if let Some(chain)=parsed.ca{
+   ensure!(chain.len()<16,"证书链应包含 1–16 张证书");
+   for cert in chain{certificate_pem.push_str(&String::from_utf8(cert.to_pem()?)?);}
+  }
+  let private_key_pem=match parsed.pkey{
+   Some(key)=>{ensure!(input.kind!="trust","服务器信任只需要 CA 公钥证书，请使用不含私钥的证书文件");String::from_utf8(key.private_key_to_pem_pkcs8()?)?},
+   None=>{ensure!(input.kind=="trust","P12/PFX 缺少私钥");String::new()},
+  };
+  return Ok((certificate_pem,private_key_pem));
+ }
+ let certificate_pem=if data.starts_with(b"-----BEGIN"){String::from_utf8(data.to_vec()).context("证书 PEM 应为 UTF-8")?}else{pem("CERTIFICATE",data)};
+ let private_key_pem=if input.kind=="trust"{input.private_key_pem.clone()}else{
+  ensure!(input.private_key_pem.len()<=MAX_FILE,"私钥文件不能超过 1 MiB");
+  let key_pem=if input.private_key_pem.contains("ENCRYPTED"){
+   let password=input.password.as_deref().context("请输入加密私钥的密码")?;
+   let key=PKey::private_key_from_pem_passphrase(input.private_key_pem.as_bytes(),password.as_bytes())
+    .map_err(|_|anyhow::anyhow!("加密私钥无法解锁或格式无效"))?;
+   String::from_utf8(key.private_key_to_pem_pkcs8()?)?
+  }else{input.private_key_pem.clone()};
+  key(&key_pem)?;rcgen::KeyPair::from_pem(&key_pem).context("不支持此 PEM 私钥")?.serialize_pem()
+ };
+ Ok((certificate_pem,private_key_pem))
+}
 fn normalize_host(value:&str)->Result<String>{
  ensure!(!value.contains(['/', '@', '*', '?', '#', '%'])&&!value.chars().any(char::is_whitespace),"请填写精确域名或 IP，不含协议、路径或通配符");
  let host=url::Host::parse(value.trim_end_matches('.')).context("域名或 IP 无效")?;
@@ -116,9 +150,8 @@ impl Certificates {
   ensure!(input.certificate_base64.len()<=MAX_FILE*4/3+4,"证书文件不能超过 1 MiB");
   let data=STANDARD.decode(&input.certificate_base64).context("证书文件 Base64 无效")?;
   ensure!(data.len()<=MAX_FILE,"证书文件不能超过 1 MiB");
-  let certificate_pem=if data.starts_with(b"-----BEGIN"){String::from_utf8(data).context("证书 PEM 应为 UTF-8")?}else{pem("CERTIFICATE",&data)};
+  let (certificate_pem,private_key_pem)=imported_material(&input,&data)?;
   let host=if input.kind=="ca"||input.host.is_empty(){input.host}else{normalize_host(&input.host)?};
-  let private_key_pem=if input.kind=="trust"{input.private_key_pem}else{ensure!(input.private_key_pem.len()<=MAX_FILE,"私钥文件不能超过 1 MiB");key(&input.private_key_pem)?;rcgen::KeyPair::from_pem(&input.private_key_pem).context("不支持此 PEM 私钥")?.serialize_pem()};
   let entry=Entry{id:uuid::Uuid::new_v4().to_string(),name:input.name.trim().into(),kind:input.kind,host,port:input.port,enabled:false,certificate_pem,private_key_pem};
   validate(&entry)?;
   let mut state=self.state.lock().unwrap();ensure!(input.expected_version==state.version,"证书配置已在其他窗口修改，请刷新后重试");ensure!(state.entries.len()<MAX_ENTRIES,"最多保存 64 个证书配置");
@@ -174,7 +207,7 @@ pub(crate) fn configure(profile:&crate::model::TlsProfile,roots:&rustls::RootCer
 #[cfg(test)]mod tests{
  use super::*;
  fn ca()->(rcgen::Certificate,rcgen::KeyPair){let mut p=rcgen::CertificateParams::new(vec!["test-ca".into()]).unwrap();p.is_ca=rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);p.key_usages=vec![rcgen::KeyUsagePurpose::KeyCertSign];let k=rcgen::KeyPair::generate().unwrap();(p.self_signed(&k).unwrap(),k)}
- fn import(store:&Certificates,kind:&str,cert:&str,key:&str,host:&str)->Snapshot{store.import(Import{name:kind.into(),kind:kind.into(),host:host.into(),port:443,certificate_base64:STANDARD.encode(cert),private_key_pem:key.into(),expected_version:store.snapshot().unwrap().version}).unwrap()}
+ fn import(store:&Certificates,kind:&str,cert:&str,key:&str,host:&str)->Snapshot{store.import(Import{name:kind.into(),kind:kind.into(),host:host.into(),port:443,certificate_base64:STANDARD.encode(cert),private_key_pem:key.into(),container_format:None,password:None,expected_version:store.snapshot().unwrap().version}).unwrap()}
  fn change(store:&Certificates,action:&str,id:Option<String>,enabled:bool)->Result<Snapshot>{store.change(Change{action:action.into(),id,enabled,expected_version:store.snapshot()?.version})}
  #[test]fn identities_are_persistent_private_disabled_and_versioned(){
   let dir=tempfile::tempdir().unwrap();let store=Certificates::open(dir.path()).unwrap();let(ca,key)=ca();
@@ -192,7 +225,7 @@ pub(crate) fn configure(profile:&crate::model::TlsProfile,roots:&rustls::RootCer
   let dir=tempfile::tempdir().unwrap();let store=Certificates::open(dir.path()).unwrap();let(cert,key)=ca();let wrong=rcgen::KeyPair::generate().unwrap();let version=store.snapshot().unwrap().version;
   let leaf=rcgen::CertificateParams::new(vec![]).unwrap().signed_by(&wrong,&cert,&key).unwrap();
   for(kind,pem,key)in[("ca",cert.pem(),wrong.serialize_pem()),("trust",cert.pem(),key.serialize_pem()),("client",cert.pem(),key.serialize_pem()),("trust",cert.pem()+&key.serialize_pem(),String::new()),("trust",cert.pem()+&leaf.pem(),String::new())]{
-   assert!(store.import(Import{name:"bad".into(),kind:kind.into(),host:"localhost".into(),port:443,certificate_base64:STANDARD.encode(pem),private_key_pem:key,expected_version:version.clone()}).is_err());
+   assert!(store.import(Import{name:"bad".into(),kind:kind.into(),host:"localhost".into(),port:443,certificate_base64:STANDARD.encode(pem),private_key_pem:key,container_format:None,password:None,expected_version:version.clone()}).is_err());
   }
   assert_eq!(store.snapshot().unwrap().entries.len(),0);assert_eq!(store.snapshot().unwrap().version,version);
  }
@@ -210,13 +243,46 @@ pub(crate) fn configure(profile:&crate::model::TlsProfile,roots:&rustls::RootCer
  }
  #[test]fn concurrent_instances_do_not_overwrite_and_refresh_recovers(){
   let dir=tempfile::tempdir().unwrap();let a=Certificates::open(dir.path()).unwrap();let b=Certificates::open(dir.path()).unwrap();let stale=b.snapshot().unwrap().version;let(ca,_)=ca();import(&a,"trust",&ca.pem(),"","");
-  assert!(b.import(Import{name:"stale".into(),kind:"trust".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(ca.pem()),private_key_pem:"".into(),expected_version:stale}).is_err());
+  assert!(b.import(Import{name:"stale".into(),kind:"trust".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(ca.pem()),private_key_pem:"".into(),container_format:None,password:None,expected_version:stale}).is_err());
   assert_eq!(b.snapshot().unwrap().entries.len(),1);let latest=import(&b,"trust",&ca.pem(),"","localhost");assert_eq!(latest.entries.len(),2);assert_eq!(a.snapshot().unwrap().entries.len(),2);
  }
  #[test]fn expired_ca_is_rejected_on_import_and_der_trust_is_supported(){
   let dir=tempfile::tempdir().unwrap();let store=Certificates::open(dir.path()).unwrap();let(ca,key)=ca();let mut p=rcgen::CertificateParams::new(vec![]).unwrap();p.is_ca=rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);p.not_before=rcgen::date_time_ymd(2000,1,1);p.not_after=rcgen::date_time_ymd(2001,1,1);let expired=p.self_signed(&key).unwrap();
-  assert!(store.import(Import{name:"expired".into(),kind:"trust".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(expired.pem()),private_key_pem:"".into(),expected_version:store.snapshot().unwrap().version}).is_err());
-  let state=store.import(Import{name:"DER".into(),kind:"trust".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(ca.der()),private_key_pem:"".into(),expected_version:store.snapshot().unwrap().version}).unwrap();assert_eq!(state.entries.len(),1);
+  assert!(store.import(Import{name:"expired".into(),kind:"trust".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(expired.pem()),private_key_pem:"".into(),container_format:None,password:None,expected_version:store.snapshot().unwrap().version}).is_err());
+  let state=store.import(Import{name:"DER".into(),kind:"trust".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(ca.der()),private_key_pem:"".into(),container_format:None,password:None,expected_version:store.snapshot().unwrap().version}).unwrap();assert_eq!(state.entries.len(),1);
+ }
+ #[test]fn encrypted_pem_and_p12_import_unlock_without_saving_password(){
+  use openssl::{pkcs12::Pkcs12,symm::Cipher,x509::X509};
+  let dir=tempfile::tempdir().unwrap();let store=Certificates::open(dir.path()).unwrap();let(cert,key)=ca();
+  let pkey=PKey::private_key_from_pem(key.serialize_pem().as_bytes()).unwrap();
+  let encrypted=String::from_utf8(pkey.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(),b"pem-secret").unwrap()).unwrap();
+  let import_encrypted=|password:&str|store.import(Import{name:"encrypted".into(),kind:"ca".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(cert.pem()),private_key_pem:encrypted.clone(),container_format:None,password:Some(password.into()),expected_version:store.snapshot().unwrap().version});
+  assert!(import_encrypted("wrong").is_err());assert!(store.snapshot().unwrap().entries.is_empty());
+  assert_eq!(import_encrypted("pem-secret").unwrap().entries.len(),1);
+  let cert_openssl=X509::from_pem(cert.pem().as_bytes()).unwrap();
+  let archive=Pkcs12::builder().name("test ca").pkey(&pkey).cert(&cert_openssl).build2("p12-secret").unwrap().to_der().unwrap();
+  let import_p12=|password:&str|store.import(Import{name:"archive".into(),kind:"ca".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(&archive),private_key_pem:String::new(),container_format:Some("p12".into()),password:Some(password.into()),expected_version:store.snapshot().unwrap().version});
+  let version=store.snapshot().unwrap().version;
+  assert!(import_p12("wrong").is_err());assert_eq!(store.snapshot().unwrap().version,version);
+  assert!(import_p12("bad\0password").is_err());assert_eq!(store.snapshot().unwrap().version,version);
+  assert_eq!(import_p12("p12-secret").unwrap().entries.len(),2);
+  let saved=String::from_utf8(unprotect(&fs::read(&store.path).unwrap()).unwrap()).unwrap();
+  assert!(!saved.contains("pem-secret")&&!saved.contains("p12-secret")&&!saved.contains("ENCRYPTED PRIVATE KEY"));
+  assert!(!serde_json::to_string(&store.snapshot().unwrap()).unwrap().contains("PRIVATE KEY"));
+ }
+ #[test]fn p12_client_identity_keeps_chain_and_exact_destination_scope(){
+  use openssl::{pkcs12::Pkcs12,stack::Stack,x509::X509};
+  let dir=tempfile::tempdir().unwrap();let store=Certificates::open(dir.path()).unwrap();let(root,root_key)=ca();
+  let leaf_key=rcgen::KeyPair::generate().unwrap();let mut params=rcgen::CertificateParams::new(vec![]).unwrap();params.extended_key_usages=vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+  let leaf=params.signed_by(&leaf_key,&root,&root_key).unwrap();
+  let pkey=PKey::private_key_from_pem(leaf_key.serialize_pem().as_bytes()).unwrap();
+  let mut root_chain=Stack::new().unwrap();root_chain.push(X509::from_pem(root.pem().as_bytes()).unwrap()).unwrap();
+  let archive=Pkcs12::builder().name("client").pkey(&pkey).cert(&X509::from_pem(leaf.pem().as_bytes()).unwrap()).ca(root_chain).build2("secret").unwrap().to_der().unwrap();
+  let state=store.import(Import{name:"client".into(),kind:"client".into(),host:"API.EXAMPLE.COM.".into(),port:8443,certificate_base64:STANDARD.encode(archive),private_key_pem:String::new(),container_format:Some("p12".into()),password:Some("secret".into()),expected_version:store.snapshot().unwrap().version}).unwrap();
+  assert_eq!(state.entries[0].host,"api.example.com");change(&store,"enable",Some(state.entries[0].id.clone()),true).unwrap();
+  let exact=store.security(&url::Url::parse("https://api.example.com:8443/").unwrap()).unwrap().identity.unwrap();
+  assert_eq!(chain(&exact.0).unwrap().len(),2);assert!(key(&exact.1).is_ok());
+  assert!(store.security(&url::Url::parse("https://api.example.com/").unwrap()).unwrap().identity.is_none());
  }
  #[tokio::test]async fn imported_intermediate_ca_serves_a_chain_accepted_by_original_root(){
   let _=rustls::crypto::ring::default_provider().install_default();

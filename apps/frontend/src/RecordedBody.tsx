@@ -3,6 +3,8 @@ import {downloadFlowBody,invoke} from './api';
 import type {BodyVariant,FlowMetadata,Header} from './types';
 import {t} from './i18n';
 import ResponseBody from './ResponseBody';
+import RecordedSseLive from './RecordedSseLive';
+import {parseSseEncodings} from './sseEncoding';
 import './recorded-body.css';
 import {RECORDED_BODY_PAGE_BYTES,RECORDED_BODY_COMPLETE_BYTES,readCompleteRecordedBody,recordedBodyEncoded,recordedBodyHex,recordedBodyIdentity,recordedBodyRequest,validateRecordedBodyPage,type RecordedBodyPage} from './recordedBodyModel';
 
@@ -26,6 +28,15 @@ export default function RecordedBody({flow,variant,headers,onCopy,active=true,co
   const completeAbort=useRef<AbortController|null>(null),pageNow=useRef({key:pageKey,active,connected});pageNow.current={key:pageKey,active,connected};
   const completeBody=complete?.key===pageKey&&complete.state==='ready'?complete.body:undefined;
   const page=data?.key===key&&data.offset===offset?data.page:null;
+  const liveSeen=useRef({id:flow.id,seen:false});
+  if(liveSeen.current.id!==flow.id)liveSeen.current={id:flow.id,seen:false};
+  if(flow.state==='receiving')liveSeen.current.seen=true;
+  const contentType=headers.find(header=>!header.disabled&&header.name.toLowerCase()==='content-type')?.value.split(';')[0].trim().toLowerCase();
+  const contentEncoding=headers.filter(header=>!header.disabled&&header.name.toLowerCase()==='content-encoding').map(header=>header.value).join(',').trim().toLowerCase();
+  const liveEncoding=contentEncoding&&parseSseEncodings(contentEncoding)?contentEncoding:null;
+  const showSseLive=mode==='body'&&variant==='response'&&contentType==='text/event-stream'&&!!liveEncoding
+    &&typeof total==='number'&&total<=RECORDED_BODY_COMPLETE_BYTES&&completeBody===undefined
+    &&(['receiving','cancelled','failed'].includes(flow.state??'')||(liveSeen.current.seen&&flow.state==='completed'&&total>RECORDED_BODY_PAGE_BYTES));
   const encoded=recordedBodyEncoded(headers),effectiveView=mode==='base64'?'base64':view==='text'&&(page?.text===null||encoded)?'hex':view;
   const text=useMemo(()=>!page?'':effectiveView==='base64'?page.bodyBase64:effectiveView==='hex'?recordedBodyHex(page.bytes,page.offset):page.text??'',[page,effectiveView]);
   const pages=typeof total==='number'&&Number.isSafeInteger(total)&&total>=0?Math.max(1,Math.ceil(total/RECORDED_BODY_PAGE_BYTES)):0;
@@ -96,12 +107,13 @@ export default function RecordedBody({flow,variant,headers,onCopy,active=true,co
     </div>}
     {loading&&<p role="status">{t('正在读取正文片段…')}</p>}
     {failure?.key===key&&<p role="alert">{t('正文读取失败；记录可能已更新，请重新读取记录信息后重试。')} {failure.message}</p>}
+    {showSseLive&&liveEncoding&&<RecordedSseLive key={`${flow.id}:response`} flow={flow} encoding={liveEncoding} onCopy={onCopy}/>}
     {page?.totalBytes===0&&<p role="status">{t('（空正文）')}</p>}
     {page&&page.totalBytes>0&&<>
       <div className="format-note">{completeBody!==undefined?t('已完整读取所选实体，以下处理不包含其他正文槽位。'):page.complete?t('当前片段包含完整实体正文。'):t('仅显示原始实体的当前片段；不会解压、格式化或预览截断内容。')}
         {!page.complete&&completeBody===undefined&&t('复制仅包含当前片段，完整内容请使用下载。')}
       </div>
-      {mode==='body'&&(page.complete||completeBody!==undefined)?<ResponseBody key={pageKey} body={completeBody??page.bodyBase64} headers={headers} onCopy={onCopy}/>:<>
+      {mode==='body'&&!showSseLive&&(page.complete||completeBody!==undefined)?<ResponseBody key={pageKey} body={completeBody??page.bodyBase64} headers={headers} onCopy={onCopy}/>:<>
         <div className="format-toolbar">{mode!=='base64'&&<>
           <button type="button" disabled={page.text===null||encoded} aria-pressed={effectiveView==='text'} onClick={()=>setView('text')}>{t('原始文本片段')}</button>
           <button type="button" aria-pressed={effectiveView==='hex'} onClick={()=>setView('hex')}>Hex</button>

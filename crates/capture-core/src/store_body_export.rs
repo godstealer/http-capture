@@ -27,7 +27,7 @@ impl Store {
             body_views::BodyLocation::Blob { rowid, length } => {
                 ensure!(length <= crate::body_export::MAX_EXPORT_BYTES, "Export exceeds 256 MiB limit");
                 let blob = tx.blob_open(rusqlite::DatabaseName::Main, "flow_bodies", "body", rowid, true)?;
-                ensure!(blob.len() as u64 == length, "Stored body length changed");
+                ensure!(blob.len() as u64 >= length, "Stored body length changed");
                 let mut chunk = [0u8; COPY_CHUNK];
                 let mut offset = 0u64;
                 while offset < length {

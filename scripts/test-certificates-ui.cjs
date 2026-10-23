@@ -26,7 +26,7 @@ const file=(name,content)=>({name,size:content.length,arrayBuffer:async()=>new T
  const h=harness(m.exports.default);await h.tick();assert.equal(calls.length,1);
  h.field('名称').props.onChange({target:{value:'Local CA'}});h.render();
  // Synthetic file contents: the real PEM/key validation is covered in Rust.
- h.field('公钥证书文件').props.onChange({target:{files:[file('ca.pem','certificate')]}});h.field('配套私钥文件').props.onChange({target:{files:[file('key.pem','-----BEGIN TEST MATERIAL-----\nprivate-fixture\n-----END TEST MATERIAL-----')]}});await h.tick();
+ h.field('公钥证书或 P12/PFX 文件').props.onChange({target:{files:[file('ca.pem','certificate')]}});h.field('配套私钥文件').props.onChange({target:{files:[file('key.pem','-----BEGIN TEST MATERIAL-----\nprivate-fixture\n-----END TEST MATERIAL-----')]}});await h.tick();
  assert(!h.button('导入并保存').props.disabled);let pending=deferred();response=()=>pending.promise;
  h.button('导入并保存').props.onClick();h.button('导入并保存').props.onClick();assert.equal(calls.length,2,'double click sends one mutation');assert.equal(calls[1][1].input.expectedVersion,'v1');assert.match(calls[1][1].input.privateKeyPem,/private-fixture/);
  const ca={id:'ca-1',name:'Local CA',kind:'ca',enabled:false,host:'',port:443,certificate:{subject:'Local CA',issuer:'Local CA',sha256:'abc',notAfter:'2030'}};
@@ -34,10 +34,19 @@ const file=(name,content)=>({name,size:content.length,arrayBuffer:async()=>new T
  h.button('切换为此 CA').props.onClick();h.render();assert.equal(calls.length,2,'selection requires confirmation');h.button('取消').props.onClick();h.render();assert.equal(calls.length,2);
  h.button('切换为此 CA').props.onClick();h.render();response=async()=>({...initial,entries:[ca],version:'v3',selectedCa:ca.id,restartRequired:true});h.button('确认').props.onClick();await h.tick();assert.equal(calls[2][1].input.expectedVersion,'v2');assert(text(h.tree).includes('重启内核后生效'));assert(h.button('删除').props.disabled,'selected CA cannot be deleted');
  h.button('客户端证书').props.onClick();h.render();h.field('精确域名或 IP').props.onChange({target:{value:'api.example.com'}});h.field('端口').props.onChange({target:{value:'44a3'}});h.render();assert.equal(h.field('端口').props.value,'443');
- h.field('公钥证书文件').props.onChange({target:{files:[file('client.pem','client')]}});await h.tick();const late=deferred();h.field('配套私钥文件').props.onChange({target:{files:[{name:'late.key',size:20,arrayBuffer:()=>late.promise}]}});
+ h.field('公钥证书或 P12/PFX 文件').props.onChange({target:{files:[file('client.pem','client')]}});await h.tick();const late=deferred();h.field('配套私钥文件').props.onChange({target:{files:[{name:'late.key',size:20,arrayBuffer:()=>late.promise}]}});
  h.button('服务器信任').props.onClick();h.render();late.resolve(new TextEncoder().encode('-----BEGIN TEST MATERIAL-----private').buffer);await h.tick();assert(!h.find(n=>n.type==='input'&&n.props.accept==='.pem,.key'),'trust form never asks for a private key');
  h.button('客户端证书').props.onClick();h.render();assert(h.button('导入并保存').props.disabled,'late private file does not survive category change');
- h.field('配套私钥文件').props.onChange({target:{files:[file('encrypted.key','-----BEGIN ENCRYPTED TEST MATERIAL-----')]}});await h.tick();assert(text(h.tree).includes('未加密的 PEM'));
+ h.field('公钥证书或 P12/PFX 文件').props.onChange({target:{files:[file('client.pem','client')]}});await h.tick();
+ h.field('配套私钥文件').props.onChange({target:{files:[file('encrypted.key','-----BEGIN ENCRYPTED PRIVATE KEY-----')]}});await h.tick();
+ assert(h.field('证书或私钥密码'));h.field('证书或私钥密码').props.onChange({target:{value:'pem-secret'}});h.render();
+ response=async()=>({...initial,version:'v4'});h.button('导入并保存').props.onClick();await h.tick();
+ assert.equal(calls.at(-1)[1].input.password,'pem-secret');assert.equal(calls.at(-1)[1].input.containerFormat,undefined);
+ assert(!h.find(n=>n.type==='input'&&n.props.type==='password'),'successful import clears password');
+ h.field('公钥证书或 P12/PFX 文件').props.onChange({target:{files:[file('client.p12','p12-bytes')]}});await h.tick();
+ assert(!h.find(n=>n.type==='input'&&n.props.accept==='.pem,.key'),'P12 already contains the private key');
+ h.field('证书或私钥密码').props.onChange({target:{value:'p12-secret'}});h.render();response=async()=>({...initial,version:'v5'});h.button('导入并保存').props.onClick();await h.tick();
+ assert.equal(calls.at(-1)[1].input.containerFormat,'p12');assert.equal(calls.at(-1)[1].input.password,'p12-secret');assert.equal(calls.at(-1)[1].input.privateKeyPem,'');
  const readCount=calls.length;h.props={...h.props,active:false};h.render();assert.equal(h.tree,null);await h.tick();assert.equal(calls.length,readCount,'hidden settings do not poll certificates');
  response=async()=>initial;h.props={active:true,connected:false};h.render();assert(text(h.tree).includes('连接内核后'));assert.equal(calls.length,readCount);
  console.log('Certificate UI: imports, confirmation, version binding, private file clearing, races and disconnected state passed.');

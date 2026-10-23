@@ -1,0 +1,2447 @@
+// Package client provides an HTTP client with browser TLS/HTTP fingerprint spoofing.
+//
+// This package is the core of httpcloak. It provides an HTTP client that mimics
+// real browser fingerprints at the TLS and HTTP/2 protocol levels, making requests
+// indistinguishable from actual Chrome, Firefox, or Safari browsers.
+//
+// # Why Fingerprint Spoofing Matters
+//
+// Modern bot detection systems analyze multiple layers of your HTTP connection:
+//
+//  1. TLS Fingerprint (JA3/JA4): Cipher suites, extensions, elliptic curves
+//  2. HTTP/2 Fingerprint (Akamai): SETTINGS frame values, WINDOW_UPDATE, PRIORITY
+//  3. Header Fingerprint: Order, format, and values of HTTP headers
+//
+// Go's standard library has a distinct fingerprint that bot detection systems
+// (Cloudflare, Akamai, PerimeterX) can identify instantly. This package solves
+// that by using uTLS for TLS spoofing and custom HTTP/2 framing.
+//
+// # Basic Usage
+//
+//	c := client.NewClient("chrome-143")
+//	defer c.Close()
+//
+//	resp, err := c.Get(ctx, "https://example.com", nil)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Println(resp.Text())
+//
+// # Session Usage (with cookies)
+//
+//	session := client.NewSession("chrome-143")
+//	defer session.Close()
+//
+//	// Login - cookies are persisted
+//	session.Post(ctx, "https://example.com/login", body, headers)
+//
+//	// Subsequent requests include cookies
+//	resp, _ := session.Get(ctx, "https://example.com/dashboard", nil)
+package client
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	http "github.com/sardanioss/http"
+	"io"
+	"math"
+	"math/rand"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
+	"github.com/sardanioss/httpcloak/fingerprint"
+	"github.com/sardanioss/httpcloak/internal/compress"
+	"github.com/sardanioss/httpcloak/internal/gunzip"
+	"github.com/sardanioss/httpcloak/pool"
+	"github.com/sardanioss/httpcloak/protocol"
+	"github.com/sardanioss/httpcloak/transport"
+)
+
+// Note: As of Go 1.20, the global random generator is automatically seeded.
+// No manual seeding needed for organic jitter in header values.
+
+// Client is an HTTP client with connection pooling and fingerprint spoofing
+// By default, it tries HTTP/3 first, then HTTP/2, then HTTP/1.1 as fallback
+type Client struct {
+	poolManager *pool.Manager
+	quicManager *pool.QUICManager
+	// h3Mu guards quicManager, masqueTransport and socks5H3Transport. The proxy
+	// setters close and replace all three, and a request in flight re-reads them
+	// after its own nil check has already passed, so an unguarded swap is a nil
+	// dereference. In the cgo bindings a Go panic takes the host process with it.
+	h3Mu              sync.RWMutex
+	masqueTransport   *transport.HTTP3Transport // MASQUE proxy transport (if using MASQUE)
+	socks5H3Transport *transport.HTTP3Transport // SOCKS5 UDP relay transport for HTTP/3
+	h1Transport       *transport.HTTP1Transport
+	preset            *fingerprint.Preset
+	config            *ClientConfig
+
+	// Authentication
+	auth Auth
+
+	// Cookie jar for session persistence (nil = no cookie handling)
+	cookies *CookieJar
+
+	// Request hooks for pre/post processing
+	hooks *Hooks
+
+	// Certificate pinning
+	certPinner *CertPinner
+
+	// Track which hosts don't support HTTP/3 to avoid repeated failures
+	h3Failures   map[string]time.Time
+	h3FailuresMu sync.RWMutex
+
+	// Track which hosts need HTTP/1.1 (don't support HTTP/2)
+	h2Failures   map[string]time.Time
+	h2FailuresMu sync.RWMutex
+
+	// Store H3 initialization error for better error messages
+	h3InitError error
+
+	// configErr is a construction-time problem surfaced on the first request,
+	// since NewClient has no error return. Currently only an unrecognised
+	// preset name.
+	configErr error
+
+	// Custom header order (nil = use preset's order)
+	customHeaderOrder   []string
+	customHeaderOrderMu sync.RWMutex
+}
+
+// NewClient creates a new HTTP client with default configuration
+// Tries HTTP/3 first, then HTTP/2, then HTTP/1.1 as fallback
+func NewClient(presetName string, opts ...Option) *Client {
+	config := DefaultConfig()
+	if presetName != "" {
+		config.Preset = presetName
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	// An unrecognised preset name is a config error rather than something to
+	// resolve to a default. fingerprint.Get answers an unknown name with
+	// chrome-146, so one mistyped character used to put a three-version-old
+	// fingerprint on the wire with nothing said about it.
+	var configErr error
+	if config.Preset != "" && fingerprint.GetStrict(config.Preset) == nil {
+		configErr = fingerprint.UnknownPresetError(config.Preset)
+	}
+	preset := fingerprint.Get(config.Preset)
+
+	// Determine effective proxy URLs for TCP and UDP transports
+	// TCPProxy/UDPProxy take precedence over Proxy for split proxy configuration
+	tcpProxyURL := config.TCPProxy
+	if tcpProxyURL == "" {
+		tcpProxyURL = config.Proxy
+	}
+	udpProxyURL := config.UDPProxy
+	if udpProxyURL == "" {
+		udpProxyURL = config.Proxy
+	}
+
+	var h2Manager *pool.Manager
+	if tcpProxyURL != "" {
+		h2Manager = pool.NewManagerWithProxy(preset, tcpProxyURL, config.InsecureSkipVerify)
+	} else {
+		h2Manager = pool.NewManagerWithTLSConfig(preset, config.InsecureSkipVerify)
+	}
+
+	// Set IPv4 preference on DNS cache if configured
+	if config.PreferIPv4 {
+		h2Manager.GetDNSCache().SetPreferIPv4(true)
+	}
+
+	// Create transport config for TLSOnly and other settings (used by all transports)
+	var transportConfig *transport.TransportConfig
+	if config.TLSOnly || len(config.ConnectTo) > 0 || config.ECHConfigDomain != "" || len(config.ECHConfig) > 0 {
+		transportConfig = &transport.TransportConfig{
+			TLSOnly:         config.TLSOnly,
+			ConnectTo:       config.ConnectTo,
+			ECHConfigDomain: config.ECHConfigDomain,
+			ECHConfig:       config.ECHConfig,
+		}
+	}
+
+	// Only create QUIC manager if H3 is not disabled
+	// HTTP/3 works through SOCKS5 (UDP relay) or MASQUE (CONNECT-UDP) proxies
+	var quicManager *pool.QUICManager
+	var masqueTransport *transport.HTTP3Transport
+	var socks5H3Transport *transport.HTTP3Transport
+	var h3InitError error
+	if !config.DisableH3 {
+		if udpProxyURL != "" && transport.IsMASQUEProxy(udpProxyURL) {
+			// Use dedicated MASQUE transport for MASQUE proxies
+			proxyConfig := &transport.ProxyConfig{URL: udpProxyURL}
+			var err error
+			masqueTransport, err = transport.NewHTTP3TransportWithMASQUE(preset, h2Manager.GetDNSCache(), proxyConfig, transportConfig)
+			if err != nil {
+				// Fall back to non-H3 if MASQUE transport creation fails
+				masqueTransport = nil
+				h3InitError = err
+			}
+		} else if udpProxyURL != "" && transport.IsSOCKS5Proxy(udpProxyURL) {
+			// Use SOCKS5 UDP relay transport for HTTP/3
+			proxyConfig := &transport.ProxyConfig{URL: udpProxyURL}
+			var err error
+			socks5H3Transport, err = transport.NewHTTP3TransportWithConfig(preset, h2Manager.GetDNSCache(), proxyConfig, transportConfig)
+			if err != nil {
+				// Fall back to non-H3 if SOCKS5 transport creation fails
+				socks5H3Transport = nil
+				h3InitError = err
+			}
+		} else if udpProxyURL == "" {
+			// Use QUICManager for direct connections only
+			quicManager = pool.NewQUICManager(preset, h2Manager.GetDNSCache())
+		}
+	}
+
+	// Create HTTP/1.1 transport for fallback or when explicitly requested
+	var tcpProxyConfig *transport.ProxyConfig
+	if tcpProxyURL != "" {
+		tcpProxyConfig = &transport.ProxyConfig{URL: tcpProxyURL}
+	}
+	h1Transport := transport.NewHTTP1TransportWithConfig(preset, h2Manager.GetDNSCache(), tcpProxyConfig, transportConfig)
+	h1Transport.SetInsecureSkipVerify(config.InsecureSkipVerify)
+
+	// Propagate InsecureSkipVerify to QUIC manager and proxy transports
+	if quicManager != nil {
+		quicManager.SetInsecureSkipVerify(config.InsecureSkipVerify)
+	}
+	if masqueTransport != nil {
+		masqueTransport.SetInsecureSkipVerify(config.InsecureSkipVerify)
+	}
+	if socks5H3Transport != nil {
+		socks5H3Transport.SetInsecureSkipVerify(config.InsecureSkipVerify)
+	}
+
+	// Install caller-supplied TLS verification hooks (issue #85). Previously
+	// WithTLSConfig stored the config and nothing ever read it, so the callbacks
+	// silently never fired.
+	// ClientConfig.TLSConfig is exported, and Option is a plain func(*ClientConfig),
+	// so setting the field directly is a legal and documented-looking way to
+	// configure verification. Read it here as well as in WithTLSConfig, or that
+	// route silently applies nothing.
+	if config.TLSConfig != nil {
+		if config.VerifyPeerCertificate == nil {
+			config.VerifyPeerCertificate = config.TLSConfig.VerifyPeerCertificate
+		}
+		if config.VerifyConnection == nil {
+			config.VerifyConnection = config.TLSConfig.VerifyConnection
+		}
+		if config.RootCAs == nil {
+			config.RootCAs = config.TLSConfig.RootCAs
+		}
+		if config.TLSConfig.InsecureSkipVerify {
+			config.InsecureSkipVerify = true
+		}
+	}
+
+	if config.VerifyPeerCertificate != nil || config.VerifyConnection != nil || config.RootCAs != nil {
+		tlsVerify := &transport.TLSVerify{
+			VerifyPeerCertificate: config.VerifyPeerCertificate,
+			VerifyConnection:      config.VerifyConnection,
+			RootCAs:               config.RootCAs,
+		}
+		h2Manager.SetTLSVerify(tlsVerify)
+		h1Transport.SetTLSVerify(tlsVerify)
+		if quicManager != nil {
+			quicManager.SetTLSVerify(tlsVerify)
+		}
+		if masqueTransport != nil {
+			masqueTransport.SetTLSVerify(tlsVerify)
+		}
+		if socks5H3Transport != nil {
+			socks5H3Transport.SetTLSVerify(tlsVerify)
+		}
+	}
+
+	// Propagate ConnectTo mappings (domain fronting)
+	for requestHost, connectHost := range config.ConnectTo {
+		h2Manager.SetConnectTo(requestHost, connectHost)
+		if quicManager != nil {
+			quicManager.SetConnectTo(requestHost, connectHost)
+		}
+		h1Transport.SetConnectTo(requestHost, connectHost)
+	}
+
+	// Propagate ECH configuration
+	if len(config.ECHConfig) > 0 {
+		h2Manager.SetECHConfig(config.ECHConfig)
+		if quicManager != nil {
+			quicManager.SetECHConfig(config.ECHConfig)
+		}
+	}
+	if config.ECHConfigDomain != "" {
+		h2Manager.SetECHConfigDomain(config.ECHConfigDomain)
+		if quicManager != nil {
+			quicManager.SetECHConfigDomain(config.ECHConfigDomain)
+		}
+	}
+	if config.DisableECH {
+		if quicManager != nil {
+			quicManager.SetDisableECH(true)
+		}
+	}
+
+	client := &Client{
+		poolManager:       h2Manager,
+		quicManager:       quicManager,
+		masqueTransport:   masqueTransport,
+		socks5H3Transport: socks5H3Transport,
+		h1Transport:       h1Transport,
+		preset:            preset,
+		config:            config,
+		h3Failures:        make(map[string]time.Time),
+		h2Failures:        make(map[string]time.Time),
+		h3InitError:       h3InitError,
+		configErr:         configErr,
+	}
+
+	// Auto-enable cookies when retry is enabled
+	// (required for handling cookie challenges from bot protection)
+	if config.RetryEnabled {
+		client.cookies = NewCookieJar()
+	}
+
+	return client
+}
+
+// NewSession creates a new HTTP client with cookie jar and retry enabled (like requests.Session())
+// Cookies are automatically persisted between requests.
+// Retry is enabled by default (3 retries) to handle bot protection cookie challenges.
+// This mimics browser behavior where cookies are accepted and requests are retried.
+func NewSession(presetName string, opts ...Option) *Client {
+	// Prepend default retry so user opts can override if needed
+	defaultOpts := []Option{WithRetry(3)}
+	opts = append(defaultOpts, opts...)
+
+	client := NewClient(presetName, opts...)
+	client.cookies = NewCookieJar()
+	return client
+}
+
+// SetPreset changes the fingerprint preset
+// SetPreset changes the browser profile for subsequent requests.
+//
+// This has to reach EVERY protocol. It used to update only the HTTP/2 pool
+// manager, so the HTTP/1.1 transport and all three HTTP/3 transports kept the
+// profile they were constructed with: the same client then presented one
+// browser over HTTP/2 and a different one over HTTP/1.1 or HTTP/3, depending
+// purely on which protocol a request happened to negotiate. For a library whose
+// entire job is presenting one coherent identity, that is the worst kind of
+// bug, because nothing surfaces it.
+func (c *Client) SetPreset(presetName string) {
+	preset := fingerprint.Get(presetName)
+	if preset == nil {
+		return
+	}
+	c.preset = preset
+	c.poolManager.SetPreset(preset)
+
+	if c.h1Transport != nil {
+		c.h1Transport.SetPreset(preset)
+	}
+
+	c.h3Mu.Lock()
+	if c.quicManager != nil {
+		c.quicManager.SetPreset(preset)
+	}
+	if c.masqueTransport != nil {
+		c.masqueTransport.SetPreset(preset)
+	}
+	if c.socks5H3Transport != nil {
+		c.socks5H3Transport.SetPreset(preset)
+	}
+	c.h3Mu.Unlock()
+}
+
+// SetTimeout sets the request timeout
+func (c *Client) SetTimeout(timeout time.Duration) {
+	c.config.Timeout = timeout
+}
+
+// SetForceProtocol changes the protocol for all subsequent requests.
+// Use ProtocolHTTP2 for H2, ProtocolHTTP3 for H3, ProtocolAuto for auto-detect.
+// Added for PX solver: mimics Chrome's H2→H3 alt-svc upgrade pattern.
+func (c *Client) SetForceProtocol(p Protocol) {
+	c.config.ForceProtocol = p
+}
+
+// SetAuth sets authentication for all requests
+func (c *Client) SetAuth(auth Auth) {
+	c.auth = auth
+}
+
+// SetBasicAuth sets Basic authentication
+func (c *Client) SetBasicAuth(username, password string) {
+	c.auth = NewBasicAuth(username, password)
+}
+
+// SetBearerAuth sets Bearer token authentication
+func (c *Client) SetBearerAuth(token string) {
+	c.auth = NewBearerAuth(token)
+}
+
+// EnableCookies enables cookie jar for session persistence
+func (c *Client) EnableCookies() {
+	if c.cookies == nil {
+		c.cookies = NewCookieJar()
+	}
+}
+
+// DisableCookies disables cookie handling
+func (c *Client) DisableCookies() {
+	c.cookies = nil
+}
+
+// Cookies returns the cookie jar (nil if cookies are disabled)
+func (c *Client) Cookies() *CookieJar {
+	return c.cookies
+}
+
+// ClearCookies removes all cookies from the jar
+func (c *Client) ClearCookies() {
+	if c.cookies != nil {
+		c.cookies.Clear()
+	}
+}
+
+// Hooks returns the client's hooks instance, creating one if needed
+func (c *Client) Hooks() *Hooks {
+	if c.hooks == nil {
+		c.hooks = NewHooks()
+	}
+	return c.hooks
+}
+
+// OnPreRequest adds a pre-request hook
+// Hook is called before each request is sent
+func (c *Client) OnPreRequest(hook PreRequestHook) *Client {
+	c.Hooks().OnPreRequest(hook)
+	return c
+}
+
+// OnPostResponse adds a post-response hook
+// Hook is called after each response is received
+func (c *Client) OnPostResponse(hook PostResponseHook) *Client {
+	c.Hooks().OnPostResponse(hook)
+	return c
+}
+
+// ClearHooks removes all hooks
+func (c *Client) ClearHooks() {
+	if c.hooks != nil {
+		c.hooks.Clear()
+	}
+}
+
+// CertPinner returns the certificate pinner, creating one if needed
+func (c *Client) CertPinner() *CertPinner {
+	if c.certPinner == nil {
+		c.certPinner = NewCertPinner()
+	}
+	return c.certPinner
+}
+
+// PinCertificate adds a certificate pin
+// hash should be base64-encoded SHA256 of the certificate's SPKI
+// Example: c.PinCertificate("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", ForHost("example.com"))
+func (c *Client) PinCertificate(hash string, opts ...PinOption) *Client {
+	c.CertPinner().AddPin(hash, opts...)
+	return c
+}
+
+// PinCertificateFromFile loads a certificate from file and pins its public key
+func (c *Client) PinCertificateFromFile(certPath string, opts ...PinOption) error {
+	return c.CertPinner().AddPinFromCertFile(certPath, opts...)
+}
+
+// ClearPins removes all certificate pins
+func (c *Client) ClearPins() {
+	if c.certPinner != nil {
+		c.certPinner.Clear()
+	}
+}
+
+// FetchMode specifies the Sec-Fetch-Mode behavior
+type FetchMode int
+
+const (
+	FetchModeNavigate FetchMode = iota // Default: human clicked link (sec-fetch-mode: navigate)
+	FetchModeCORS                      // XHR/fetch call (sec-fetch-mode: cors)
+	FetchModeNoCors                    // Subresource load (script/style/image): sec-fetch-mode: no-cors
+)
+
+// FetchSite specifies the Sec-Fetch-Site value
+type FetchSite int
+
+const (
+	FetchSiteAuto       FetchSite = iota // Auto-detect based on Referer header
+	FetchSiteNone                        // Direct navigation (typed URL, bookmark)
+	FetchSiteSameOrigin                  // Same origin request
+	FetchSiteSameSite                    // Same site but different subdomain
+	FetchSiteCrossSite                   // Different site
+)
+
+// Request represents an HTTP request
+type Request struct {
+	Method  string
+	URL     string
+	Headers map[string][]string // Multi-value headers (matches http.Header)
+	Body    io.Reader           // Streaming body for uploads
+	Timeout time.Duration
+
+	// Customization options
+	UserAgent     string    // Override User-Agent (empty = use preset)
+	ForceProtocol Protocol  // Force specific protocol (ProtocolAuto = auto)
+	FetchMode     FetchMode // Fetch mode: Navigate (default, human click) or CORS (XHR/fetch) or NoCors (subresource)
+	FetchSite     FetchSite // Sec-Fetch-Site: Auto (default), None, SameOrigin, SameSite, CrossSite
+	FetchDest     string    // Sec-Fetch-Dest for NoCors mode: "script", "style", "image" (empty = use mode default)
+	Referer       string    // Referer header (used for auto-detecting FetchSite)
+
+	// Authentication (overrides client-level auth)
+	Auth Auth
+
+	// Params adds query parameters to the URL
+	Params map[string]string
+
+	// Per-request redirect override (nil = use client config)
+	FollowRedirects *bool
+	MaxRedirects    int
+
+	// Per-request retry override (nil = use client config)
+	DisableRetry bool
+
+	// IncludeTLSInfo populates Response.TLS with the leaf certificate's
+	// details. Off by default: parsing cert fields on every request isn't
+	// free, so opt in per-request rather than paying for it unconditionally.
+	IncludeTLSInfo bool
+
+	// HeaderOrder, when non-empty, sets the header order for this single request
+	// and overrides whatever SetHeaderOrder installed on the client. Nothing is
+	// stored on the client and no lock is taken, so concurrent requests can each
+	// carry a different order.
+	//
+	// The list is a prefix, not a whole-request replacement: headers you name are
+	// emitted first, in this order, and everything you leave out keeps the
+	// preset's own position (then a stable alphabetical tail). Name every header
+	// you send and you get exactly that wire order. Names are case-insensitive.
+	// Empty or nil means the client-wide order applies.
+	//
+	// The order carries across followed redirects, alongside the headers it
+	// orders and the other per-request options the redirect path already carries.
+	HeaderOrder []string
+
+	// OnRedirect, when non-nil, is called once per redirect hop before the
+	// follow-up request is built. Returning nil follows the hop; returning
+	// ErrUseLastResponse stops the chain and returns the 3xx itself with a nil
+	// error; any other error fails the request with that error unwrapped, so
+	// errors.Is against your own sentinel matches.
+	//
+	// This exists because both alternatives lose something. Turning redirects
+	// off hands you the entire chain to re-implement, cookie jar and header
+	// scrubbing included. Reading Response.RedirectHistory afterwards is too
+	// late: the request to the host you meant to block has already gone out.
+	//
+	// The hop is deliberately read-only. A callback able to rewrite the target
+	// would sit upstream of the scheme and origin scrubbing, which is the part
+	// that keeps Authorization from following a hop off-origin.
+	//
+	// Not called for a 3xx with no Location, nor for the hop that would exceed
+	// the redirect cap. An error from it is not retried, even with retries
+	// enabled: a request the caller already vetoed should not be replayed, and
+	// replaying it would re-invoke the callback once per attempt.
+	OnRedirect func(*Redirect) error
+}
+
+// SetHeader sets a header value, replacing any existing values.
+func (r *Request) SetHeader(key, value string) {
+	if r.Headers == nil {
+		r.Headers = make(map[string][]string)
+	}
+	r.Headers[key] = []string{value}
+}
+
+// AddHeader adds a header value, preserving existing values.
+func (r *Request) AddHeader(key, value string) {
+	if r.Headers == nil {
+		r.Headers = make(map[string][]string)
+	}
+	r.Headers[key] = append(r.Headers[key], value)
+}
+
+// GetHeader returns the first value for the given header key (case-insensitive).
+func (r *Request) GetHeader(key string) string {
+	if values, ok := getHeaderCaseInsensitive(r.Headers, key); ok && len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+// getHeaderCaseInsensitive retrieves a header value from a map case-insensitively.
+// Returns the values and whether the header was found.
+func getHeaderCaseInsensitive(headers map[string][]string, key string) ([]string, bool) {
+	if headers == nil {
+		return nil, false
+	}
+	// Try exact match first (most common case)
+	if values, ok := headers[key]; ok {
+		return values, true
+	}
+	// Fall back to case-insensitive search
+	keyLower := strings.ToLower(key)
+	for k, v := range headers {
+		if strings.ToLower(k) == keyLower {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// Response represents an HTTP response
+type Response struct {
+	StatusCode int
+	Headers    map[string][]string // Multi-value headers (matches http.Header)
+	Body       io.ReadCloser       // Streaming body - call Close() when done
+	FinalURL   string
+	Timing     *protocol.Timing
+	Protocol   string // "h3" or "h2"
+
+	// Request info
+	Request *Request
+
+	// Redirect history
+	RedirectHistory []*RedirectInfo
+
+	// TLS is the negotiated TLS connection's leaf-certificate info. Only
+	// populated when Request.IncludeTLSInfo is true.
+	TLS *TLSInfo
+
+	// bodyBytes caches the body after reading
+	bodyBytes []byte
+	bodyRead  bool
+}
+
+// TLSInfo describes the leaf certificate and negotiated parameters of a
+// response's TLS connection.
+type TLSInfo struct {
+	Version            string
+	CipherSuite        string
+	NegotiatedProtocol string
+	SubjectCN          string
+	Issuer             string
+	DNSNames           []string
+	NotBefore          time.Time
+	NotAfter           time.Time
+	SelfSigned         bool
+	SHA256Fingerprint  string
+}
+
+// buildTLSInfo extracts TLSInfo from the leaf certificate of a connection.
+// Takes primitives rather than a *tls.ConnectionState because the forked
+// http package's Response.TLS is actually *utls.ConnectionState (the
+// forked http aliases "tls" to github.com/sardanioss/utls) -- matching
+// certpin.go's own approach of never depending on that concrete type,
+// only on the standard x509 certificates it carries.
+// Returns nil if there are no peer certificates.
+func buildTLSInfo(version, cipherSuite uint16, negotiatedProtocol string, peerCertificates []*x509.Certificate) *TLSInfo {
+	if len(peerCertificates) == 0 {
+		return nil
+	}
+	leaf := peerCertificates[0]
+	fingerprint := sha256.Sum256(leaf.Raw)
+
+	return &TLSInfo{
+		Version:            tls.VersionName(version),
+		CipherSuite:        tls.CipherSuiteName(cipherSuite),
+		NegotiatedProtocol: negotiatedProtocol,
+		SubjectCN:          leaf.Subject.CommonName,
+		Issuer:             leaf.Issuer.CommonName,
+		DNSNames:           leaf.DNSNames,
+		NotBefore:          leaf.NotBefore,
+		NotAfter:           leaf.NotAfter,
+		SelfSigned:         bytes.Equal(leaf.RawIssuer, leaf.RawSubject),
+		SHA256Fingerprint:  hex.EncodeToString(fingerprint[:]),
+	}
+}
+
+// Close closes the response body.
+func (r *Response) Close() error {
+	if r.Body != nil {
+		return r.Body.Close()
+	}
+	return nil
+}
+
+// Bytes reads and returns the entire response body.
+// The body can only be read once unless cached.
+func (r *Response) Bytes() ([]byte, error) {
+	if r.bodyRead {
+		return r.bodyBytes, nil
+	}
+	if r.Body == nil {
+		return nil, nil
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	r.Body.Close()
+	r.bodyBytes = data
+	r.bodyRead = true
+	return data, nil
+}
+
+// RedirectInfo stores information about a redirect
+type RedirectInfo struct {
+	StatusCode int
+	URL        string
+	Headers    map[string][]string // Multi-value headers
+}
+
+// JSON decodes the response body as JSON into the given interface
+func (r *Response) JSON(v interface{}) error {
+	data, err := r.Bytes()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, v)
+}
+
+// Text returns the response body as a string
+func (r *Response) Text() (string, error) {
+	data, err := r.Bytes()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// GetHeader returns the first value for the given header key (case-insensitive).
+func (r *Response) GetHeader(key string) string {
+	if values := r.Headers[strings.ToLower(key)]; len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+// GetHeaders returns all values for the given header key (case-insensitive).
+func (r *Response) GetHeaders(key string) []string {
+	return r.Headers[strings.ToLower(key)]
+}
+
+// ErrNoLocation is returned by Response.Location when the response has no
+// Location header.
+//
+// Deliberately the same error value as transport.ErrNoLocation rather than a
+// separate sentinel with the same text: a caller doing
+// errors.Is(err, ErrNoLocation) must match regardless of which layer produced
+// the response.
+var ErrNoLocation = transport.ErrNoLocation
+
+// Redirect describes one hop a redirect chain is about to take. See
+// Request.OnRedirect.
+//
+// An alias rather than a copy of transport.Redirect: OnRedirect is a func value
+// travelling inward through the layers, so an alias makes
+// func(*client.Redirect) error and func(*transport.Redirect) error the identical
+// type and the field assigns straight through with no per-hop conversion.
+type Redirect = transport.Redirect
+
+// ErrUseLastResponse, returned from a Request.OnRedirect callback, stops the
+// redirect chain and returns the 3xx itself with a nil error.
+//
+// Deliberately the same error value as transport.ErrUseLastResponse, for the
+// same reason as ErrNoLocation above.
+var ErrUseLastResponse = transport.ErrUseLastResponse
+
+// ErrTooManyRedirects is returned when a chain exceeds the configured cap.
+//
+// Note the asymmetry with the session layer, which returns the last response
+// alongside this error: by the time doOnce knows the cap is blown it has not
+// built its Response yet, and restructuring it to do so is a larger change than
+// the sentinel is worth. Here the error arrives alone.
+var ErrTooManyRedirects = transport.ErrTooManyRedirects
+
+// redirectHookError marks an error as originating in Request.OnRedirect rather
+// than in the network, so doWithRetry stops instead of replaying a request the
+// caller already vetoed — and re-invoking their callback once per attempt.
+type redirectHookError struct{ err error }
+
+func (e *redirectHookError) Error() string { return e.err.Error() }
+func (e *redirectHookError) Unwrap() error { return e.err }
+
+// Location returns the URL of the response's "Location" header, if present.
+// A relative Location is resolved against the URL of the request that produced
+// the response (FinalURL), mirroring net/http's Response.Location.
+// ErrNoLocation is returned when no Location header is present.
+func (r *Response) Location() (*url.URL, error) {
+	lv := r.GetHeader("Location")
+	if lv == "" {
+		return nil, ErrNoLocation
+	}
+	if r.FinalURL != "" {
+		if base, err := url.Parse(r.FinalURL); err == nil {
+			return base.Parse(lv)
+		}
+	}
+	return url.Parse(lv)
+}
+
+// IsSuccess returns true if the status code is 2xx
+func (r *Response) IsSuccess() bool {
+	return r.StatusCode >= 200 && r.StatusCode < 300
+}
+
+// IsRedirect returns true if the status code is 3xx
+func (r *Response) IsRedirect() bool {
+	return r.StatusCode >= 300 && r.StatusCode < 400
+}
+
+// IsClientError returns true if the status code is 4xx
+func (r *Response) IsClientError() bool {
+	return r.StatusCode >= 400 && r.StatusCode < 500
+}
+
+// IsServerError returns true if the status code is 5xx
+func (r *Response) IsServerError() bool {
+	return r.StatusCode >= 500 && r.StatusCode < 600
+}
+
+// Do executes an HTTP request
+// Tries HTTP/3 first, falls back to HTTP/2 if HTTP/3 fails
+func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
+	// Handle retries
+	if c.config.RetryEnabled && !req.DisableRetry {
+		return c.doWithRetry(ctx, req)
+	}
+	resp, err := c.doOnce(ctx, req, nil)
+	// doWithRetry unwraps this on its own path, because it has to recognise the
+	// marker to stop retrying. Here it is only a wrapper to shed, so the caller
+	// gets back exactly the error their callback returned.
+	var hookErr *redirectHookError
+	if errors.As(err, &hookErr) {
+		return resp, hookErr.err
+	}
+	return resp, err
+}
+
+// doWithRetry executes request with retry logic
+// Handles standard retries and cookie challenge retries (bot protection)
+// For Akamai: First request uses H2 (gets cookies), retry uses H3 (succeeds with cookies)
+func (c *Client) doWithRetry(ctx context.Context, req *Request) (*Response, error) {
+	var lastErr error
+	var lastResp *Response
+	var cookieChallengeRetried bool
+
+	// Cache body before retry loop — io.Reader can only be read once
+	var cachedBody []byte
+	if req.Body != nil {
+		var err error
+		cachedBody, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
+	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
+		if attempt > 0 {
+			// Calculate wait time with exponential backoff and jitter
+			wait := c.calculateRetryWait(attempt)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+
+		// Clone request for this attempt
+		reqCopy := *req
+		// Provide fresh body reader for each attempt
+		if cachedBody != nil {
+			reqCopy.Body = bytes.NewReader(cachedBody)
+		}
+
+		// After cookie challenge, switch to H3 for retry (Akamai pattern)
+		q3, m3, _ := c.h3Transports()
+		if cookieChallengeRetried && req.ForceProtocol == ProtocolAuto && (q3 != nil || m3 != nil) {
+			reqCopy.ForceProtocol = ProtocolHTTP3
+		}
+
+		resp, err := c.doOnce(ctx, &reqCopy, nil)
+		if err != nil {
+			// A callback that refused a hop is a decision, not a fault. Replaying
+			// the request would re-invoke it once per attempt and send the caller
+			// a request they already vetoed. Unwrap so the error reaches them
+			// exactly as they returned it.
+			var hookErr *redirectHookError
+			if errors.As(err, &hookErr) {
+				return nil, hookErr.err
+			}
+			lastErr = err
+			continue
+		}
+
+		// Check for cookie challenge (403/429 + Set-Cookie from bot protection)
+		// This handles Akamai, Cloudflare, PerimeterX, etc.
+		// Cookie challenge flow: H2 request gets 403/429 + cookies, H3 retry succeeds
+		isChallengeStatus := resp.StatusCode == 403 || resp.StatusCode == 429
+		if isChallengeStatus && !cookieChallengeRetried && req.ForceProtocol == ProtocolAuto {
+			if setCookies := resp.Headers["set-cookie"]; len(setCookies) > 0 {
+				cookieChallengeRetried = true
+				// Cookies are now stored in jar from first response
+				// Next retry will use H3 with these cookies
+				continue
+			}
+		}
+
+		// Check if we should retry based on status code
+		if c.shouldRetryStatus(resp.StatusCode) && attempt < c.config.MaxRetries {
+			lastResp = resp
+			lastErr = fmt.Errorf("server returned status %d", resp.StatusCode)
+			continue
+		}
+
+		return resp, nil
+	}
+
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	return nil, fmt.Errorf("request failed after %d retries: %w", c.config.MaxRetries, lastErr)
+}
+
+// calculateRetryWait calculates wait time for retry with exponential backoff
+func (c *Client) calculateRetryWait(attempt int) time.Duration {
+	// Exponential backoff: min * 2^attempt
+	wait := float64(c.config.RetryWaitMin) * math.Pow(2, float64(attempt-1))
+
+	// Add jitter (±20%)
+	jitter := wait * 0.2 * (rand.Float64()*2 - 1)
+	wait += jitter
+
+	// Cap at max
+	if wait > float64(c.config.RetryWaitMax) {
+		wait = float64(c.config.RetryWaitMax)
+	}
+
+	return time.Duration(wait)
+}
+
+// shouldRetryStatus checks if status code should trigger retry
+func (c *Client) shouldRetryStatus(statusCode int) bool {
+	for _, code := range c.config.RetryOnStatus {
+		if statusCode == code {
+			return true
+		}
+	}
+	return false
+}
+
+// doOnce executes a single request (with redirect following)
+func (c *Client) doOnce(ctx context.Context, req *Request, redirectHistory []*RedirectInfo) (*Response, error) {
+	startTime := time.Now()
+
+	// Build URL with params
+	reqURL := req.URL
+	if len(req.Params) > 0 {
+		reqURL = NewURLBuilder(req.URL).Params(req.Params).Build()
+	}
+
+	// Parse URL
+	parsedURL, err := url.Parse(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+
+	if parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("only HTTPS is supported")
+	}
+
+	host := parsedURL.Hostname()
+	port := parsedURL.Port()
+	if port == "" {
+		port = "443"
+	}
+
+	// Set timeout
+	timeout := c.config.Timeout
+	if req.Timeout > 0 {
+		timeout = req.Timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Check if HTTP/3 has failed for this host recently (within 5 minutes)
+	hostKey := host + ":" + port
+	useH3 := c.shouldTryHTTP3(hostKey)
+
+	// Build HTTP request
+	method := req.Method
+	if method == "" {
+		method = "GET"
+	}
+
+	// Cache body bytes for retry support (io.Reader can only be read once)
+	var bodyBytes []byte
+	if req.Body != nil {
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
+	var bodyReader io.Reader
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
+	} else if method == "POST" || method == "PUT" || method == "PATCH" {
+		// POST/PUT/PATCH with empty body must send Content-Length: 0
+		bodyReader = bytes.NewReader([]byte{})
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Normalize request (Content-Length: 0 for empty POST/PUT/PATCH, Content-Type detection, etc.)
+	normalizeRequestWithBody(httpReq, bodyBytes)
+
+	// Apply headers based on TLSOnly mode or FetchMode
+	if c.config.TLSOnly {
+		// TLSOnly mode: skip preset headers, only set required Host header
+		// User has full control over HTTP headers
+		applyTLSOnlyHeaders(httpReq, c.preset, req, parsedURL, c.effectiveHeaderOrder(req))
+	} else {
+		// Normal mode: apply preset headers based on FetchMode
+		// The library is smart: pick a mode, get coherent headers automatically
+		applyModeHeaders(httpReq, c.preset, req, parsedURL, c.effectiveHeaderOrder(req))
+	}
+
+	// Apply authentication
+	auth := req.Auth
+	if auth == nil {
+		auth = c.auth
+	}
+	if auth != nil {
+		if err := auth.Apply(httpReq); err != nil {
+			return nil, fmt.Errorf("failed to apply authentication: %w", err)
+		}
+	}
+
+	// Apply cookies from jar
+	if c.cookies != nil {
+		cookieHeader := c.cookies.CookieHeader(parsedURL)
+		if cookieHeader != "" {
+			httpReq.Header.Set("Cookie", cookieHeader)
+		}
+	}
+
+	// Add organic jitter to mimic real browser behavior (browsers aren't perfectly consistent)
+	// Browsers have slight variations in quality values and timing
+	applyOrganicJitter(httpReq)
+
+	// Run pre-request hooks
+	if c.hooks != nil {
+		if err := c.hooks.RunPreRequest(httpReq); err != nil {
+			return nil, fmt.Errorf("pre-request hook failed: %w", err)
+		}
+	}
+
+	// Copy all headers from httpReq to req.Headers for debugging
+	// This captures all headers that will actually be sent (preset headers, auth, cookies, etc.)
+	if req.Headers == nil {
+		req.Headers = make(map[string][]string)
+	}
+	for key, values := range httpReq.Header {
+		// Skip internal/special headers
+		if key == http.HeaderOrderKey || key == http.PHeaderOrderKey {
+			continue
+		}
+		// Only add if not already set by user (preserve user's original case)
+		if _, exists := getHeaderCaseInsensitive(req.Headers, key); !exists {
+			req.Headers[key] = values
+		}
+	}
+
+	var resp *http.Response
+	var usedProtocol string
+	timing := &protocol.Timing{}
+
+	// Determine effective protocol: request-level takes precedence over client-level
+	effectiveProtocol := req.ForceProtocol
+	if effectiveProtocol == ProtocolAuto && c.config.ForceProtocol != ProtocolAuto {
+		effectiveProtocol = c.config.ForceProtocol
+	}
+
+	// Determine protocol based on ForceProtocol option
+	switch effectiveProtocol {
+	case ProtocolHTTP1:
+		// Force HTTP/1.1 only
+		resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
+		if err != nil {
+			return nil, err
+		}
+	case ProtocolHTTP3:
+		// Force HTTP/3 only - requires SOCKS5 or MASQUE proxy for proxy support
+		if c.config.Proxy != "" && !transport.SupportsQUIC(c.config.Proxy) {
+			return nil, fmt.Errorf("HTTP/3 requires SOCKS5 or MASQUE proxy: HTTP proxies cannot tunnel UDP")
+		}
+		if q, m, s5 := c.h3Transports(); q == nil && m == nil && s5 == nil {
+			if c.h3InitError != nil {
+				return nil, fmt.Errorf("HTTP/3 is disabled: %w", c.h3InitError)
+			}
+			return nil, fmt.Errorf("HTTP/3 is disabled (no QUIC transport available)")
+		}
+		resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
+		if err != nil {
+			return nil, fmt.Errorf("HTTP/3 failed: %w", err)
+		}
+	case ProtocolHTTP2:
+		// Force HTTP/2 only
+		resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		// Auto: Try HTTP/2 -> HTTP/3 -> HTTP/1.1 with smart fallback
+		// H2 first for bot protection (Akamai pattern: H2 gets cookies, H3 succeeds with cookies)
+		// Exception: SOCKS5/MASQUE proxies prefer H3 for best fingerprinting
+		useH1 := c.shouldUseH1(hostKey)
+
+		// When using SOCKS5/MASQUE proxy, prefer HTTP/3 for best fingerprinting
+		cfgProxy, _, _ := c.proxyURLs()
+		usesQUICProxy := cfgProxy != "" && transport.SupportsQUIC(cfgProxy)
+
+		if useH1 && !usesQUICProxy {
+			// Known to need HTTP/1.1
+			resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
+			if err != nil {
+				return nil, err
+			}
+		} else if usesQUICProxy && useH3 {
+			// SOCKS5/MASQUE proxy - try HTTP/3 first for best fingerprinting
+			resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
+			if err != nil {
+				c.markH3Failed(hostKey)
+				// HTTP/3 failed, try HTTP/2
+				resetRequestBody(httpReq, bodyBytes)
+				resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
+				if err != nil {
+					// Both failed, try HTTP/1.1
+					resetRequestBody(httpReq, bodyBytes)
+					resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		} else {
+			// Try HTTP/2 first (for bot protection cookie flow)
+			resp, usedProtocol, err = c.doHTTP2(ctx, host, port, httpReq, timing, startTime)
+			if err != nil {
+				// HTTP/2 failed, try HTTP/3 if available
+				if useH3 {
+					resetRequestBody(httpReq, bodyBytes)
+					resp, usedProtocol, err = c.doHTTP3(ctx, host, port, httpReq, timing, startTime)
+					if err != nil {
+						c.markH3Failed(hostKey)
+						// Both H2 and H3 failed, try HTTP/1.1
+						resetRequestBody(httpReq, bodyBytes)
+						resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
+						if err != nil {
+							return nil, err
+						}
+					}
+				} else {
+					// No H3 available, try HTTP/1.1
+					c.markH2Failed(hostKey)
+					resetRequestBody(httpReq, bodyBytes)
+					resp, usedProtocol, err = c.doHTTP1(ctx, host, port, httpReq, timing, startTime)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+	}
+
+	// Verify certificate pinning
+	if c.certPinner != nil && c.certPinner.HasPins() && resp.TLS != nil {
+		if err := c.certPinner.Verify(host, resp.TLS.PeerCertificates); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+	}
+
+	defer resp.Body.Close()
+
+	// Build response headers map (multi-value support)
+	headers := make(map[string][]string)
+	for key, values := range resp.Header {
+		lowerKey := strings.ToLower(key)
+		headerValues := make([]string, len(values))
+		copy(headerValues, values)
+		headers[lowerKey] = headerValues
+	}
+
+	// Store cookies from response
+	setCookies := resp.Header["Set-Cookie"]
+	if c.cookies != nil && len(setCookies) > 0 {
+		c.cookies.SetCookiesFromHeaderList(parsedURL, setCookies)
+	}
+
+	// Handle redirects
+	if isRedirect(resp.StatusCode) {
+		// Check if we should follow redirects
+		followRedirects := c.config.FollowRedirects
+		if req.FollowRedirects != nil {
+			followRedirects = *req.FollowRedirects
+		}
+
+		if followRedirects {
+			maxRedirects := c.config.MaxRedirects
+			if req.MaxRedirects > 0 {
+				maxRedirects = req.MaxRedirects
+			}
+
+			// len() works on a nil slice, so the cap check needs no
+			// initialisation. Leaving it nil until the append below means a
+			// halted chain reports RedirectHistory the same way the
+			// don't-follow path does, instead of a non-nil empty slice.
+			if len(redirectHistory) >= maxRedirects {
+				return nil, fmt.Errorf("%w (max %d)", ErrTooManyRedirects, maxRedirects)
+			}
+
+			// Get redirect location
+			location := resp.Header.Get("Location")
+			if location == "" {
+				return nil, fmt.Errorf("redirect response missing Location header")
+			}
+
+			// Resolve relative URL
+			redirectURL := JoinURL(reqURL, location)
+
+			// Determine new method based on redirect code
+			newMethod := method
+			if resp.StatusCode == 303 || (resp.StatusCode == 301 || resp.StatusCode == 302) && method == "POST" {
+				// 303 always changes to GET
+				// 301/302 change POST to GET (browser behavior)
+				newMethod = "GET"
+			}
+
+			// Browser-parity scrubbing on scheme downgrade / cross-origin.
+			// See session.requestWithRedirects for the same policy and rationale.
+			schemeDowngrade := isSchemeDowngradeClient(reqURL, redirectURL)
+			crossOrigin := !sameOriginClient(reqURL, redirectURL)
+
+			// Ask the caller before taking the hop. After the cap check on
+			// purpose: the cap is a resource bound, not a policy question, and
+			// letting a veto answer it first would turn a "too many redirects"
+			// error into a silent success.
+			halt := false
+			if req.OnRedirect != nil {
+				hopErr := req.OnRedirect(&Redirect{
+					Hop:             len(redirectHistory) + 1,
+					StatusCode:      resp.StatusCode,
+					Headers:         headers,
+					From:            reqURL,
+					To:              redirectURL,
+					Method:          newMethod,
+					CrossOrigin:     crossOrigin,
+					SchemeDowngrade: schemeDowngrade,
+				})
+				if hopErr != nil && !errors.Is(hopErr, ErrUseLastResponse) {
+					// Marked so doWithRetry does not replay a vetoed request.
+					// Unwrapped again before it reaches the caller.
+					return nil, &redirectHookError{err: hopErr}
+				}
+				halt = hopErr != nil
+			}
+
+			// A halt must NOT return from here. resp.Body is closed by the defer
+			// above, and it is the ReadAll further down that detaches the body
+			// into the Response the caller receives — returning early would hand
+			// back a body about to be closed. Fall through to it instead, which
+			// also gives the halted 3xx the same decompression, timing and hook
+			// treatment as any other final response.
+			if !halt {
+				// Add to redirect history only now that the hop is certain to
+				// be taken, so a halted 3xx does not appear in its own history.
+				redirectHistory = append(redirectHistory, &RedirectInfo{
+					StatusCode: resp.StatusCode,
+					URL:        reqURL,
+					Headers:    headers,
+				})
+
+				var carriedHeaders map[string][]string
+				if len(req.Headers) > 0 {
+					carriedHeaders = make(map[string][]string, len(req.Headers))
+					for k, v := range req.Headers {
+						lk := strings.ToLower(k)
+						if schemeDowngrade && lk == "referer" {
+							continue
+						}
+						if (crossOrigin || schemeDowngrade) && (lk == "authorization" || lk == "proxy-authorization") {
+							continue
+						}
+						carriedHeaders[k] = v
+					}
+				}
+
+				carriedReferer := reqURL
+				carriedAuth := req.Auth
+				if schemeDowngrade {
+					carriedReferer = ""
+					carriedAuth = nil
+				} else if crossOrigin {
+					carriedAuth = nil
+				}
+
+				// Create new request for redirect
+				newReq := &Request{
+					Method:          newMethod,
+					URL:             redirectURL,
+					Headers:         carriedHeaders,
+					Timeout:         req.Timeout,
+					UserAgent:       req.UserAgent,
+					ForceProtocol:   req.ForceProtocol,
+					FetchMode:       req.FetchMode,
+					FetchSite:       FetchSiteCrossSite, // Redirects are usually cross-site
+					Referer:         carriedReferer,
+					Auth:            carriedAuth,
+					FollowRedirects: req.FollowRedirects,
+					MaxRedirects:    req.MaxRedirects,
+					DisableRetry:    true, // Don't retry redirects
+					// Follows carriedHeaders above: a header the caller slotted
+					// explicitly would otherwise be re-placed by the preset table on
+					// the next hop, so the ordering rides along with the headers.
+					HeaderOrder: req.HeaderOrder,
+					// Without this the callback fires on hop one and vanishes,
+					// which is the failure HeaderOrder was fixed for.
+					OnRedirect: req.OnRedirect,
+				}
+
+				// 307/308 preserve body (use cached bytes since original reader was consumed)
+				if resp.StatusCode == 307 || resp.StatusCode == 308 {
+					if len(bodyBytes) > 0 {
+						newReq.Body = bytes.NewReader(bodyBytes)
+					}
+				}
+
+				// Follow redirect
+				return c.doOnce(ctx, newReq, redirectHistory)
+			}
+		}
+	}
+
+	// Handle 401 with Digest auth (challenge-response)
+	if resp.StatusCode == http.StatusUnauthorized && auth != nil {
+		shouldRetry, err := auth.HandleChallenge(resp, httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to handle auth challenge: %w", err)
+		}
+		if shouldRetry {
+			// Reset request body for retry
+			resetRequestBody(httpReq, bodyBytes)
+			if len(bodyBytes) > 0 {
+				req.Body = bytes.NewReader(bodyBytes)
+			}
+			// Apply auth again with challenge info
+			if err := auth.Apply(httpReq); err != nil {
+				return nil, fmt.Errorf("failed to apply authentication after challenge: %w", err)
+			}
+			// Retry request
+			return c.doOnce(ctx, req, redirectHistory)
+		}
+	}
+
+	// Read response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	// Decompress if needed
+	contentEncoding := resp.Header.Get("Content-Encoding")
+	respBody, err = decompress(respBody, contentEncoding)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress response: %w", err)
+	}
+
+	timing.Total = float64(time.Since(startTime).Milliseconds())
+
+	var tlsInfo *TLSInfo
+	if req.IncludeTLSInfo && resp.TLS != nil {
+		tlsInfo = buildTLSInfo(resp.TLS.Version, resp.TLS.CipherSuite, resp.TLS.NegotiatedProtocol, resp.TLS.PeerCertificates)
+	}
+
+	response := &Response{
+		StatusCode:      resp.StatusCode,
+		Headers:         headers,
+		Body:            io.NopCloser(bytes.NewReader(respBody)),
+		FinalURL:        reqURL,
+		Timing:          timing,
+		Protocol:        usedProtocol,
+		Request:         req,
+		RedirectHistory: redirectHistory,
+		TLS:             tlsInfo,
+		bodyBytes:       respBody,
+		bodyRead:        true,
+	}
+
+	// Run post-response hooks
+	if c.hooks != nil {
+		if err := c.hooks.RunPostResponse(response); err != nil {
+			// Log but don't fail - response is still valid
+			// Hooks are for observability, not control flow
+		}
+	}
+
+	return response, nil
+}
+
+// isRedirect checks if status code is a redirect
+func isRedirect(statusCode int) bool {
+	return statusCode == 301 || statusCode == 302 || statusCode == 303 || statusCode == 307 || statusCode == 308
+}
+
+// shouldTryHTTP3 checks if we should try HTTP/3 for this host
+func (c *Client) shouldTryHTTP3(hostKey string) bool {
+	// If no HTTP/3 transport is available, don't try HTTP/3
+	if q, m, s5 := c.h3Transports(); q == nil && m == nil && s5 == nil {
+		return false
+	}
+
+	c.h3FailuresMu.RLock()
+	defer c.h3FailuresMu.RUnlock()
+
+	if failTime, exists := c.h3Failures[hostKey]; exists {
+		// Retry after 5 minutes
+		if time.Since(failTime) < 5*time.Minute {
+			return false
+		}
+	}
+	return true
+}
+
+// markH3Failed marks a host as not supporting HTTP/3
+func (c *Client) markH3Failed(hostKey string) {
+	c.h3FailuresMu.Lock()
+	defer c.h3FailuresMu.Unlock()
+	c.h3Failures[hostKey] = time.Now()
+}
+
+// doHTTP3 executes the request over HTTP/3
+// proxyURLs returns a consistent snapshot of the configured proxy URLs.
+//
+// The proxy setters mutate these while requests are in flight, so the request
+// path must not read the config fields directly.
+func (c *Client) proxyURLs() (proxyURL, tcpProxy, udpProxy string) {
+	c.h3Mu.RLock()
+	defer c.h3Mu.RUnlock()
+	return c.config.Proxy, c.config.TCPProxy, c.config.UDPProxy
+}
+
+// h3Transports returns a consistent snapshot of the HTTP/3 transports.
+//
+// Callers must use the snapshot for the whole request rather than re-reading
+// the fields: a proxy rotation between the nil check and the use is exactly the
+// race that segfaulted the process.
+func (c *Client) h3Transports() (*pool.QUICManager, *transport.HTTP3Transport, *transport.HTTP3Transport) {
+	c.h3Mu.RLock()
+	defer c.h3Mu.RUnlock()
+	return c.quicManager, c.masqueTransport, c.socks5H3Transport
+}
+
+func (c *Client) doHTTP3(ctx context.Context, host, port string, httpReq *http.Request, timing *protocol.Timing, startTime time.Time) (*http.Response, string, error) {
+	connStart := time.Now()
+
+	// One snapshot for the whole request; see h3Transports.
+	quicManager, masqueTransport, socks5H3Transport := c.h3Transports()
+
+	// Use MASQUE transport if available (for MASQUE proxies)
+	if masqueTransport != nil {
+		firstByteTime := time.Now()
+		resp, err := masqueTransport.RoundTrip(httpReq)
+		if err != nil {
+			return nil, "", err
+		}
+		timing.FirstByte = float64(time.Since(firstByteTime).Milliseconds())
+		return resp, "h3", nil
+	}
+
+	// Use SOCKS5 UDP relay transport if available (for SOCKS5 proxies)
+	if socks5H3Transport != nil {
+		firstByteTime := time.Now()
+		resp, err := socks5H3Transport.RoundTrip(httpReq)
+		if err != nil {
+			return nil, "", err
+		}
+		timing.FirstByte = float64(time.Since(firstByteTime).Milliseconds())
+		return resp, "h3", nil
+	}
+
+	// Use QUICManager for direct connections
+	if quicManager == nil {
+		return nil, "", fmt.Errorf("no HTTP/3 transport available")
+	}
+	conn, err := quicManager.GetConn(ctx, host, port)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get QUIC connection: %w", err)
+	}
+
+	// Calculate timing
+	if conn.Uses() == 1 {
+		// One measurement, reported as one number. QUIC folds the transport
+		// and TLS handshakes into a single exchange, so splitting this into
+		// thirds was inventing a breakdown that does not exist.
+		timing.Connect = float64(time.Since(connStart).Milliseconds())
+	}
+
+	firstByteTime := time.Now()
+	// See doHTTP2: conn.RoundTrip keeps the connection busy for the body's life.
+	resp, err := conn.RoundTrip(httpReq)
+	if errors.Is(err, pool.ErrConnRetired) {
+		// Pre-send rejection only, so retrying once is method-safe.
+		conn, err = c.quicManager.GetConn(ctx, host, port)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get QUIC connection: %w", err)
+		}
+		resp, err = conn.RoundTrip(httpReq)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+
+	timing.FirstByte = float64(time.Since(firstByteTime).Milliseconds())
+	return resp, "h3", nil
+}
+
+// doHTTP2 executes the request over HTTP/2
+func (c *Client) doHTTP2(ctx context.Context, host, port string, httpReq *http.Request, timing *protocol.Timing, startTime time.Time) (*http.Response, string, error) {
+	connStart := time.Now()
+
+	conn, err := c.poolManager.GetConn(ctx, host, port)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get connection: %w", err)
+	}
+
+	// Calculate timing. Uses(), not conn.UseCount: the pool bumps that counter
+	// under the connection's mutex in MarkUsed, so a bare read here races with
+	// any other request acquiring the same multiplexed H2 connection.
+	if conn.Uses() == 1 {
+		// One measurement, reported as one number rather than split three ways.
+		// This path does not observe the phases separately.
+		timing.Connect = float64(time.Since(connStart).Milliseconds())
+	}
+
+	firstByteTime := time.Now()
+	// conn.RoundTrip (not conn.HTTP2Conn.RoundTrip) holds the pooled connection
+	// busy for the whole life of the response body, so the pool reaper cannot
+	// close the socket underneath a download (issue #83).
+	resp, err := conn.RoundTrip(httpReq)
+	if errors.Is(err, pool.ErrConnRetired) {
+		// The connection was retired between GetConn and RoundTrip. That
+		// sentinel is returned strictly BEFORE anything is written, so httpReq's
+		// body is untouched and one retry on a fresh connection is method-safe.
+		// A second retirement falls through to the generic error path; this
+		// never loops. (Retry borrowed from PR #84.)
+		conn, err = c.poolManager.GetConn(ctx, host, port)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get connection: %w", err)
+		}
+		resp, err = conn.RoundTrip(httpReq)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("request failed: %w", err)
+	}
+
+	timing.FirstByte = float64(time.Since(firstByteTime).Milliseconds())
+	return resp, "h2", nil
+}
+
+// doHTTP1 performs HTTP/1.1 request using the h1Transport
+func (c *Client) doHTTP1(ctx context.Context, host, port string, httpReq *http.Request, timing *protocol.Timing, startTime time.Time) (*http.Response, string, error) {
+	firstByteTime := time.Now()
+
+	// Chromium sends no priority header on HTTP/1.1 (see
+	// SendsPriorityOverHTTP1). The request may go on to another protocol
+	// after this attempt, so strip it from a copy.
+	if c.preset != nil && !c.preset.SendsPriorityOverHTTP1() &&
+		(httpReq.Header.Get("Priority") != "" || len(httpReq.Header["priority"]) > 0) {
+		httpReq = httpReq.Clone(httpReq.Context())
+		httpReq.Header.Del("Priority")
+		delete(httpReq.Header, "priority")
+	}
+
+	resp, err := c.h1Transport.RoundTrip(httpReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("HTTP/1.1 request failed: %w", err)
+	}
+
+	timing.FirstByte = float64(time.Since(firstByteTime).Milliseconds())
+	return resp, "h1", nil
+}
+
+// markH2Failed marks a host as not supporting HTTP/2
+func (c *Client) markH2Failed(hostKey string) {
+	c.h2FailuresMu.Lock()
+	c.h2Failures[hostKey] = time.Now()
+	c.h2FailuresMu.Unlock()
+}
+
+// shouldUseH1 checks if HTTP/1.1 should be used for this host (H2 known to fail)
+func (c *Client) shouldUseH1(hostKey string) bool {
+	c.h2FailuresMu.RLock()
+	failTime, failed := c.h2Failures[hostKey]
+	c.h2FailuresMu.RUnlock()
+
+	if !failed {
+		return false
+	}
+
+	// Cache H2 failure for 5 minutes
+	if time.Since(failTime) > 5*time.Minute {
+		c.h2FailuresMu.Lock()
+		delete(c.h2Failures, hostKey)
+		c.h2FailuresMu.Unlock()
+		return false
+	}
+
+	return true
+}
+
+// Get performs a GET request
+func (c *Client) Get(ctx context.Context, url string, headers map[string][]string) (*Response, error) {
+	return c.Do(ctx, &Request{
+		Method:  "GET",
+		URL:     url,
+		Headers: headers,
+	})
+}
+
+// Post performs a POST request
+func (c *Client) Post(ctx context.Context, url string, body io.Reader, headers map[string][]string) (*Response, error) {
+	return c.Do(ctx, &Request{
+		Method:  "POST",
+		URL:     url,
+		Body:    body,
+		Headers: headers,
+	})
+}
+
+// Close shuts down the client and all connections
+func (c *Client) Close() {
+	c.poolManager.Close()
+	if c.quicManager != nil {
+		c.quicManager.Close()
+	}
+	if c.masqueTransport != nil {
+		c.masqueTransport.Close()
+	}
+	if c.socks5H3Transport != nil {
+		c.socks5H3Transport.Close()
+	}
+	if c.h1Transport != nil {
+		c.h1Transport.Close()
+	}
+}
+
+// CloseQUICConnections closes all QUIC connections but keeps session caches intact
+// This forces new connections on subsequent requests, allowing session resumption testing
+func (c *Client) CloseQUICConnections() {
+	if c.quicManager != nil {
+		c.quicManager.CloseAllConnections()
+	}
+}
+
+// SetProxy changes both TCP (HTTP/1.1, HTTP/2) and UDP (HTTP/3) proxies
+// This closes all existing connections - they're invalid for the new proxy route
+// Pass empty string to switch to direct connection (no proxy)
+func (c *Client) SetProxy(proxyURL string) {
+	c.SetTCPProxy(proxyURL)
+	c.SetUDPProxy(proxyURL)
+}
+
+// SetTCPProxy changes the proxy for HTTP/1.1 and HTTP/2 connections
+// This closes all existing TCP-based connections
+// Pass empty string to switch to direct connection (no proxy)
+func (c *Client) SetTCPProxy(proxyURL string) {
+	// Close HTTP/2 pools and update proxy
+	c.poolManager.SetProxy(proxyURL)
+
+	// Update HTTP/1.1 transport
+	var proxyConfig *transport.ProxyConfig
+	if proxyURL != "" {
+		proxyConfig = &transport.ProxyConfig{URL: proxyURL}
+	}
+	c.h1Transport.SetProxy(proxyConfig)
+
+	// Update config for consistency
+	c.config.TCPProxy = proxyURL
+	if c.config.Proxy == c.config.UDPProxy || c.config.UDPProxy == "" {
+		c.config.Proxy = proxyURL
+	}
+
+	// Clear H2 failure cache - new proxy might have different behavior
+	c.h2FailuresMu.Lock()
+	c.h2Failures = make(map[string]time.Time)
+	c.h2FailuresMu.Unlock()
+}
+
+// SetUDPProxy changes the proxy for HTTP/3 (QUIC) connections
+// Supports SOCKS5 (UDP relay) and MASQUE (CONNECT-UDP) proxies
+// Pass empty string to switch to direct connection (no proxy)
+// tlsVerifyFromConfig rebuilds the verification hooks from the stored config.
+//
+// Every path that closes and recreates a transport has to re-apply these. They
+// live on the transport objects, not on the Client, so a rebuild that only
+// re-applies InsecureSkipVerify silently drops the caller's certificate
+// verification and leaves that protocol accepting anything the system roots
+// accept. On a client whose whole point is proxy rotation, that is the ordinary
+// usage pattern, and it fails open with no error.
+func (c *Client) tlsVerifyFromConfig() *transport.TLSVerify {
+	if c.config.VerifyPeerCertificate == nil && c.config.VerifyConnection == nil && c.config.RootCAs == nil {
+		return nil
+	}
+	return &transport.TLSVerify{
+		VerifyPeerCertificate: c.config.VerifyPeerCertificate,
+		VerifyConnection:      c.config.VerifyConnection,
+		RootCAs:               c.config.RootCAs,
+	}
+}
+
+// reapplyH3TLSVerify re-installs the hooks on whichever HTTP/3 transports exist.
+func (c *Client) reapplyH3TLSVerify() {
+	v := c.tlsVerifyFromConfig()
+	if v == nil {
+		return
+	}
+	if c.quicManager != nil {
+		c.quicManager.SetTLSVerify(v)
+	}
+	if c.masqueTransport != nil {
+		c.masqueTransport.SetTLSVerify(v)
+	}
+	if c.socks5H3Transport != nil {
+		c.socks5H3Transport.SetTLSVerify(v)
+	}
+}
+
+func (c *Client) SetUDPProxy(proxyURL string) {
+	// Hold the write lock for the whole close-and-rebuild. Without it a request
+	// in flight observes the window where every transport is nil and panics.
+	c.h3Mu.Lock()
+	defer c.h3Mu.Unlock()
+
+	// Close and nil out all existing HTTP/3 transports
+	if c.quicManager != nil {
+		c.quicManager.Close()
+		c.quicManager = nil
+	}
+	if c.masqueTransport != nil {
+		c.masqueTransport.Close()
+		c.masqueTransport = nil
+	}
+	if c.socks5H3Transport != nil {
+		c.socks5H3Transport.Close()
+		c.socks5H3Transport = nil
+	}
+
+	// Update config
+	c.config.UDPProxy = proxyURL
+	if c.config.Proxy == c.config.TCPProxy || c.config.TCPProxy == "" {
+		c.config.Proxy = proxyURL
+	}
+
+	// Recreate appropriate transport based on new proxy type
+	if proxyURL != "" && transport.IsMASQUEProxy(proxyURL) {
+		// Use MASQUE transport for MASQUE proxies
+		proxyConfig := &transport.ProxyConfig{URL: proxyURL}
+		masqueTransport, err := transport.NewHTTP3TransportWithMASQUE(c.preset, c.poolManager.GetDNSCache(), proxyConfig, nil)
+		if err == nil {
+			c.masqueTransport = masqueTransport
+			if c.config.InsecureSkipVerify {
+				c.masqueTransport.SetInsecureSkipVerify(true)
+			}
+		}
+		// If MASQUE creation fails, all transports are nil and H3 will be unavailable
+	} else if proxyURL != "" && transport.IsSOCKS5Proxy(proxyURL) {
+		// Use SOCKS5 UDP relay transport for HTTP/3
+		proxyConfig := &transport.ProxyConfig{URL: proxyURL}
+		socks5Transport, err := transport.NewHTTP3TransportWithProxy(c.preset, c.poolManager.GetDNSCache(), proxyConfig)
+		if err == nil {
+			c.socks5H3Transport = socks5Transport
+			if c.config.InsecureSkipVerify {
+				c.socks5H3Transport.SetInsecureSkipVerify(true)
+			}
+		}
+		// If SOCKS5 creation fails, all transports are nil and H3 will be unavailable
+	} else if proxyURL == "" {
+		// Use QUICManager for direct connections only
+		c.quicManager = pool.NewQUICManager(c.preset, c.poolManager.GetDNSCache())
+		if c.config.InsecureSkipVerify {
+			c.quicManager.SetInsecureSkipVerify(true)
+		}
+	}
+
+	// The transports above are brand new, so the caller's certificate
+	// verification has to be put back on them. Without this a client that pinned
+	// a certificate and then rotated its proxy loses HTTP/3 verification from
+	// that point on, silently.
+	c.reapplyH3TLSVerify()
+
+	// Clear H3 failure cache - new proxy might have different behavior
+	c.h3FailuresMu.Lock()
+	c.h3Failures = make(map[string]time.Time)
+	c.h3FailuresMu.Unlock()
+}
+
+// GetProxy returns the current proxy URL (TCP proxy if they differ)
+func (c *Client) GetProxy() string {
+	return c.poolManager.GetProxy()
+}
+
+// GetTCPProxy returns the current TCP proxy URL
+func (c *Client) GetTCPProxy() string {
+	return c.poolManager.GetProxy()
+}
+
+// GetUDPProxy returns the current UDP proxy URL
+func (c *Client) GetUDPProxy() string {
+	return c.config.UDPProxy
+}
+
+// SetHeaderOrder sets a custom header order for all requests.
+// Pass nil or empty slice to reset to preset's default order.
+// Order should contain lowercase header names.
+//
+// This is client-wide state. To vary the order per request without serializing
+// concurrent callers on it, set Request.HeaderOrder instead; a request that
+// carries one ignores whatever is installed here.
+func (c *Client) SetHeaderOrder(order []string) {
+	c.customHeaderOrderMu.Lock()
+	defer c.customHeaderOrderMu.Unlock()
+
+	if len(order) == 0 {
+		c.customHeaderOrder = nil
+		return
+	}
+
+	// Normalize to lowercase
+	c.customHeaderOrder = make([]string, len(order))
+	for i, h := range order {
+		c.customHeaderOrder[i] = strings.ToLower(h)
+	}
+}
+
+// GetHeaderOrder returns the current header order.
+// Returns preset's default order if no custom order is set.
+func (c *Client) GetHeaderOrder() []string {
+	c.customHeaderOrderMu.RLock()
+	defer c.customHeaderOrderMu.RUnlock()
+
+	if len(c.customHeaderOrder) > 0 {
+		result := make([]string, len(c.customHeaderOrder))
+		copy(result, c.customHeaderOrder)
+		return result
+	}
+
+	// Return preset's order
+	if len(c.preset.HeaderOrder) > 0 {
+		result := make([]string, len(c.preset.HeaderOrder))
+		for i, hp := range c.preset.HeaderOrder {
+			result[i] = hp.Key
+		}
+		return result
+	}
+
+	return nil
+}
+
+// getHeaderOrder returns the current header order for internal use (no copy).
+func (c *Client) getHeaderOrder() []string {
+	c.customHeaderOrderMu.RLock()
+	defer c.customHeaderOrderMu.RUnlock()
+	return c.customHeaderOrder
+}
+
+// effectiveHeaderOrder returns the header order for a single request: the
+// request's own HeaderOrder when it sets one, otherwise the client-wide order
+// from SetHeaderOrder. The per-request list wins outright — merging two prefixes
+// would let one silently reorder the other. Lowercasing is left to
+// transport.CompleteHeaderOrder, which normalizes every name it places.
+func (c *Client) effectiveHeaderOrder(req *Request) []string {
+	if req != nil && len(req.HeaderOrder) > 0 {
+		return req.HeaderOrder
+	}
+	return c.getHeaderOrder()
+}
+
+// Stats returns connection pool statistics
+func (c *Client) Stats() map[string]struct {
+	Total    int
+	Healthy  int
+	Requests int64
+} {
+	return c.poolManager.Stats()
+}
+
+// applyTLSOnlyHeaders applies minimal headers for TLSOnly mode.
+// In this mode, the preset's TLS fingerprint is applied, but HTTP headers are user-controlled.
+// Only sets the required Host header and applies user's custom headers.
+func applyTLSOnlyHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request, parsedURL *url.URL, customHeaderOrder []string) {
+	// Set Host header (required for HTTP)
+	httpReq.Header.Set("Host", parsedURL.Hostname())
+
+	// Apply all user custom headers without any filtering
+	for key, values := range req.Headers {
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
+		}
+	}
+
+	// In TLSOnly mode, if user didn't provide User-Agent, set empty string to prevent Go default
+	if _, hasUA := getHeaderCaseInsensitive(req.Headers, "User-Agent"); !hasUA {
+		httpReq.Header.Set("User-Agent", "") // Empty string prevents Go from adding default
+	}
+
+	// Set header order for HTTP/2 and HTTP/3 fingerprinting
+	// Use H2HeaderOrder (full HPACK position table) so user-supplied headers
+	// outside the default emit set (cache-control, content-type, cookie, …)
+	// land in their real-Chrome position instead of being appended at the end.
+	// CompleteHeaderOrder names whatever is still left over so it can't fall
+	// through to the encoders' randomised map iteration. User headers are
+	// already merged into httpReq.Header above, hence the nil.
+	httpReq.Header[http.HeaderOrderKey] = transport.CompleteHeaderOrder(customHeaderOrder, preset.H2HeaderOrder(), httpReq.Header, nil)
+
+	// Set pseudo-header order from preset H2Config (explicit > heuristic > Chrome default)
+	if order := preset.H2PseudoHeaderOrder(); order != nil {
+		httpReq.Header[http.PHeaderOrderKey] = order
+	} else if preset.HTTP2Settings.NoRFC7540Priorities {
+		httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":scheme", ":path", ":authority"}
+	} else {
+		httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
+	}
+}
+
+// applyModeHeaders sets ALL headers correctly based on FetchMode
+// This is the smart part - the library auto-detects the right mode and ensures coherence
+// customHeaderOrder overrides preset's default order if provided
+func applyModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request, parsedURL *url.URL, customHeaderOrder []string) {
+	// Set User-Agent (custom or preset)
+	userAgent := preset.UserAgent
+	if req.UserAgent != "" {
+		userAgent = req.UserAgent
+	}
+	httpReq.Header.Set("User-Agent", userAgent)
+
+	// Set Host header
+	httpReq.Header.Set("Host", parsedURL.Hostname())
+
+	// Set Referer if provided
+	if req.Referer != "" {
+		httpReq.Header.Set("Referer", req.Referer)
+	}
+
+	// FIRST: Determine effective mode (BEFORE setting sec-fetch-site!)
+	// Auto-detect CORS vs navigate from the request context so programmatic
+	// POSTs (fetch/XHR) don't get navigation headers that WAFs flag as bot
+	// traffic. NoCors is explicit and must not be overridden.
+	effectiveMode := req.FetchMode
+	if effectiveMode == FetchModeNavigate {
+		if sniffXHRMode(req) {
+			effectiveMode = FetchModeCORS
+		}
+	}
+
+	// THEN: Set Sec-Fetch-Site based on the ACTUAL mode
+	// sec-fetch-site: none is ONLY valid for navigation, never for CORS
+	secFetchSite := detectSecFetchSiteForMode(req.FetchSite, parsedURL, req.Referer, effectiveMode)
+	httpReq.Header.Set("Sec-Fetch-Site", secFetchSite)
+
+	// Apply mode-specific headers - EVERYTHING is coherent
+	switch effectiveMode {
+	case FetchModeCORS:
+		applyCORSModeHeaders(httpReq, preset, req, parsedURL)
+	case FetchModeNoCors:
+		applyNoCorsHeaders(httpReq, preset, req)
+	default:
+		applyNavigationModeHeaders(httpReq, preset, req)
+	}
+	applyTablePriority(httpReq, preset)
+
+	// Apply user custom headers. User wins over mode defaults — they can project
+	// any intent they want, including deliberate incoherence for site testing.
+	// The mode picker above already upgraded to CORS when their Sec-Fetch-*
+	// overrides implied one, so the final header set is already self-consistent.
+	for key, values := range req.Headers {
+		for i, value := range values {
+			if i == 0 {
+				httpReq.Header.Set(key, value)
+			} else {
+				httpReq.Header.Add(key, value)
+			}
+		}
+	}
+
+	// Set header order for HTTP/2 and HTTP/3 fingerprinting
+	// Use H2HeaderOrder (full HPACK position table) — see the matching
+	// comment in transport.applyPresetHeaders for the rationale. Caller
+	// override still wins, completed with the preset table and then whatever
+	// is left, so nothing reaches the encoders' randomised map iteration.
+	httpReq.Header[http.HeaderOrderKey] = transport.CompleteHeaderOrder(customHeaderOrder, preset.H2HeaderOrder(), httpReq.Header, nil)
+
+	// Set pseudo-header order from preset H2Config (explicit > heuristic > Chrome default)
+	if order := preset.H2PseudoHeaderOrder(); order != nil {
+		httpReq.Header[http.PHeaderOrderKey] = order
+	} else if preset.HTTP2Settings.NoRFC7540Priorities {
+		httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":scheme", ":path", ":authority"}
+	} else {
+		httpReq.Header[http.PHeaderOrderKey] = []string{":method", ":authority", ":scheme", ":path"}
+	}
+}
+
+// isAPIAcceptHeader returns true if the Accept header looks like an API request
+func isAPIAcceptHeader(accept string) bool {
+	lower := strings.ToLower(accept)
+	// API-style accept headers that are NOT navigation
+	return strings.Contains(lower, "application/json") ||
+		strings.Contains(lower, "application/xml") ||
+		strings.Contains(lower, "text/plain") ||
+		strings.Contains(lower, "application/octet-stream") ||
+		(lower == "*/*")
+}
+
+// isFormContentType returns true for Content-Type values that a browser sends
+// on a classic <form method=POST> submission. These POSTs stay navigation mode.
+func isFormContentType(ct string) bool {
+	lower := strings.ToLower(ct)
+	return strings.HasPrefix(lower, "application/x-www-form-urlencoded") ||
+		strings.HasPrefix(lower, "multipart/form-data")
+}
+
+// isAPIContentType returns true for Content-Type values that indicate a
+// programmatic XHR/fetch call (JSON APIs, protobuf, raw binary uploads).
+func isAPIContentType(ct string) bool {
+	lower := strings.ToLower(ct)
+	return strings.HasPrefix(lower, "application/json") ||
+		strings.HasPrefix(lower, "application/xml") ||
+		strings.HasPrefix(lower, "application/octet-stream") ||
+		strings.HasPrefix(lower, "application/grpc") ||
+		strings.HasPrefix(lower, "application/x-protobuf") ||
+		strings.HasPrefix(lower, "text/plain") ||
+		// Any other application/* that isn't a form type is API-ish enough
+		(strings.HasPrefix(lower, "application/") && !isFormContentType(lower))
+}
+
+// sniffXHRMode decides whether a request with default FetchMode should be
+// upgraded to CORS. Browsers only emit navigation sec-fetch-* for real top-level
+// navigations (user click, address bar) and classic <form> POSTs; everything
+// else — fetch()/XHR/sendBeacon — is CORS or no-cors. Libraries like Python
+// httpcloak.Session.post() have to infer intent from the request shape.
+func sniffXHRMode(req *Request) bool {
+	method := strings.ToUpper(req.Method)
+
+	// Explicit user override on the Sec-Fetch-Mode / Sec-Fetch-Dest headers
+	// wins. "navigate" forces navigation even for a POST that would otherwise
+	// sniff as CORS (e.g. SPA that wants to mimic a form submission).
+	if v, ok := getHeaderCaseInsensitive(req.Headers, "Sec-Fetch-Mode"); ok && len(v) > 0 {
+		switch strings.ToLower(v[0]) {
+		case "cors", "no-cors", "websocket":
+			return true
+		case "navigate":
+			return false
+		}
+	}
+	if v, ok := getHeaderCaseInsensitive(req.Headers, "Sec-Fetch-Dest"); ok && len(v) > 0 {
+		// "document" is the only dest compatible with navigate mode — treat
+		// an explicit "document" as a nav signal, anything else as API.
+		if strings.ToLower(v[0]) == "document" {
+			return false
+		}
+		return true
+	}
+
+	// Accept-header sniff works for any method — keeps prior GET behavior.
+	if accept, ok := getHeaderCaseInsensitive(req.Headers, "Accept"); ok && len(accept) > 0 {
+		if isAPIAcceptHeader(accept[0]) {
+			return true
+		}
+	}
+
+	switch method {
+	case "GET", "HEAD", "OPTIONS", "":
+		// No body-carrying methods: stay navigate unless Accept hinted API
+		// (handled above).
+		return false
+	case "DELETE":
+		// DELETE is never a navigation; Chrome sends cors/empty.
+		return true
+	}
+
+	// Body-carrying methods (POST/PUT/PATCH/etc). Use Content-Type to
+	// distinguish form submissions (navigate) from programmatic calls (cors).
+	if ct, ok := getHeaderCaseInsensitive(req.Headers, "Content-Type"); ok && len(ct) > 0 {
+		if isFormContentType(ct[0]) {
+			return false
+		}
+		if isAPIContentType(ct[0]) {
+			return true
+		}
+	}
+
+	// Unknown Content-Type on a body-carrying method: lean CORS. Real-world
+	// POSTs from Python/Node scrapers are overwhelmingly API calls; form
+	// submissions always carry one of the form Content-Types above.
+	return true
+}
+
+// applyNavigationModeHeaders sets headers for page navigation (human clicked link)
+// Uses preset's values for Accept/Accept-Encoding/Accept-Language when available,
+// falls back to Chrome defaults. Always adds navigation headers (sec-fetch, etc.)
+// so non-browser presets still pass bot detection.
+func applyNavigationModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request) {
+	// Client hints (low-entropy only) — only if preset has them (browsers do, OkHttp doesn't)
+	if v, ok := preset.Headers["sec-ch-ua"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua", v)
+	}
+	if v, ok := preset.Headers["sec-ch-ua-mobile"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua-Mobile", v)
+	}
+	if v, ok := preset.Headers["sec-ch-ua-platform"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua-Platform", v)
+	}
+
+	// Content negotiation — use preset values, fall back to Chrome defaults
+	// preset.Headers only ever holds the values block (sec-ch-ua), so the old
+	// lookup here never found an Accept and always fell back to a hardcoded
+	// one. The navigation Accept lives in the header order.
+	httpReq.Header.Set("Accept", preset.ResolveNavigationAccept())
+	if v, ok := preset.Headers["Accept-Encoding"]; ok {
+		httpReq.Header.Set("Accept-Encoding", v)
+	} else {
+		httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	}
+	if v, ok := preset.Headers["Accept-Language"]; ok {
+		httpReq.Header.Set("Accept-Language", v)
+	} else {
+		httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	}
+
+	// Navigation headers — always set for bot detection
+	httpReq.Header.Set("Sec-Fetch-Dest", "document")
+	httpReq.Header.Set("Sec-Fetch-Mode", "navigate")
+	httpReq.Header.Set("Sec-Fetch-User", "?1")
+	httpReq.Header.Set("Upgrade-Insecure-Requests", "1")
+
+	// Priority header (newer Chrome/Firefox)
+	if v, ok := preset.Headers["Priority"]; ok {
+		httpReq.Header.Set("Priority", v)
+	}
+
+	// TE header (Firefox sends te: trailers)
+	if v, ok := preset.Headers["TE"]; ok {
+		httpReq.Header.Set("TE", v)
+	}
+}
+
+// applyCORSModeHeaders sets headers for XHR/fetch() calls (JavaScript API request)
+func applyCORSModeHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request, parsedURL *url.URL) {
+	// Client hints (low-entropy only)
+	if v, ok := preset.Headers["sec-ch-ua"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua", v)
+	}
+	if v, ok := preset.Headers["sec-ch-ua-mobile"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua-Mobile", v)
+	}
+	if v, ok := preset.Headers["sec-ch-ua-platform"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua-Platform", v)
+	}
+
+	// CORS headers - THE coherent set for "JavaScript fetch() call"
+	// Use user's Accept if they set one (it's valid for CORS), otherwise default to */*
+	if acceptValues, ok := getHeaderCaseInsensitive(req.Headers, "Accept"); ok && len(acceptValues) > 0 && acceptValues[0] != "" {
+		httpReq.Header.Set("Accept", acceptValues[0])
+	} else {
+		httpReq.Header.Set("Accept", "*/*")
+	}
+	// Use preset's Accept-Encoding/Language if available, else Chrome defaults
+	if v, ok := preset.Headers["Accept-Encoding"]; ok {
+		httpReq.Header.Set("Accept-Encoding", v)
+	} else {
+		httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	}
+	if v, ok := preset.Headers["Accept-Language"]; ok {
+		httpReq.Header.Set("Accept-Language", v)
+	} else {
+		httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	}
+	httpReq.Header.Set("Sec-Fetch-Dest", "empty")
+	httpReq.Header.Set("Sec-Fetch-Mode", "cors")
+	// NO Sec-Fetch-User for CORS
+	// NO Upgrade-Insecure-Requests for CORS
+	// NO Cache-Control for CORS
+
+	// Origin header - required for CORS
+	if req.Referer != "" {
+		if refURL, err := url.Parse(req.Referer); err == nil {
+			httpReq.Header.Set("Origin", refURL.Scheme+"://"+refURL.Host)
+		}
+	} else {
+		httpReq.Header.Set("Origin", parsedURL.Scheme+"://"+parsedURL.Host)
+	}
+
+	// Priority header for CORS mode (Chrome 143+)
+	// CORS uses "u=1, i" (urgency 1, incremental) vs navigation's "u=0, i"
+	httpReq.Header.Set("Priority", "u=1, i")
+}
+
+// applyNoCorsHeaders sets headers for subresource loads (script, style, image)
+// These are loaded via <script>, <link>, <img> tags — browser uses sec-fetch-mode: no-cors
+func applyNoCorsHeaders(httpReq *http.Request, preset *fingerprint.Preset, req *Request) {
+	// Client hints (low-entropy only)
+	if v, ok := preset.Headers["sec-ch-ua"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua", v)
+	}
+	if v, ok := preset.Headers["sec-ch-ua-mobile"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua-Mobile", v)
+	}
+	if v, ok := preset.Headers["sec-ch-ua-platform"]; ok {
+		httpReq.Header.Set("Sec-Ch-Ua-Platform", v)
+	}
+
+	// Accept based on destination type
+	dest := req.FetchDest
+	switch dest {
+	case "style":
+		httpReq.Header.Set("Accept", "text/css,*/*;q=0.1")
+	case "image":
+		httpReq.Header.Set("Accept", preset.ResolveImageAccept())
+	default: // "script", "empty", etc.
+		httpReq.Header.Set("Accept", "*/*")
+	}
+
+	httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	// NoCors headers — subresource loads
+	httpReq.Header.Set("Sec-Fetch-Mode", "no-cors")
+	if dest != "" {
+		httpReq.Header.Set("Sec-Fetch-Dest", dest)
+	} else {
+		httpReq.Header.Set("Sec-Fetch-Dest", "empty")
+	}
+	// NO Origin header (no-cors doesn't send Origin)
+	// NO Sec-Fetch-User (only for navigation)
+	// NO Upgrade-Insecure-Requests (only for navigation)
+	// The priority header comes from the preset's table, in applyTablePriority.
+}
+
+// applyTablePriority sets the priority header the preset's browser sends for
+// the request's Sec-Fetch-Dest, or removes it where that browser sends none,
+// the way the transport's header pipeline does. The modes above used to
+// hardcode Chrome's values, so a Firefox preset sent Chrome's headers, and
+// no-cors requests sent none at all, where Chrome sends u=0 on a stylesheet,
+// u=1 on a script and u=2, i on an image. A dest the table does not know
+// keeps whatever the mode set. User headers are applied after this and win.
+func applyTablePriority(httpReq *http.Request, preset *fingerprint.Preset) {
+	if !preset.H2HasPriorityTable() {
+		return
+	}
+	_, _, hv, ok := preset.H2PriorityFor(httpReq.Header.Get("Sec-Fetch-Dest"))
+	if !ok {
+		return
+	}
+	if hv == "" {
+		httpReq.Header.Del("Priority")
+		return
+	}
+	httpReq.Header.Set("Priority", hv)
+}
+
+// detectSecFetchSiteForMode determines the Sec-Fetch-Site header value
+// CRITICAL: sec-fetch-site: none is ONLY valid for navigation mode
+// For CORS mode, JavaScript always runs in a page context, so it can NEVER be "none"
+func detectSecFetchSiteForMode(fetchSite FetchSite, requestURL *url.URL, referer string, mode FetchMode) string {
+	// Handle explicit user override (user knows what they're doing)
+	switch fetchSite {
+	case FetchSiteNone:
+		// Only allow "none" for navigation mode
+		if mode == FetchModeCORS {
+			// CORS + none is impossible - JS can't run without a page origin
+			// Fall through to auto-detect or default to cross-site
+		} else {
+			return "none"
+		}
+	case FetchSiteSameOrigin:
+		return "same-origin"
+	case FetchSiteSameSite:
+		return "same-site"
+	case FetchSiteCrossSite:
+		return "cross-site"
+	}
+
+	// Auto-detect based on Referer
+	if referer == "" {
+		// No referer...
+		if mode == FetchModeCORS || mode == FetchModeNoCors {
+			// CORS/NoCors mode: JS/page is running on SOME page, we just don't know which
+			// Default to "cross-site" since most API calls are cross-origin
+			// (same-origin fetch would typically have a Referer)
+			return "cross-site"
+		}
+		// Navigation mode: direct navigation (typed URL, bookmark)
+		return "none"
+	}
+
+	refererURL, err := url.Parse(referer)
+	if err != nil {
+		if mode == FetchModeCORS || mode == FetchModeNoCors {
+			return "cross-site"
+		}
+		return "none"
+	}
+
+	// Same origin check: scheme + host + port must match
+	if requestURL.Scheme == refererURL.Scheme &&
+		requestURL.Host == refererURL.Host {
+		return "same-origin"
+	}
+
+	// Same site check: compare eTLD+1 (simplified - handles most common cases)
+	requestSite := extractSite(requestURL.Hostname())
+	refererSite := extractSite(refererURL.Hostname())
+
+	if requestSite == refererSite && requestURL.Scheme == refererURL.Scheme {
+		return "same-site"
+	}
+
+	// Different sites
+	return "cross-site"
+}
+
+// extractSite extracts the registrable domain (eTLD+1) from a hostname
+// This is a simplified version - handles most common cases like:
+// - example.com -> example.com
+// - sub.example.com -> example.com
+// - sub.example.co.uk -> example.co.uk (simplified, treats .co.uk as two parts)
+func extractSite(hostname string) string {
+	// Handle IP addresses
+	if net.ParseIP(hostname) != nil {
+		return hostname
+	}
+
+	parts := strings.Split(hostname, ".")
+	if len(parts) <= 2 {
+		return hostname
+	}
+
+	// Simple heuristic: take last 2 parts, or last 3 if second-to-last is short (like co, com, org in .co.uk)
+	if len(parts) >= 3 && len(parts[len(parts)-2]) <= 3 {
+		// Likely a two-part TLD like .co.uk, .com.au
+		return strings.Join(parts[len(parts)-3:], ".")
+	}
+
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
+// applyOrganicJitter is intentionally a no-op.
+// Random header variation is a BOT fingerprint, not organic behavior.
+// Real browsers are consistent - Chrome always uses q=0.9, never q=0.85 or q=0.8.
+// Randomness in headers is detectable and flags requests as non-browser traffic.
+func applyOrganicJitter(req *http.Request) {
+	// Do nothing - consistency is key
+}
+
+// decompress decompresses response body based on Content-Encoding
+func decompress(data []byte, encoding string) ([]byte, error) {
+	switch strings.ToLower(encoding) {
+	case "gzip":
+		return gunzip.Bytes(data)
+
+	case "br":
+		reader := brotli.NewReader(bytes.NewReader(data))
+		return io.ReadAll(reader)
+
+	case "zstd":
+		decoder, err := zstd.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		defer decoder.Close()
+		return io.ReadAll(decoder)
+
+	case "deflate":
+		// zlib-framed (RFC 9110) or raw, decided the way Chrome decides.
+		return compress.InflateDeflate(data)
+
+	case "", "identity":
+		return data, nil
+
+	default:
+		// Unknown encoding, return as-is
+		return data, nil
+	}
+}
+
+// parseOriginClient returns (scheme, host, port) with default ports filled in.
+// Used to gate header scrubbing on scheme downgrade / cross-origin redirects.
+func parseOriginClient(urlStr string) (scheme, host, port string) {
+	u, err := url.Parse(urlStr)
+	if err != nil || u.Scheme == "" {
+		return "", "", ""
+	}
+	scheme = strings.ToLower(u.Scheme)
+	host = strings.ToLower(u.Hostname())
+	port = u.Port()
+	if port == "" {
+		switch scheme {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return scheme, host, port
+}
+
+// sameOriginClient reports whether two URLs share scheme+host+port.
+func sameOriginClient(a, b string) bool {
+	as, ah, ap := parseOriginClient(a)
+	bs, bh, bp := parseOriginClient(b)
+	if as == "" || bs == "" {
+		return false
+	}
+	return as == bs && ah == bh && ap == bp
+}
+
+// isSchemeDowngradeClient reports whether a redirect goes https → http.
+func isSchemeDowngradeClient(from, to string) bool {
+	fs, _, _ := parseOriginClient(from)
+	ts, _, _ := parseOriginClient(to)
+	return fs == "https" && ts == "http"
+}

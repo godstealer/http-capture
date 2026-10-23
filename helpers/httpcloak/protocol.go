@@ -55,31 +55,19 @@ type negotiatedResponse struct {
 	decodedBody bool
 }
 
-func sendNegotiated(ctx context.Context, transport *tr.Transport, request *tr.Request, protocol tr.Protocol, allowHTTP1, proxyConfigured bool) (*negotiatedResponse, error) {
+func sendNegotiated(ctx context.Context, transport *tr.Transport, request *tr.Request, protocol tr.Protocol, allowHTTP1 bool, fallbackHeaders []fingerprint.HeaderPair) (*negotiatedResponse, error) {
 	if protocol != tr.ProtocolHTTP1 && protocol != tr.ProtocolHTTP2 {
 		return nil, fmt.Errorf("TCP negotiation requires an explicit initial h1 or h2 transport")
 	}
 	transport.SetProtocol(protocol)
-	var err error
-	if proxyConfigured && strings.HasPrefix(request.URL, "https://") {
-		// v1.7.2 DoStream ignores SetProtocol for proxied HTTPS: HTTP proxies
-		// force H2, while SOCKS5 enters Auto/H3. Do honors forced H1/H2 and the
-		// proxy, so it cannot send a POST on H3 before trying another protocol.
-		response, err := transport.Do(ctx, request)
-		if err == nil {
-			return &negotiatedResponse{response.Body, response.StatusCode, response.Headers, response.Protocol, true}, nil
-		}
-		// Preserve the typed negotiation error and its already verified socket.
-		return finishALPN(ctx, transport, request, allowHTTP1, err)
-	}
 	response, err := transport.DoStream(ctx, request)
 	if err == nil {
 		return &negotiatedResponse{response, response.StatusCode, response.Headers, response.Protocol, true}, nil
 	}
-	return finishALPN(ctx, transport, request, allowHTTP1, err)
+	return finishALPN(ctx, transport, request, allowHTTP1, fallbackHeaders, err)
 }
 
-func finishALPN(ctx context.Context, transport *tr.Transport, request *tr.Request, allowHTTP1 bool, err error) (*negotiatedResponse, error) {
+func finishALPN(ctx context.Context, transport *tr.Transport, request *tr.Request, allowHTTP1 bool, fallbackHeaders []fingerprint.HeaderPair, err error) (*negotiatedResponse, error) {
 	var mismatch *tr.ALPNMismatchError
 	if !errors.As(err, &mismatch) || mismatch.TLSConn == nil {
 		return nil, err
@@ -96,15 +84,27 @@ func finishALPN(ctx context.Context, transport *tr.Transport, request *tr.Reques
 	if !allowHTTP1 || mismatch.Expected != "h2" || (mismatch.Negotiated != "http/1.1" && mismatch.Negotiated != "") {
 		return nil, err
 	}
-	// The helper supplies Body bytes. Refuse an unsupported streaming upload
-	// rather than accidentally replace it with an empty buffered body.
-	if request.BodyReader != nil {
-		return nil, err
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pairs, prepareErr := prepareH1Headers(request.ExactHeaders, len(request.Body))
+	bodyLength := int64(len(request.Body))
+	var body io.Reader = bytes.NewReader(request.Body)
+	if request.BodyReader != nil {
+		if request.GetBody == nil {
+			return nil, err
+		}
+		bodyLength = request.BodyLength
+		if bodyLength < 0 {
+			return nil, fmt.Errorf("invalid streaming body length")
+		}
+		body, err = request.GetBody()
+		if err != nil {
+			return nil, err
+		}
+	}
+	// H2 may contain an internal empty User-Agent solely to suppress the Go
+	// encoder's default. Hand the H1 writer the unmodified editor fields.
+	pairs, prepareErr := prepareH1Headers(fallbackHeaders, bodyLength)
 	if prepareErr != nil {
 		return nil, prepareErr
 	}
@@ -112,9 +112,12 @@ func finishALPN(ctx context.Context, transport *tr.Transport, request *tr.Reques
 	if method == "" {
 		method = "GET"
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, method, request.URL, bytes.NewReader(request.Body))
+	httpRequest, err := http.NewRequestWithContext(ctx, method, request.URL, body)
 	if err != nil {
 		return nil, err
+	}
+	if request.BodyReader != nil {
+		httpRequest.ContentLength = bodyLength
 	}
 	if len(pairs) > 0 {
 		order := make([]string, 0, len(pairs))
@@ -143,14 +146,14 @@ func finishALPN(ctx context.Context, transport *tr.Transport, request *tr.Reques
 	return &negotiatedResponse{raw.Body, raw.StatusCode, headers, "h1", false}, nil
 }
 
-func prepareH1Headers(input []fingerprint.HeaderPair, bodyLength int) ([]fingerprint.HeaderPair, error) {
+func prepareH1Headers(input []fingerprint.HeaderPair, bodyLength int64) ([]fingerprint.HeaderPair, error) {
 	joined, _ := joinCookieFields(input)
 	pairs := append([]fingerprint.HeaderPair(nil), joined...)
 	lengthSeen := false
 	for index := range pairs {
 		pair := &pairs[index]
 		if strings.EqualFold(pair.Key, "transfer-encoding") {
-			return nil, fmt.Errorf("H1 buffered body does not accept Transfer-Encoding")
+			return nil, fmt.Errorf("H1 exact body does not accept Transfer-Encoding")
 		}
 		if !strings.EqualFold(pair.Key, "content-length") {
 			continue
@@ -170,6 +173,9 @@ func prepareH1Headers(input []fingerprint.HeaderPair, bodyLength int) ([]fingerp
 		// Leaving a lowercase key emits both a computed CL and the original in
 		// its remainder pass. Only framing spelling changes, at the same slot.
 		pair.Key = "Content-Length"
+	}
+	if !lengthSeen && bodyLength > 0 {
+		pairs = append(pairs, fingerprint.HeaderPair{Key: "Content-Length", Value: strconv.FormatInt(bodyLength, 10)})
 	}
 	return pairs, nil
 }

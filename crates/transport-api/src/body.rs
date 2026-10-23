@@ -1,18 +1,111 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use anyhow::{ensure, Result};
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Shared text storage for a body that still crosses public APIs as Base64.
 ///
 /// Cloning a draft or response shares the existing String allocation. Mutation
 /// uses copy-on-write, so editing one owner cannot change another owner's body.
-/// This type does not validate, decode, or normalize its text representation.
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct SharedBody(Arc<String>);
+/// Construction and serialization do not validate or normalize the text;
+/// append_complete_base64 validates the suffix it needs to extend.
+#[derive(Clone, Default, Debug)]
+pub struct SharedBody(Arc<BodyStorage>);
+
+#[derive(Clone, Copy, Debug)]
+struct PersistedDigest { decoded_length: usize, digest: [u8;32] }
+
+#[derive(Default, Debug)]
+struct BodyStorage { text: String, encoded_sha256: OnceLock<Box<[u8;32]>>, prefix_sha256: OnceLock<Sha256>, persisted: Mutex<Option<PersistedDigest>> }
+
+impl Clone for BodyStorage {
+    fn clone(&self)->Self {
+        let persisted=*self.persisted.lock().unwrap_or_else(|error|error.into_inner());
+        Self {text:self.text.clone(),encoded_sha256:self.encoded_sha256.clone(),prefix_sha256:self.prefix_sha256.clone(),persisted:Mutex::new(persisted)}
+    }
+}
+
+impl PartialEq for SharedBody {
+    fn eq(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0,&other.0) || self.0.text == other.0.text }
+}
+impl Eq for SharedBody {}
+
+impl SharedBody {
+    /// True only when this append lineage last committed exactly the old BLOB
+    /// represented by the database row. An arbitrary String edit clears it.
+    pub fn matches_persisted_base64(&self, decoded_length:usize, digest:&[u8])->bool {
+        self.0.persisted.lock().unwrap_or_else(|error|error.into_inner())
+            .as_ref().is_some_and(|saved|saved.decoded_length==decoded_length&&saved.digest.as_slice()==digest)
+    }
+
+    /// Called only after the corresponding SQLite transaction commits. A later
+    /// append preserves this checkpoint until the next successful snapshot.
+    pub fn mark_persisted_base64(&self,decoded_length:usize) {
+        let digest=*self.encoded_sha256();
+        *self.0.persisted.lock().unwrap_or_else(|error|error.into_inner())=Some(PersistedDigest{decoded_length,digest});
+    }
+    /// Cache the digest on the shared immutable allocation. A mutable borrow
+    /// invalidates it before the underlying text can change.
+    pub fn encoded_sha256(&self) -> &[u8;32] {
+        self.0.encoded_sha256.get_or_init(|| {
+            let end=self.0.text.len().saturating_sub(4);
+            let prefix=self.0.prefix_sha256.get_or_init(|| {
+                let mut hash=Sha256::new();hash.update(&self.0.text.as_bytes()[..end]);hash
+            });
+            let mut hash=prefix.clone();hash.update(&self.0.text.as_bytes()[end..]);
+            Box::new(hash.finalize().into())
+        })
+    }
+
+    /// Extend a complete Base64 body while keeping its hash state at the
+    /// boundary before the final quartet. This avoids rehashing the entire
+    /// growing text on every live snapshot. Arbitrary String edits still
+    /// invalidate both caches through DerefMut.
+    pub fn append_complete_base64(&mut self, mut bytes:&[u8]) -> Result<()> {
+        if bytes.is_empty() {return Ok(())}
+        let padding=self.0.text.as_bytes().iter().rev().take_while(|byte|**byte==b'=').count();
+        ensure!(padding<=2&&(padding==0||self.0.text.len()>=4),"Invalid Base64 body suffix");
+        let keep=if padding==0 {self.0.text.len()} else {self.0.text.len()-4};
+        let mut carry=[0u8;3];let mut carried=0;
+        if padding!=0 {
+            let decoded=STANDARD.decode(&self.0.text[keep..])?;
+            carried=decoded.len();carry[..carried].copy_from_slice(&decoded);
+        }
+        let total=carried.checked_add(bytes.len()).ok_or_else(||anyhow::anyhow!("Base64 body length overflow"))?;
+        let suffix=total.checked_add(2).and_then(|value|value.checked_div(3)).and_then(|value|value.checked_mul(4))
+            .ok_or_else(||anyhow::anyhow!("Base64 body length overflow"))?;
+        let old_prefix_end=self.0.text.len().saturating_sub(4);
+        let mut prefix_hash=self.0.prefix_sha256.get_or_init(|| {
+            let mut hash=Sha256::new();hash.update(&self.0.text.as_bytes()[..old_prefix_end]);hash
+        }).clone();
+        let storage=Arc::make_mut(&mut self.0);
+        let text=&mut storage.text;
+        text.try_reserve(suffix)?;
+        text.truncate(keep);
+        if carried!=0 {
+            let take=(3-carried).min(bytes.len());
+            carry[carried..carried+take].copy_from_slice(&bytes[..take]);
+            bytes=&bytes[take..];carried+=take;
+            STANDARD.encode_string(&carry[..carried],text);
+        }
+        if carried==0||carried==3 {
+            let aligned=bytes.len()/3*3;
+            if aligned!=0 {STANDARD.encode_string(&bytes[..aligned],text);}
+            if aligned<bytes.len() {STANDARD.encode_string(&bytes[aligned..],text);}
+        }
+        let new_prefix_end=text.len().saturating_sub(4);
+        prefix_hash.update(&text.as_bytes()[old_prefix_end..new_prefix_end]);
+        storage.prefix_sha256.take();let _=storage.prefix_sha256.set(prefix_hash);
+        storage.encoded_sha256.take();
+        Ok(())
+    }
+}
 
 impl From<String> for SharedBody {
     fn from(value: String) -> Self {
-        Self(Arc::new(value))
+        Self(Arc::new(BodyStorage { text:value, encoded_sha256:OnceLock::new(), prefix_sha256:OnceLock::new(), persisted:Mutex::new(None) }))
     }
 }
 
@@ -26,31 +119,35 @@ impl Deref for SharedBody {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
+        &self.0.text
     }
 }
 
 impl DerefMut for SharedBody {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Arc::make_mut(&mut self.0)
+        let storage=Arc::make_mut(&mut self.0);
+        storage.encoded_sha256.take();
+        storage.prefix_sha256.take();
+        storage.persisted.get_mut().unwrap_or_else(|error|error.into_inner()).take();
+        &mut storage.text
     }
 }
 
 impl AsRef<[u8]> for SharedBody {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
+        self.0.text.as_bytes()
     }
 }
 
 impl AsRef<str> for SharedBody {
     fn as_ref(&self) -> &str {
-        self.0.as_str()
+        self.0.text.as_str()
     }
 }
 
 impl Serialize for SharedBody {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.as_ref().serialize(serializer)
+        self.0.text.serialize(serializer)
     }
 }
 
@@ -64,6 +161,7 @@ impl<'de> Deserialize<'de> for SharedBody {
 mod tests {
     use super::SharedBody;
     use crate::{CapturedResponse, RequestDraft};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use serde_json::{json, Value};
 
     fn request(body: Value) -> Value {
@@ -127,6 +225,62 @@ mod tests {
         assert_eq!(original.as_str(), "YWJj");
         assert_eq!(another.as_ptr(), original_pointer);
         assert!(std::ptr::eq::<String>(&*original, &*another));
+    }
+
+    #[test]
+    fn digest_is_shared_by_clones_and_invalidated_by_mutation() {
+        use sha2::{Digest, Sha256};
+        let mut body=SharedBody::from("YWJj");
+        let same=body.clone();
+        let old=*body.encoded_sha256();
+        assert_eq!(old, <[u8;32]>::from(Sha256::digest(b"YWJj")));
+        assert_eq!(body.encoded_sha256().as_ptr(),same.encoded_sha256().as_ptr());
+        body.push_str("ZA==");
+        assert_eq!(*body.encoded_sha256(),<[u8;32]>::from(Sha256::digest(b"YWJjZA==")));
+        assert_eq!(*same.encoded_sha256(),old);
+        let mut unique=SharedBody::from("YQ==");
+        let previous=*unique.encoded_sha256();
+        unique.clear();
+        assert_ne!(*unique.encoded_sha256(),previous);
+        assert_eq!(*unique.encoded_sha256(),<[u8;32]>::from(Sha256::digest(b"")));
+        assert_eq!(same,SharedBody::from("YWJj"));
+    }
+
+    #[test]
+    fn incremental_digest_matches_full_hash_across_padding_and_copy_on_write() {
+        use sha2::{Digest,Sha256};
+        let bytes:Vec<u8>=(0..65547).map(|n|(n%251) as u8).collect();
+        for first in [0,1,2,3,4,5,65535,65536,65537] {
+            let mut body=SharedBody::from(STANDARD.encode(&bytes[..first]));
+            let snapshot=body.clone();
+            let old=*snapshot.encoded_sha256();
+            for chunk in bytes[first..].chunks(257) {
+                body.append_complete_base64(chunk).unwrap();
+                assert_eq!(*body.encoded_sha256(),<[u8;32]>::from(Sha256::digest(body.as_bytes())));
+            }
+            assert_eq!(body.as_str(),STANDARD.encode(&bytes));
+            assert_eq!(*snapshot.encoded_sha256(),old);
+            assert_eq!(snapshot.as_str(),STANDARD.encode(&bytes[..first]));
+            body.replace_range(0..4,"AQID");
+            assert_eq!(*body.encoded_sha256(),<[u8;32]>::from(Sha256::digest(body.as_bytes())));
+        }
+    }
+
+    #[test]
+    fn committed_append_checkpoint_survives_appends_but_not_arbitrary_edits() {
+        let mut body=SharedBody::from("YQ==");
+        let saved=*body.encoded_sha256();
+        body.mark_persisted_base64(1);
+        let old=body.clone();
+        body.append_complete_base64(b"bc").unwrap();
+        assert!(body.matches_persisted_base64(1,&saved));
+        assert_eq!(body.as_str(),"YWJj");
+        body.mark_persisted_base64(3);
+        assert!(!body.matches_persisted_base64(1,&saved));
+        assert!(body.matches_persisted_base64(3,body.encoded_sha256()));
+        assert!(old.matches_persisted_base64(1,&saved));
+        body.push_str("ZA==");
+        assert!(!body.matches_persisted_base64(3,body.encoded_sha256()));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::{sync::Arc, time::Duration};
 pub struct QuicHandle { pub address: std::net::SocketAddr, stop: Option<tokio::sync::oneshot::Sender<()>>, task: tokio::task::JoinHandle<Result<()>> }
 impl QuicHandle {
     pub async fn stop(mut self) { if let Some(stop)=self.stop.take() { let _=stop.send(()); } let _=(&mut self.task).await; }
+    pub fn is_finished(&self)->bool{self.task.is_finished()}
 }
 impl Drop for QuicHandle { fn drop(&mut self) { if let Some(stop)=self.stop.take() { let _=stop.send(()); } } }
 struct SniResolver(Arc<Engine>);
@@ -32,7 +33,7 @@ pub async fn start_tun(engine: Arc<Engine>) -> Result<QuicHandle> {
 }
 
 pub async fn run(engine: Arc<Engine>, target: url::Url, port: u16, ready: Option<tokio::sync::oneshot::Sender<std::net::SocketAddr>>) -> Result<()> {
-    ensure!(target.scheme() == "https" && target.path() == "/" && target.query().is_none(), "Target must be an HTTPS origin");
+    validate_target(&target)?;
     let mut tls = (*engine.ca.server_config(&hostname(&target))?).clone();
     tls.alpn_protocols = vec![b"h3".to_vec()];
     tls.max_early_data_size = 0;
@@ -48,6 +49,25 @@ pub async fn run(engine: Arc<Engine>, target: url::Url, port: u16, ready: Option
         _=tokio::signal::ctrl_c() => { let _=stop.send(()); }
     }
     worker.await?
+}
+pub fn validate_target(target:&url::Url)->Result<()> {
+    ensure!(target.scheme()=="https" && target.has_host() && target.path()=="/" && target.query().is_none()
+        && target.fragment().is_none() && target.username().is_empty() && target.password().is_none(),
+        "Target must be an HTTPS origin without credentials, path, query or fragment");
+    Ok(())
+}
+/// Start a fixed-target H3 listener owned by the desktop/service runtime.
+/// It binds loopback only and never changes system routing or proxy settings.
+pub async fn start_reverse(engine:Arc<Engine>,target:url::Url,port:u16)->Result<QuicHandle>{
+    validate_target(&target)?;
+    let mut tls=(*engine.ca.server_config(&hostname(&target))?).clone();
+    tls.alpn_protocols=vec![b"h3".to_vec()];tls.max_early_data_size=0;
+    let config=quinn::ServerConfig::with_crypto(Arc::new(quinn::crypto::rustls::QuicServerConfig::try_from(tls)?));
+    let endpoint=quinn::Endpoint::server(config,([127,0,0,1],port).into())?;
+    let address=endpoint.local_addr()?;
+    let (stop,receiver)=tokio::sync::oneshot::channel();
+    let task=tokio::spawn(serve(engine,Some(target),endpoint,receiver));
+    Ok(QuicHandle{address,stop:Some(stop),task})
 }
 async fn serve(engine: Arc<Engine>, target: Option<url::Url>, endpoint: quinn::Endpoint, mut stop: tokio::sync::oneshot::Receiver<()>) -> Result<()> {
     let mut tasks = tokio::task::JoinSet::new();

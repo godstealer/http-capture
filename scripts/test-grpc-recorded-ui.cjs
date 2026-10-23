@@ -16,9 +16,9 @@ global.localStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>st
 global.window={addEventListener(name,fn){const set=listeners.get(name)??new Set();set.add(fn);listeners.set(name,set)},removeEventListener(name,fn){listeners.get(name)?.delete(fn)},dispatchEvent(event){listeners.get(event.type)?.forEach(fn=>fn(event));return true}};
 const method={path:'/test.Echo/Call',requestStream:true,responseStream:true,resolve(){},resolvedRequestType:{create:()=>({}),toObject:value=>value}};
 global.__grpcMethod=method;
-let invokeWork,decodeWork,reflectWork,calls=[],decodes=[],reflections=[];
-function reset(){calls=[];decodes=[];reflections=[];invokeWork=async command=>{throw Error('Unexpected command '+command)};decodeWork=async body=>[{message:Buffer.from(body,'base64').toString('utf8')}];reflectWork=async()=> 'syntax="proto3";';global.__grpcMethod=method;storage.clear();}
-global.__grpcInvoke=(command,args)=>{calls.push([command,args]);return invokeWork(command,args)};
+let invokeWork,decodeWork,reflectWork,calls=[],decodes=[],reflections=[];const rangeBodies=new Map();
+function reset(){calls=[];decodes=[];reflections=[];rangeBodies.clear();invokeWork=async command=>{throw Error('Unexpected command '+command)};decodeWork=async body=>[{message:Buffer.from(body,'base64').toString('utf8')}];reflectWork=async()=> 'syntax="proto3";';global.__grpcMethod=method;storage.clear();}
+global.__grpcInvoke=(command,args)=>{calls.push([command,args]);if(command==='read_flow_body'&&rangeBodies.has(args.id)){const full=rangeBodies.get(args.id),whole=Buffer.from(full.response.bodyBase64,'base64'),part=whole.subarray(args.offset,args.offset+args.length);return Promise.resolve({offset:args.offset,totalBytes:whole.length,bodyBase64:part.toString('base64'),nextOffset:args.offset+part.length<whole.length?args.offset+part.length:null})}return invokeWork(command,args)};
 global.__grpcDecode=(...args)=>{assert.equal(typeof args[0],'string','decode requires a complete body, never absent metadata');decodes.push(args);return decodeWork(...args)};
 global.__grpcReflect=request=>{assert.equal(typeof request.bodyBase64,'string','reflection receives a complete request');reflections.push(request);return reflectWork(request)};
 async function load(){
@@ -32,6 +32,7 @@ async function load(){
       export const schema=()=>({methods:[globalThis.__grpcMethod]});
       export const methodPath=method=>method.path;
       export const decodeMessages=(...args)=>globalThis.__grpcDecode(...args);
+      export const decodeMessageChunks=async(chunks,method,headers,isRequest,partial)=>{const parts=[];for await(const chunk of chunks)parts.push(Buffer.from(chunk));return globalThis.__grpcDecode(Buffer.concat(parts).toString('base64'),method,headers,isRequest,partial)};
       export const grpcStatus=()=>({code:0,name:'OK',message:''});
       export const prepareGrpc=(request,method,json)=>({...request,bodyBase64:Buffer.from(json).toString('base64')});
       export const encodeMessage=(method,json)=>Buffer.from(json);
@@ -61,6 +62,7 @@ function fullFlow(id='flow',lengths={request:4,response:5}){
   return result;
 }
 function metadata(full,revision='instance:1'){
+  rangeBodies.set(full.id,full);
   const result=structuredClone(full);result.bodyRevision=revision;result.bodyReferences={};
   for(const variant of ['request','response','originalRequest','originalResponse'])if(result[variant]){result.bodyReferences[variant]={byteLength:Buffer.from(result[variant].bodyBase64,'base64').length};delete result[variant].bodyBase64;}
   return result;
@@ -90,15 +92,15 @@ const loadButton='加载完整 gRPC 正文';
   reset();const small=fullFlow('small'),sm=metadata(small);invokeWork=async()=>small;
   const response=harness(GrpcResponse,{flow:sm,visible:false,connected:true});await response.tick();assert.equal(calls.length,0);assert.equal(decodes.length,0);
   response.update({visible:true});await response.tick();await response.tick();
-  assert.deepEqual(getCalls(),[['get_flow',{id:'small',expectedVersion:'instance:1'}]]);assert.equal(decodes.length,1);assert.equal(decodes[0][0],small.response.bodyBase64);assert.equal(messageNodes(response).length,1);
-  assert(calls.every(([command])=>command==='get_flow'),'viewing a record never starts or reflects an RPC');
+  assert.equal(getCalls().length,0);assert.equal(calls.filter(([command])=>command==='read_flow_body').length,1);assert.equal(decodes.length,1);assert.equal(decodes[0][0],small.response.bodyBase64);assert.equal(messageNodes(response).length,1);
+  assert(calls.every(([command])=>command==='read_flow_body'),'viewing a record only reads its response body');
   response.update({visible:false});assert.equal(response.tree,null);assert(!response.slots.some(value=>value?.source===small||value?.flow===small));response.dispose();
 
-  reset();const big=fullFlow('big',{request:50000,response:50000}),bigMeta=metadata(big);const bigRead=deferred();invokeWork=()=>bigRead.promise;
-  const large=harness(GrpcResponse,{flow:bigMeta,connected:true});assert.equal(calls.length,0);assert.equal(decodes.length,0);assert(text(large.tree).includes('读入内存'));
-  const button=large.button(loadButton);assert(button);button.props.onClick();button.props.onClick();large.render();assert.equal(getCalls().length,1,'duplicate explicit clicks share one pending load');
-  bigRead.resolve(big);await large.tick();await large.tick();assert.equal(decodes.length,1);assert.equal(decodes[0][0],big.response.bodyBase64,'the complete body reaches the decoder, never a prefix');
-  large.update({connected:false});assert.equal(messageNodes(large).length,0);assert(large.button(loadButton).props.disabled);assert(!large.slots.some(value=>value?.flow===big||value?.source===big));large.dispose();
+  reset();const big=fullFlow('big',{request:50000,response:100000}),bigMeta=metadata(big);
+  const large=harness(GrpcResponse,{flow:bigMeta,connected:true});await large.tick();await large.tick();
+  const bigRanges=calls.filter(([command])=>command==='read_flow_body');assert.equal(getCalls().length,0);assert.equal(bigRanges.length,2,'large response is streamed in bounded pages');assert(bigRanges.every(([,args])=>args.variant==='response'&&args.length<=65536));
+  assert.equal(decodes.length,1);assert.equal(decodes[0][0],big.response.bodyBase64);assert.equal(messageNodes(large).length,1);
+  large.update({connected:false});assert.equal(messageNodes(large).length,0);assert(!large.slots.some(value=>value?.flow===big||value?.source===big));large.dispose();
 
   reset();const same=fullFlow('same'),sameMeta=metadata(same);invokeWork=async()=>same;
   const firstDecode=deferred();decodeWork=()=>firstDecode.promise;
@@ -108,9 +110,9 @@ const loadButton='加载完整 gRPC 正文';
   global.__grpcMethod={...method};decodeWork=async()=>[{sentinel:'new schema message'}];window.dispatchEvent(new Event('grpc-schema-changed'));stale.render();await stale.tick();assert(text(stale.tree).includes('new schema message'));
   secondDecode.reject(Error('old schema failure'));await stale.tick();assert(!text(stale.tree).includes('old schema failure'));assert(text(stale.tree).includes('new schema message'));stale.dispose();
 
-  reset();const broken=metadata(fullFlow('broken'));invokeWork=async()=>{throw Error('Recorded flow version changed')};
-  const failed=harness(GrpcResponse,{flow:broken});await failed.tick();assert(text(failed.tree).includes('Recorded flow version changed'));assert.equal(decodes.length,0);failed.render();await failed.tick();assert.equal(getCalls().length,1,'failed automatic loading never loops or silently uses an older body');
-  const retry=fullFlow('broken');invokeWork=async()=>retry;failed.click(loadButton);await failed.tick();await failed.tick();assert.equal(decodes.length,1);failed.dispose();
+  reset();const broken=metadata(fullFlow('broken'));const original=rangeBodies.get('broken');rangeBodies.delete('broken');invokeWork=async()=>{throw Error('Recorded flow version changed')};
+  const failed=harness(GrpcResponse,{flow:broken});await failed.tick();assert(text(failed.tree).includes('Recorded flow version changed'));assert.equal(decodes.length,0);failed.render();await failed.tick();assert.equal(calls.length,1,'failed page read never loops or silently uses an older body');
+  rangeBodies.set('broken',original);failed.update({flow:metadata(original,'instance:2')});await failed.tick();assert.equal(decodes.length,1);failed.dispose();
 
   reset();const captured=fullFlow('captured',{request:6,response:7,originalRequest:9});const captureMeta=metadata(captured);invokeWork=async()=>captured;
   const panel=harness(GrpcPanel,{flow:captureMeta,draft:captureMeta.originalRequest,visible:false});assert(panel.tree.props.hidden);assert.equal(calls.length,0);assert.equal(decodes.length,0);
@@ -125,7 +127,7 @@ const loadButton='加载完整 gRPC 正文';
   const lateRequest=deferred();decodeWork=()=>lateRequest.promise;const loadRequest=requestPanel.click('载入请求消息');await new Promise(resolve=>setImmediate(resolve));requestPanel.update({visible:false});const changesBefore=requestChanges.length;lateRequest.resolve([{value:'late request'}]);await loadRequest;requestPanel.render();assert.equal(requestChanges.length,changesBefore,'hidden request decoding cannot overwrite draft JSON');requestPanel.dispose();
 
   reset();const bigCapture=fullFlow('bigCapture',{request:40000,response:40000}),bigCaptureMeta=metadata(bigCapture);invokeWork=async()=>bigCapture;
-  const bigPanel=harness(GrpcPanel,{flow:bigCaptureMeta,draft:bigCaptureMeta.request});assert.equal(calls.length,0);assert(bigPanel.button('服务反射').props.disabled,'large metadata requires the explicit memory choice before reflection');
+  const bigPanel=harness(GrpcPanel,{flow:bigCaptureMeta,draft:bigCaptureMeta.request});assert.equal(getCalls().length,0);assert(calls.some(([command])=>command==='read_flow_body'),'large response messages use versioned body ranges without full-flow hydration');assert(bigPanel.button('服务反射').props.disabled,'large metadata requires the explicit memory choice before reflection');
   bigPanel.click(loadButton);await bigPanel.tick();await bigPanel.tick();assert.equal(getCalls().length,1);await bigPanel.click('服务反射');assert.equal(reflections[0].bodyBase64,bigCapture.request.bodyBase64);bigPanel.dispose();
 
   reset();const composerRequest=fullFlow('composer').request;const started=[];invokeWork=async(command)=>{if(command==='grpc_start')return 'session-1';if(command==='grpc_send'||command==='cancel_replay')return null;throw Error(command)};
@@ -136,5 +138,5 @@ const loadButton='加载完整 gRPC 正文';
   composer.update({visible:true});assert.equal(calls.filter(([command])=>command==='grpc_start').length,1,'reopening never restarts an RPC');composer.dispose();assert.equal(calls.filter(([command])=>command==='cancel_replay').length,1,'actual unmount still cancels the owned session once');
   reset();const starting=deferred();invokeWork=async(command)=>command==='grpc_start'?starting.promise:null;
   const unmounted=harness(GrpcPanel,{draft:composerRequest,onChange:()=>{}});const startWork=unmounted.click('开始 gRPC 调用');await new Promise(resolve=>setImmediate(resolve));unmounted.dispose();starting.resolve('late-session');await startWork;assert.deepEqual(calls.filter(([command])=>command==='cancel_replay'),[['cancel_replay',{executionId:'late-session'}]],'an RPC created after actual unmount is cancelled too');
-  console.log('Recorded gRPC UI: four-body budget, explicit complete loading, pinned versions, hidden/disconnected cleanup, stale hydration/decode/reflection guards and session preservation passed.');
+  console.log('Recorded gRPC UI: versioned response pages, request-only full loading, four-body budget, hidden/disconnected cleanup, stale hydration/decode/reflection guards and session preservation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

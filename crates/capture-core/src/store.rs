@@ -1,9 +1,12 @@
 use crate::model::{Flow, RequestDraft, SharedBody};
+use crate::body_read::Base64ReadPlan;
 use serde::{Serialize, Deserialize};
 use rusqlite::OptionalExtension;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::{path::Path, sync::Mutex};
+use std::io::Read;
+use std::collections::BTreeMap;
 
 #[derive(Serialize,Deserialize)]
 pub struct FlowChange {pub position:i64,pub flow:Flow}
@@ -40,7 +43,16 @@ impl Store {
         Ok(std::fs::canonicalize(destination)?.to_string_lossy().into_owned())
     }
     pub fn compact(&self) -> Result<()> {
-        self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?.execute_batch("VACUUM; UPDATE flows SET started_at=started_at;")?;
+        let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
+        conn.execute_batch("VACUUM")?;
+        let tx=conn.transaction()?;
+        tx.execute_batch("CREATE TEMP TABLE current_projection_compaction(flow_id TEXT PRIMARY KEY) WITHOUT ROWID;
+            INSERT INTO current_projection_compaction SELECT p.flow_id FROM flow_projection p JOIN flow_changes c ON c.id=p.flow_id WHERE p.version=c.version;
+            UPDATE flows SET started_at=started_at;
+            UPDATE flow_projection SET version=(SELECT c.version FROM flow_changes c WHERE c.id=flow_id)
+              WHERE flow_id IN (SELECT flow_id FROM current_projection_compaction);
+            DROP TABLE current_projection_compaction;")?;
+        tx.commit()?;
         Ok(())
     }
     pub fn clear(&self) -> Result<usize> {
@@ -100,7 +112,7 @@ impl Store {
         tx.commit()?;Ok(flow)
     }
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS flows (
             id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, data TEXT NOT NULL
         ); CREATE TABLE IF NOT EXISTS deleted_flows (id TEXT PRIMARY KEY); CREATE INDEX IF NOT EXISTS flows_started ON flows(started_at);
@@ -115,8 +127,36 @@ impl Store {
             CREATE TRIGGER flows_revision_update AFTER UPDATE ON flows BEGIN UPDATE flow_revision SET version=version+1 WHERE id=1; INSERT INTO flow_changes VALUES(new.id,(SELECT version FROM flow_revision WHERE id=1)) ON CONFLICT(id) DO UPDATE SET version=excluded.version; END;
             CREATE TRIGGER flows_revision_delete AFTER DELETE ON flows BEGIN UPDATE flow_revision SET version=version+1 WHERE id=1; INSERT INTO flow_changes VALUES(old.id,(SELECT version FROM flow_revision WHERE id=1)) ON CONFLICT(id) DO UPDATE SET version=excluded.version; END;
             COMMIT;")?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS flow_bodies(flow_id TEXT NOT NULL, slot TEXT NOT NULL, body BLOB NOT NULL, PRIMARY KEY(flow_id,slot));
-          CREATE TRIGGER IF NOT EXISTS flow_bodies_delete AFTER DELETE ON flows BEGIN DELETE FROM flow_bodies WHERE flow_id=old.id; END;")?;
+        conn.execute_batch("BEGIN IMMEDIATE;
+          CREATE TABLE IF NOT EXISTS flow_bodies(flow_id TEXT NOT NULL, slot TEXT NOT NULL, body BLOB NOT NULL, encoded_sha256 BLOB, logical_length INTEGER, PRIMARY KEY(flow_id,slot));
+          CREATE TRIGGER IF NOT EXISTS flow_bodies_delete AFTER DELETE ON flows BEGIN DELETE FROM flow_bodies WHERE flow_id=old.id; END;
+          CREATE TABLE IF NOT EXISTS flow_projection(flow_id TEXT PRIMARY KEY, version INTEGER NOT NULL, metadata TEXT NOT NULL, body_refs TEXT NOT NULL);
+          CREATE TRIGGER IF NOT EXISTS flow_projection_delete AFTER DELETE ON flows BEGIN DELETE FROM flow_projection WHERE flow_id=old.id; END;
+          CREATE TRIGGER IF NOT EXISTS flow_body_revision_insert AFTER INSERT ON flow_bodies
+            WHEN EXISTS(SELECT 1 FROM flows WHERE id=new.flow_id)
+            BEGIN UPDATE flow_revision SET version=version+1 WHERE id=1;
+              INSERT INTO flow_changes VALUES(new.flow_id,(SELECT version FROM flow_revision WHERE id=1)) ON CONFLICT(id) DO UPDATE SET version=excluded.version;
+              DELETE FROM flow_projection WHERE flow_id=new.flow_id; END;
+          CREATE TRIGGER IF NOT EXISTS flow_body_revision_update AFTER UPDATE ON flow_bodies
+            WHEN EXISTS(SELECT 1 FROM flows WHERE id=new.flow_id)
+            BEGIN UPDATE flow_revision SET version=version+1 WHERE id=1;
+              INSERT INTO flow_changes VALUES(new.flow_id,(SELECT version FROM flow_revision WHERE id=1)) ON CONFLICT(id) DO UPDATE SET version=excluded.version;
+              DELETE FROM flow_projection WHERE flow_id=new.flow_id; END;
+          CREATE TRIGGER IF NOT EXISTS flow_body_revision_delete AFTER DELETE ON flow_bodies
+            WHEN EXISTS(SELECT 1 FROM flows WHERE id=old.flow_id)
+            BEGIN UPDATE flow_revision SET version=version+1 WHERE id=1;
+              INSERT INTO flow_changes VALUES(old.flow_id,(SELECT version FROM flow_revision WHERE id=1)) ON CONFLICT(id) DO UPDATE SET version=excluded.version;
+              DELETE FROM flow_projection WHERE flow_id=old.flow_id; END;
+          COMMIT;")?;
+        {
+            // Serialize schema discovery and upgrade across processes opening the
+            // same database, so two windows cannot both add the column.
+            let tx=conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let columns=tx.prepare("PRAGMA table_info(flow_bodies)")?.query_map([],|row|row.get::<_,String>(1))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            if !columns.iter().any(|name|name=="encoded_sha256") {tx.execute_batch("ALTER TABLE flow_bodies ADD COLUMN encoded_sha256 BLOB")?;}
+            if !columns.iter().any(|name|name=="logical_length") {tx.execute_batch("ALTER TABLE flow_bodies ADD COLUMN logical_length INTEGER")?;}
+            tx.commit()?;
+        }
         conn.execute("UPDATE flows SET data=json_set(data,'$.state','interrupted') WHERE json_extract(data,'$.state') IN ('sending','receiving')", [])?;
         crate::audit::initialize(&conn)?;
         let migration_epoch:Option<String>=conn.query_row("SELECT value FROM settings WHERE key='config-migration.epoch.v1'",[],|row|row.get(0)).optional()?;
@@ -127,6 +167,23 @@ impl Store {
         let tx=conn.transaction()?;
         write_flow(&tx,flow)?;
         tx.commit()?; Ok(())
+    }
+    /// Save a live stream snapshot. The named body may grow within reserved
+    /// SQLite BLOB capacity; all other slots keep exact storage semantics.
+    pub fn insert_streaming(&self, flow:&Flow, growing_slot:&str) -> Result<()> {
+        anyhow::ensure!(matches!(growing_slot,"request"|"response"),"Invalid growing body slot");
+        let body=if growing_slot=="request" {Some(&flow.request.body_base64)} else {flow.response.as_ref().map(|response|&response.body_base64)};
+        let persisted=body.map(|body| -> Result<(&SharedBody,usize)> {
+            let tail=std::str::from_utf8(&body.as_bytes()[body.len().saturating_sub(4)..])?;
+            let length=usize::try_from(Base64ReadPlan::new(body.len(),tail,0,1)?.body.total_bytes)?;
+            Ok((body,length))
+        }).transpose()?;
+        let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
+        let tx=conn.transaction()?;
+        write_flow_with_growth(&tx,flow,Some(growing_slot))?;
+        tx.commit()?;
+        if let Some((body,length))=persisted {body.mark_persisted_base64(length);}
+        Ok(())
     }
     pub fn delete_flows(&self, ids: Vec<String>) -> Result<()> {
         anyhow::ensure!(ids.len() <= 10000, "一次最多删除 10000 条记录");
@@ -187,12 +244,47 @@ fn body_slots(flow:&mut Flow, mut visit:impl FnMut(&str,&mut SharedBody)->Result
  if let Some(v)=&mut flow.original_response {visit("originalResponse",&mut v.body_base64)?;}
  Ok(())
 }
-fn write_flow(conn:&Connection,flow:&Flow)->Result<()> {
+fn write_flow(conn:&Connection,flow:&Flow)->Result<()> { write_flow_with_growth(conn,flow,None) }
+
+/// Hash the canonical encoding of the old decoded prefix without reading the
+/// stored BLOB or allocating a second body. A previous partial Base64 quartet
+/// needs its old padding restored before it can match the saved digest.
+fn encoded_prefix_matches(body:&SharedBody,old_bytes:usize,digest:&[u8])->Result<bool> {
+ use base64::{engine::general_purpose::STANDARD,Engine as _};
+ use sha2::{Digest,Sha256};
+ let complete=old_bytes/3*4;
+ let Some(prefix)=body.as_bytes().get(..complete) else {return Ok(false)};
+ let mut hasher=Sha256::new();hasher.update(prefix);
+ let remainder=old_bytes%3;
+ if remainder!=0 {
+  let Some(quantum)=body.as_bytes().get(complete..complete+4) else {return Ok(false)};
+  let decoded=STANDARD.decode(quantum)?;
+  if decoded.len()<remainder {return Ok(false)}
+  hasher.update(STANDARD.encode(&decoded[..remainder]));
+ }
+ Ok(hasher.finalize().as_slice()==digest)
+}
+
+fn reserved_blob_size(size:i32)->Result<i32> {
+ const MAX_HEADROOM:usize=16*1024*1024;
+ let size=size as usize;
+ let headroom=(size/2).clamp(BODY_INLINE_LIMIT*2,MAX_HEADROOM);
+ let wanted=size.saturating_add(headroom).min(i32::MAX as usize);
+ let rounded=wanted.saturating_add(BODY_INLINE_LIMIT-1)/BODY_INLINE_LIMIT*BODY_INLINE_LIMIT;
+ Ok(i32::try_from(rounded.min(i32::MAX as usize))?)
+}
+
+fn write_flow_with_growth(conn:&Connection,flow:&Flow,growing_slot:Option<&str>)->Result<()> {
  use base64::engine::general_purpose::STANDARD;
  if conn.query_row("SELECT EXISTS(SELECT 1 FROM deleted_flows WHERE id=?1)",[&flow.id],|r|r.get::<_,bool>(0))? {return Ok(());}
  let mut stored=flow.clone();
- conn.execute("DELETE FROM flow_bodies WHERE flow_id=?1",[&flow.id])?;
+ let mut retained=Vec::new();
+ let mut body_refs=BTreeMap::new();
  body_slots(&mut stored,|slot,body| {
+  let bytes=body.as_bytes();
+  let tail=std::str::from_utf8(&bytes[bytes.len().saturating_sub(4)..])?;
+  let length=Base64ReadPlan::new(bytes.len(),tail,0,1)?.body.total_bytes;
+  body_refs.insert(slot.to_owned(),body_views::BodyReference{byte_length:length});
   if body.len()>BODY_INLINE_LIMIT*4/3 {
    // Allocate inside SQLite, then decode directly into the incremental BLOB.
    // The enclosing transaction rolls back metadata and partial writes on errors.
@@ -200,19 +292,61 @@ fn write_flow(conn:&Connection,flow:&Flow)->Result<()> {
    let padding=body.as_bytes().iter().rev().take_while(|&&b|b==b'=').count();
    anyhow::ensure!(padding<=2,"Invalid Base64 padding");
    let size=i32::try_from(body.len()/4*3-padding)?;
-   conn.execute("INSERT INTO flow_bodies(flow_id,slot,body) VALUES(?1,?2,?3)",params![flow.id,slot,rusqlite::blob::ZeroBlob(size)])?;
-   let rowid=conn.last_insert_rowid();
-   let mut blob=conn.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,false)?;
-   let mut decoder=base64::read::DecoderReader::new(body.as_bytes(),&STANDARD);
-   let written=std::io::copy(&mut decoder,&mut blob)?;
-   anyhow::ensure!(written==size as u64,"Decoded body size mismatch");
-   blob.close()?;
+   let digest=*body.encoded_sha256();
+   let existing:Option<(i64,i32,i32,Option<Vec<u8>>)>=conn.query_row(
+    "SELECT rowid,length(body),coalesce(logical_length,length(body)),encoded_sha256 FROM flow_bodies WHERE flow_id=?1 AND slot=?2",
+    params![flow.id,slot],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+   ).optional()?;
+   let growing=growing_slot==Some(slot);
+   // A bidirectional gRPC snapshot can update one slot while the other is
+   // still growing. Preserve the unchanged slot's spare capacity until the
+   // final ordinary insert compacts both bodies.
+   let unchanged=existing.as_ref().is_some_and(|(_,capacity,length,hash)|*length==size&&hash.as_deref()==Some(digest.as_slice())&&(growing_slot.is_some()||*capacity==size));
+   if !unchanged {
+    let append=if let Some((_,capacity,length,Some(hash)))=&existing {
+     growing&&*length>=0&&*length<size&&size<=*capacity&&(
+      body.matches_persisted_base64(*length as usize,hash)||encoded_prefix_matches(body,*length as usize,hash)?
+     )
+    } else {false};
+    if append {
+     let (rowid,_,length,_)=existing.as_ref().unwrap();
+     let mut blob=conn.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",*rowid,false)?;
+     let aligned=(*length as usize)/3*4;
+     let mut decoder=base64::read::DecoderReader::new(&body.as_bytes()[aligned..],&STANDARD);
+     let mut skipped=[0u8;2];
+     std::io::Read::read_exact(&mut decoder,&mut skipped[..(*length as usize)%3])?;
+     std::io::Seek::seek(&mut blob,std::io::SeekFrom::Start(*length as u64))?;
+     let written=std::io::copy(&mut decoder,&mut blob)?;
+     anyhow::ensure!(written==(size-*length) as u64,"Decoded body append size mismatch");
+     blob.close()?;
+     conn.execute("UPDATE flow_bodies SET logical_length=?3,encoded_sha256=?4 WHERE flow_id=?1 AND slot=?2",params![flow.id,slot,size,digest.as_slice()])?;
+    } else {
+     conn.execute("DELETE FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![flow.id,slot])?;
+     let capacity=if growing {reserved_blob_size(size)?} else {size};
+     conn.execute("INSERT INTO flow_bodies(flow_id,slot,body,encoded_sha256,logical_length) VALUES(?1,?2,?3,?4,?5)",params![flow.id,slot,rusqlite::blob::ZeroBlob(capacity),digest.as_slice(),size])?;
+     let rowid=conn.last_insert_rowid();
+     let mut blob=conn.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,false)?;
+     let mut decoder=base64::read::DecoderReader::new(body.as_bytes(),&STANDARD);
+     let written=std::io::copy(&mut decoder,&mut blob)?;
+     anyhow::ensure!(written==size as u64,"Decoded body size mismatch");
+     blob.close()?;
+    }
+   }
+   retained.push(slot.to_owned());
    // Explicit marker prevents a missing BLOB from looking like an empty body.
    *body=format!("@body:{slot}").into();
   }
   Ok(())
  })?;
- conn.execute("INSERT INTO flows(id,started_at,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET data=excluded.data",params![flow.id,flow.started_at,serde_json::to_string(&stored)?])?;
+ for slot in ["request","response","originalRequest","originalResponse"] {
+  if !retained.iter().any(|value|value==slot) {conn.execute("DELETE FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![flow.id,slot])?;}
+ }
+ let data=serde_json::to_string(&stored)?;
+ conn.execute("INSERT INTO flows(id,started_at,data) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET data=excluded.data",params![flow.id,flow.started_at,data])?;
+ let version:i64=conn.query_row("SELECT version FROM flow_changes WHERE id=?1",[&flow.id],|row|row.get(0))?;
+ conn.execute("INSERT INTO flow_projection(flow_id,version,metadata,body_refs) VALUES(?1,?2,json_remove(?3,'$.request.bodyBase64','$.response.bodyBase64','$.originalRequest.bodyBase64','$.originalResponse.bodyBase64'),?4)
+     ON CONFLICT(flow_id) DO UPDATE SET version=excluded.version,metadata=excluded.metadata,body_refs=excluded.body_refs",
+     params![flow.id,version,data,serde_json::to_string(&body_refs)?])?;
  Ok(())
 }
 fn restore_bodies(conn:&Connection,raw:&str)->Result<Flow> {
@@ -221,10 +355,12 @@ fn restore_bodies(conn:&Connection,raw:&str)->Result<Flow> {
  body_slots(&mut flow,|slot,body| {
   if body.starts_with("@body:") {
    anyhow::ensure!(body.as_str()==format!("@body:{slot}"),"Invalid stored body reference");
-   let rowid:i64=conn.query_row("SELECT rowid FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,slot],|r|r.get(0))?;
+   let (rowid,length):(i64,i64)=conn.query_row("SELECT rowid,coalesce(logical_length,length(body)) FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,slot],|r|Ok((r.get(0)?,r.get(1)?)))?;
+   anyhow::ensure!(length>=0,"Invalid stored body length");
    let mut blob=conn.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,true)?;
+   anyhow::ensure!(length as usize<=blob.len(),"Stored body length exceeds BLOB capacity");
    let mut encoder=base64::write::EncoderWriter::new(Vec::new(),&STANDARD);
-   std::io::copy(&mut blob,&mut encoder)?;
+   std::io::copy(&mut (&mut blob).take(length as u64),&mut encoder)?;
    *body=String::from_utf8(encoder.finish()?)?.into();
   }
   Ok(())
@@ -403,6 +539,102 @@ mod body_storage_tests {
  use super::*;
  use base64::{Engine as _,engine::general_purpose::STANDARD};
  fn sample()->Flow {serde_json::from_value(serde_json::json!({"id":"large","startedAt":1,"durationMs":1,"source":"capture","request":{"method":"POST","url":"https://example.invalid","headers":[],"bodyBase64":STANDARD.encode(vec![7u8;100000])},"response":null,"error":null,"notes":[]})).unwrap()}
+ #[test]
+ fn encoded_prefix_proof_handles_all_base64_boundaries() {
+  use sha2::{Digest,Sha256};
+  let bytes:Vec<u8>=(0..100).map(|n|n as u8).collect();
+  let full=SharedBody::from(STANDARD.encode(&bytes));
+  for old in 0..bytes.len() {
+   let hash=Sha256::digest(STANDARD.encode(&bytes[..old]));
+   assert!(encoded_prefix_matches(&full,old,&hash).unwrap(),"old length {old}");
+   if old>0 {
+    let mut changed=bytes.clone();changed[old-1]^=0x55;
+    assert!(!encoded_prefix_matches(&SharedBody::from(STANDARD.encode(changed)),old,&hash).unwrap(),"old length {old}");
+   }
+  }
+ }
+ #[test]
+ fn growing_body_appends_in_reserved_blob_and_all_readers_ignore_capacity() {
+  let dir=tempfile::tempdir().unwrap();let path=dir.path().join("growth.db");
+  let store=Store::open(&path).unwrap();let mut flow=sample();
+  store.insert_streaming(&flow,"request").unwrap();
+  let location=||store.0.lock().unwrap().query_row("SELECT rowid,length(body),logical_length FROM flow_bodies WHERE flow_id='large' AND slot='request'",[],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,usize>(1)?,row.get::<_,usize>(2)?))).unwrap();
+  let first=location();assert_eq!(first.2,100000);assert!(first.1>first.2);
+  store.0.lock().unwrap().execute_batch("CREATE TABLE body_write_events(kind TEXT NOT NULL);
+    CREATE TRIGGER test_blob_insert AFTER INSERT ON flow_bodies BEGIN INSERT INTO body_write_events VALUES('insert'); END;
+    CREATE TRIGGER test_blob_delete AFTER DELETE ON flow_bodies BEGIN INSERT INTO body_write_events VALUES('delete'); END;
+    CREATE TRIGGER test_blob_update AFTER UPDATE ON flow_bodies BEGIN INSERT INTO body_write_events VALUES('update'); END;").unwrap();
+  let extra=vec![9u8;12345];crate::body_base64::append_complete(&mut flow.request.body_base64,&extra).unwrap();
+  store.insert_streaming(&flow,"request").unwrap();
+  let second=location();assert_eq!(second.0,first.0);assert_eq!(second.1,first.1);assert_eq!(second.2,112345);
+  let events:Vec<String>={let conn=store.0.lock().unwrap();let mut statement=conn.prepare("SELECT kind FROM body_write_events").unwrap();statement.query_map([],|row|row.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()};
+  assert_eq!(events,["update"]);
+  assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,flow.request.body_base64);
+  let version=store.metadata(&flow.id,None).unwrap().unwrap().body_revision;
+  let end=store.read_body_at_revision(&flow.id,"request",&version,112340,16).unwrap();
+  assert_eq!(STANDARD.decode(end.body_base64).unwrap(),vec![9u8;5]);assert_eq!(end.total_bytes,112345);
+  let mut exported=Vec::new();assert_eq!(store.copy_body_at_revision(&flow.id,"request",&version,&mut exported).unwrap(),112345);
+  assert_eq!(exported.len(),112345);assert_eq!(&exported[100000..],extra);
+  assert_eq!(store.mcp_read_body(&flow.id,"request",112340,16).unwrap().total_bytes,112345);
+  let backup=store.backup().unwrap();assert_eq!(Store::open(Path::new(&backup)).unwrap().get(&flow.id).unwrap().unwrap().request.body_base64,flow.request.body_base64);
+  store.insert(&flow).unwrap();let final_location=location();assert_eq!(final_location.1,112345);assert_eq!(final_location.2,112345);
+  assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,flow.request.body_base64);
+ }
+ #[test]
+ fn growing_body_capacity_change_replacement_and_failure_are_atomic() {
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("growth.db")).unwrap();let mut flow=sample();
+  store.insert_streaming(&flow,"request").unwrap();
+  crate::body_base64::append_complete(&mut flow.request.body_base64,&vec![3u8;40000]).unwrap();
+  // A freshly reconstructed Flow has no in-memory commit checkpoint; the
+  // encoded-prefix proof must still accept the same append safely.
+  flow.request.body_base64=SharedBody::from(flow.request.body_base64.to_string());
+  store.insert_streaming(&flow,"request").unwrap();
+  let (capacity,length):(usize,usize)=store.0.lock().unwrap().query_row("SELECT length(body),logical_length FROM flow_bodies WHERE slot='request'",[],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+  assert_eq!(length,140000);assert!(capacity>length);
+  let mut modified=flow.clone();modified.request.body_base64.replace_range(0..4,"AQID");
+  store.insert_streaming(&modified,"request").unwrap();
+  assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,modified.request.body_base64);
+  let mut invalid=modified.clone();invalid.request.body_base64.replace_range(8..9,"!");
+  assert!(store.insert_streaming(&invalid,"request").is_err());
+  assert_eq!(store.get(&flow.id).unwrap().unwrap().request.body_base64,modified.request.body_base64);
+ }
+ #[test]
+ fn bidirectional_snapshot_keeps_the_other_growing_slot_reserved() {
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("bidi.db")).unwrap();let mut flow=sample();
+  flow.response=Some(serde_json::from_value(serde_json::json!({"status":200,"version":"HTTP/2","headers":[],"bodyBase64":STANDARD.encode(vec![8u8;100001])})).unwrap());
+  store.insert_streaming(&flow,"response").unwrap();
+  let response_before:(i64,usize)=store.0.lock().unwrap().query_row("SELECT rowid,length(body) FROM flow_bodies WHERE slot='response'",[],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+  assert!(response_before.1>100001);
+  crate::body_base64::append_complete(&mut flow.request.body_base64,b"request append").unwrap();
+  store.insert_streaming(&flow,"request").unwrap();
+  let response_after:(i64,usize)=store.0.lock().unwrap().query_row("SELECT rowid,length(body) FROM flow_bodies WHERE slot='response'",[],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+  assert_eq!(response_after,response_before);
+  assert_eq!(store.get(&flow.id).unwrap().unwrap().response.unwrap().body_base64,flow.response.as_ref().unwrap().body_base64);
+ }
+ #[test]
+ fn unchanged_large_body_reuses_blob_across_flow_and_response_updates(){
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("s.db")).unwrap();let mut flow=sample();
+  store.insert(&flow).unwrap();
+  let location=||store.0.lock().unwrap().query_row("SELECT rowid,encoded_sha256 FROM flow_bodies WHERE flow_id='large' AND slot='request'",[],|row|Ok((row.get::<_,i64>(0)?,row.get::<_,Vec<u8>>(1)?))).unwrap();
+  let original=location();assert_eq!(original.1.len(),32);
+  flow.notes.push("progress".into());store.insert(&flow).unwrap();assert_eq!(location(),original);
+  flow.response=Some(serde_json::from_value(serde_json::json!({"status":200,"version":"HTTP/2","headers":[],"bodyBase64":STANDARD.encode(vec![8u8;100000])})).unwrap());
+  store.insert(&flow).unwrap();assert_eq!(location(),original);
+  flow.request.body_base64=STANDARD.encode(vec![9u8;100000]).into();store.insert(&flow).unwrap();
+  assert_ne!(location().1,original.1);assert_eq!(STANDARD.decode(store.get("large").unwrap().unwrap().request.body_base64).unwrap(),vec![9u8;100000]);
+  flow.response=None;store.insert(&flow).unwrap();
+  assert_eq!(store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_bodies WHERE flow_id='large'",[],|row|row.get::<_,i64>(0)).unwrap(),1);
+ }
+ #[test]
+ fn older_body_table_upgrades_and_missing_digest_is_rebuilt(){
+  let dir=tempfile::tempdir().unwrap();let path=dir.path().join("legacy.db");
+  Connection::open(&path).unwrap().execute_batch("CREATE TABLE flow_bodies(flow_id TEXT NOT NULL,slot TEXT NOT NULL,body BLOB NOT NULL,PRIMARY KEY(flow_id,slot))").unwrap();
+  let store=Store::open(&path).unwrap();let flow=sample();store.insert(&flow).unwrap();
+  store.0.lock().unwrap().execute("UPDATE flow_bodies SET encoded_sha256=NULL",[]).unwrap();
+  store.insert(&flow).unwrap();
+  let digest:Vec<u8>=store.0.lock().unwrap().query_row("SELECT encoded_sha256 FROM flow_bodies",[],|row|row.get(0)).unwrap();
+  assert_eq!(digest.len(),32);assert_eq!(STANDARD.decode(store.get(&flow.id).unwrap().unwrap().request.body_base64).unwrap(),vec![7u8;100000]);
+ }
  #[test]
  fn large_bodies_roundtrip_backup_update_and_delete(){
   let dir=tempfile::tempdir().unwrap();let path=dir.path().join("sessions.db");let store=Store::open(&path).unwrap();let mut f=sample();store.insert(&f).unwrap();

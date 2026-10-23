@@ -39,7 +39,7 @@ function MessageView({ tab, headers, flow, variant, raw, onCopy, active, connect
   const body=flow[variant]?.bodyBase64;
   if (body === undefined) return <p role="status">{t('正文不可用')}</p>;
   if (tab === 'base64') return <div className="message-text"><div className="message-copy-toolbar"><button type="button" disabled={!body} aria-label={t('复制 Base64')} onClick={()=>onCopy(body)}><Copy size={13}/>{t('复制')}</button></div><pre>{body || t('（空正文）')}</pre></div>;
-  return <ResponseBody body={body} headers={headers} onCopy={onCopy} />;
+  return <ResponseBody body={body} headers={headers} onCopy={onCopy} complete={flow.state === 'completed' || flow.state === 'imported'} />;
 }
 
 const messageTabs = [['headers', '头部'], ['raw', '原始头部'], ['body', '正文'], ['base64', 'Base64']];

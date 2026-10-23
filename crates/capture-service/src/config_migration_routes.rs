@@ -6,22 +6,31 @@ use std::collections::BTreeMap;
 
 pub fn router()->Router<Shared>{Router::new().route("/config/status",get(status)).route("/config/export",post(export)).route("/config/preview",post(preview)).route("/config/import",post(import)).route("/config/recovery",post(recovery)).layer(DefaultBodyLimit::max(40*1024*1024))}
 async fn status(State(s):State<Shared>)->Result<Json<serde_json::Value>,ApiError>{migration::status(&s.engine.store).map(Json).map_err(error)}
-#[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Export{preferences:BTreeMap<String,String>,options:ExportOptions}
-async fn export(State(s):State<Shared>,Json(p):Json<Export>)->Result<Json<Exported>,ApiError>{let store=s.engine.store.clone();tokio::task::spawn_blocking(move||migration::export(&store,p.preferences,p.options,concat!(env!("CARGO_PKG_VERSION"),"-development"))).await.map_err(error)?.map(Json).map_err(error)}
-#[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Document{document:String}
-async fn preview(State(s):State<Shared>,Json(p):Json<Document>)->Result<Json<Preview>,ApiError>{let store=s.engine.store.clone();tokio::task::spawn_blocking(move||migration::preview(&store,&p.document)).await.map_err(error)?.map(Json).map_err(error)}
-#[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]struct Import{document:String,sections:Vec<String>,expected_revision:String,#[serde(default)]preferences:BTreeMap<String,String>}
+#[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Export{preferences:BTreeMap<String,String>,options:ExportOptions,#[serde(default)]passphrase:Option<String>}
+async fn export(State(s):State<Shared>,Json(p):Json<Export>)->Result<Json<Exported>,ApiError>{let store=s.engine.store.clone();tokio::task::spawn_blocking(move||migration::export_protected(&store,p.preferences,p.options,concat!(env!("CARGO_PKG_VERSION"),"-development"),p.passphrase.as_deref())).await.map_err(error)?.map(Json).map_err(error)}
+#[derive(Deserialize)]#[serde(deny_unknown_fields)]struct Document{document:String,#[serde(default)]passphrase:Option<String>,#[serde(default)]mode:Option<String>,#[serde(default)]sections:Option<Vec<String>>,#[serde(default)]preferences:BTreeMap<String,String>,#[serde(default)]choices:BTreeMap<String,String>}
+async fn preview(State(s):State<Shared>,Json(p):Json<Document>)->Result<Json<Preview>,ApiError>{let store=s.engine.store.clone();tokio::task::spawn_blocking(move||match p.mode.as_deref().unwrap_or("replace"){
+    "replace"=>migration::preview_protected(&store,&p.document,p.passphrase.as_deref()),
+    "merge"=>migration::preview_merge_protected_with_choices(&store,&p.document,p.sections.as_deref(),p.preferences,concat!(env!("CARGO_PKG_VERSION"),"-development"),p.passphrase.as_deref(),&p.choices),
+    _=>Err(anyhow::anyhow!("Unsupported configuration import mode")),
+}).await.map_err(error)?.map(Json).map_err(error)}
+#[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]struct Import{document:String,sections:Vec<String>,expected_revision:String,#[serde(default)]preferences:BTreeMap<String,String>,#[serde(default)]passphrase:Option<String>,#[serde(default)]mode:Option<String>,#[serde(default)]choices:BTreeMap<String,String>}
 async fn import(State(s):State<Shared>,Json(p):Json<Import>)->Result<Json<Imported>,ApiError>{
     let _migration=s.configuration_migration.lock().await;
     let store=s.engine.store.clone();
-    let prepared=tokio::task::spawn_blocking(move||migration::prepare_import(&store,&p.document,&p.sections,&p.expected_revision,p.preferences,concat!(env!("CARGO_PKG_VERSION"),"-development"))).await.map_err(error)?.map_err(error)?;
+    let prepared=tokio::task::spawn_blocking(move||match p.mode.as_deref().unwrap_or("replace") {
+        "replace"=>migration::prepare_import_protected(&store,&p.document,&p.sections,&p.expected_revision,p.preferences,concat!(env!("CARGO_PKG_VERSION"),"-development"),p.passphrase.as_deref()),
+        "merge"=>migration::prepare_import_merge_protected_with_choices(&store,&p.document,&p.sections,&p.expected_revision,p.preferences,concat!(env!("CARGO_PKG_VERSION"),"-development"),p.passphrase.as_deref(),&p.choices),
+        _=>Err(anyhow::anyhow!("Unsupported configuration import mode")),
+    }).await.map_err(error)?.map_err(error)?;
     let stopped=s.shutdown_network().await;
     if let Err(failure)=stopped{resume_after_failure(&s).await;return Err(error(format!("配置未导入：{failure}。已停止的监听不会自动重启，请检查后重试。")));}
     let store=s.engine.store.clone();let result=tokio::task::spawn_blocking(move||migration::commit_import(&store,prepared)).await.map_err(|e|e.to_string()).and_then(|r|r.map_err(|e|format!("{e:#}")));
     match result {Ok(value)=>Ok(Json(value)),Err(failure)=>{resume_after_failure(&s).await;Err(error(format!("配置未导入：{failure}。原配置保留；监听已停止，如需继续使用外部 MCP 请重启内核。")))}}
 }
 async fn resume_after_failure(s:&Shared){if s.engine.store.configuration_ready().is_ok()&&s.mcp_clients.resume().await.is_ok(){s.resume_network_commands();}}
-async fn recovery(State(s):State<Shared>)->Result<Json<Exported>,ApiError>{let store=s.engine.store.clone();tokio::task::spawn_blocking(move||migration::recovery(&store)).await.map_err(error)?.map(Json).map_err(error)}
+#[derive(Deserialize,Default)]#[serde(deny_unknown_fields)]struct Recovery{#[serde(default)]passphrase:Option<String>}
+async fn recovery(State(s):State<Shared>,Json(p):Json<Recovery>)->Result<Json<Exported>,ApiError>{let store=s.engine.store.clone();tokio::task::spawn_blocking(move||migration::recovery_protected(&store,p.passphrase.as_deref())).await.map_err(error)?.map(Json).map_err(error)}
 
 #[cfg(test)]
 mod tests {
@@ -61,6 +70,48 @@ mod tests {
             assert!(state.runtime.status().await.running);assert!(!state.shutting_down.load(std::sync::atomic::Ordering::Acquire));assert!(!state.engine.store.configuration_frozen());assert_eq!(state.engine.store.workspace_revisions().unwrap(),before);assert!(state.engine.store.setting::<Value>("config-migration.recovery.v1").unwrap().is_none());
             state.shutdown_network().await.unwrap();task.abort();let _=task.await;
         }).await.expect("configuration preflight contract stalled");
+    }
+    #[tokio::test]
+    async fn encrypted_file_requires_password_and_bad_password_cannot_stop_capture(){
+        tokio::time::timeout(std::time::Duration::from_secs(40),async{
+            let (_temp,state,address,task)=fixture().await;
+            state.runtime.start_proxy("127.0.0.1".into(),0).await.unwrap();
+            let password="correct horse 123";
+            let (code,snapshot)=call(address,"/config/export",json!({"preferences":{"http-capture.theme":"matrix"},"options":{},"passphrase":password})).await;
+            assert_eq!(code,200);let document=snapshot["document"].as_str().unwrap();
+            assert!(document.contains("http-capture-encrypted-config"));assert!(!document.contains("matrix"));
+            assert_eq!(call(address,"/config/preview",json!({"document":document})).await.0,400);
+            assert_eq!(call(address,"/config/preview",json!({"document":document,"passphrase":"incorrect horse 123"})).await.0,400);
+            assert!(state.runtime.status().await.running);
+            let (code,plan)=call(address,"/config/preview",json!({"document":document,"passphrase":password})).await;assert_eq!(code,200);
+            assert_eq!(call(address,"/config/import",json!({"document":document,"sections":["preferences"],"expectedRevision":plan["expectedRevision"],"passphrase":"incorrect horse 123"})).await.0,400);
+            assert!(state.runtime.status().await.running);assert!(!state.engine.store.configuration_frozen());
+            assert!(state.engine.store.setting::<Value>("config-migration.recovery.v1").unwrap().is_none());
+            let (code,imported)=call(address,"/config/import",json!({"document":document,"sections":["preferences"],"expectedRevision":plan["expectedRevision"],"passphrase":password})).await;
+            assert_eq!(code,200);assert_eq!(imported["requiresRestart"],true);assert!(!state.runtime.status().await.running);
+            let (code,recovery)=call(address,"/config/recovery",json!({"passphrase":password})).await;
+            assert_eq!(code,200);assert!(recovery["document"].as_str().unwrap().contains("http-capture-encrypted-config"));
+            task.abort();let _=task.await;
+        }).await.expect("encrypted configuration contract stalled");
+    }
+    #[tokio::test]
+    async fn merge_mode_accepts_only_supported_categories_before_shutdown(){
+        tokio::time::timeout(std::time::Duration::from_secs(40),async{
+            let (_temp,state,address,task)=fixture().await;
+            state.runtime.start_proxy("127.0.0.1".into(),0).await.unwrap();
+            let (_,snapshot)=call(address,"/config/export",json!({"preferences":{},"options":{"includeCode":true}})).await;
+            let document=snapshot["document"].as_str().unwrap();
+            assert!(document.contains("\"scripts\""));
+            let (_,plan)=call(address,"/config/preview",json!({"document":document,"mode":"merge"})).await;
+            assert!(plan["sections"].as_array().unwrap().iter().all(|section|["library","upstream","workspace","preferences","decryption","mcp","blocking","faults","responseRewrite","plugins","interception","scripts"].contains(&section["id"].as_str().unwrap())));
+            assert!(plan["warnings"].as_array().unwrap().iter().any(|warning|warning.as_str().unwrap().contains("合并")));
+            assert_eq!(call(address,"/config/import",json!({"document":document,"sections":["not-a-category"],"expectedRevision":plan["expectedRevision"],"mode":"merge"})).await.0,400);
+            assert_eq!(call(address,"/config/import",json!({"document":document,"sections":["scripts"],"expectedRevision":plan["expectedRevision"],"mode":"merge","choices":{"scripts.before":"imported"}})).await.0,400);
+            assert!(state.runtime.status().await.running);assert!(!state.engine.store.configuration_frozen());
+            let (code,result)=call(address,"/config/import",json!({"document":document,"sections":["library"],"expectedRevision":plan["expectedRevision"],"mode":"merge"})).await;
+            assert_eq!(code,200);assert_eq!(result["requiresRestart"],true);assert!(!state.runtime.status().await.running);
+            task.abort();let _=task.await;
+        }).await.expect("merge configuration contract stalled");
     }
     #[tokio::test]
     async fn successful_import_stops_network_freezes_writes_and_retains_a_local_recovery_point(){

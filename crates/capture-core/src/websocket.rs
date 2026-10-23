@@ -9,7 +9,7 @@ use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct Frame { pub direction: String, pub at_ms: u64, pub opcode: u8, pub fin: bool, pub compressed: bool, pub payload_base64: String }
+pub struct Frame { pub direction: String, pub at_ms: u64, pub opcode: u8, pub fin: bool, pub compressed: bool, pub payload_base64: SharedBody }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session { pub state: String, pub frames: Vec<Frame>, #[serde(default)] pub messages:Vec<crate::websocket_messages::Message> }
 pub(crate) fn token_header(headers: &[Header], name: &str, token: &str) -> bool {
@@ -179,11 +179,13 @@ pub(crate) async fn relay<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reade
         };
         ensure!(len <= MAX_BODY as u64, "WebSocket frame exceeds 8 MiB");
         let mut mask = [0;4]; if masked { reader.read_exact(&mut mask).await?; wire.extend(mask); }
-        let mut payload = vec![0;len as usize]; reader.read_exact(&mut payload).await?; wire.extend_from_slice(&payload);
-        if masked { for (i,b) in payload.iter_mut().enumerate() { *b ^= mask[i%4]; } }
+        let mut payload = vec![0;len as usize]; reader.read_exact(&mut payload).await?;
         ensure!(opcode != 8 || payload.len() != 1, "Invalid Close frame");
-        writer.write_all(&wire).await?; writer.flush().await?;
-        tx.send(Frame { direction: if masked { "client" } else { "server" }.into(), at_ms: started.elapsed().as_millis() as u64, opcode, fin, compressed: opcode < 8 && compressed_message, payload_base64: STANDARD.encode(&payload) }).await.map_err(|_|anyhow::anyhow!("Capture closed"))?;
+        // Forward the original header and payload before unmasking. Keeping a
+        // second whole-frame wire buffer doubles peak memory for large frames.
+        writer.write_all(&wire).await?; writer.write_all(&payload).await?; writer.flush().await?;
+        if masked { for (i,b) in payload.iter_mut().enumerate() { *b ^= mask[i%4]; } }
+        tx.send(Frame { direction: if masked { "client" } else { "server" }.into(), at_ms: started.elapsed().as_millis() as u64, opcode, fin, compressed: opcode < 8 && compressed_message, payload_base64: STANDARD.encode(&payload).into() }).await.map_err(|_|anyhow::anyhow!("Capture closed"))?;
         if opcode < 8 { fragmented = !fin; }
         if opcode == 8 { return Ok(()); }
     }
@@ -223,5 +225,27 @@ mod tests {
         relay(bytes.as_slice(), tokio::io::sink(), true, true, Instant::now(), tx).await.unwrap();
         assert!(rx.recv().await.unwrap().compressed);
         let close = rx.recv().await.unwrap(); assert_eq!(close.opcode, 8); assert!(!close.compressed);
+    }
+    #[tokio::test]
+    async fn large_frame_forwards_exact_wire_and_records_unmasked_payload() {
+        let payload:Vec<u8>=(0..1024*1024).map(|n|(n%251) as u8).collect();
+        for masked in [false,true] {
+            let mut wire=vec![0x82,if masked{0xff}else{0x7f}];
+            wire.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+            if masked {
+                let mask=[7,11,13,17];wire.extend_from_slice(&mask);
+                wire.extend(payload.iter().enumerate().map(|(i,b)|b^mask[i%4]));
+                wire.extend_from_slice(&[0x88,0x80,0,0,0,0]);
+            } else {wire.extend_from_slice(&payload);wire.extend_from_slice(&[0x88,0x00]);}
+            let (writer,mut forwarded)=tokio::io::duplex(wire.len()+1);
+            let (tx,mut rx)=mpsc::channel(8);
+            relay(wire.as_slice(),writer,masked,false,Instant::now(),tx).await.unwrap();
+            let mut actual=Vec::new();forwarded.read_to_end(&mut actual).await.unwrap();
+            assert_eq!(actual,wire);
+            let recorded=rx.recv().await.unwrap();
+            assert_eq!(STANDARD.decode(recorded.payload_base64).unwrap(),payload);
+            assert_eq!(recorded.direction,if masked{"client"}else{"server"});
+            assert_eq!(rx.recv().await.unwrap().opcode,8);
+        }
     }
 }

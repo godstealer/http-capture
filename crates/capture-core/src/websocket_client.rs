@@ -46,7 +46,9 @@ pub fn connect(engine:Arc<Engine>,mut request:RequestDraft)->Result<String>{
 
 pub async fn send(engine:&Engine,id:&str,opcode:u8,body:&str)->Result<()> {
  ensure!(matches!(opcode,1|2|8|9),"Send text, binary, ping or close only");
- ensure!(body.len()<=12*1024*1024,"WebSocket message too large");
+ ensure!(body.len()<=MAX_BODY.div_ceil(3)*4,"WebSocket message exceeds 8 MiB");
+ if opcode>=8 {ensure!(body.len()<=125usize.div_ceil(3)*4,"Control payload exceeds 125 bytes");}
+ if opcode==8 {ensure!(body.is_empty(),"Close uses an empty payload");}
  let bytes=STANDARD.decode(body)?;ensure!(bytes.len()<=MAX_BODY,"WebSocket message exceeds 8 MiB");
  if opcode==1 {std::str::from_utf8(&bytes)?;}
  if opcode>=8 {ensure!(bytes.len()<=125,"Control payload exceeds 125 bytes");}
@@ -58,10 +60,44 @@ pub async fn send(engine:&Engine,id:&str,opcode:u8,body:&str)->Result<()> {
 }
 
 async fn write<W:tokio::io::AsyncWrite+Unpin>(writer:&mut W,opcode:u8,bytes:&[u8])->Result<()> {
- let mut wire=vec![128|opcode];let len=bytes.len();
- if len<126 {wire.push(128|len as u8);}else if len<=65535{wire.push(128|126);wire.extend_from_slice(&(len as u16).to_be_bytes());}else{wire.push(128|127);wire.extend_from_slice(&(len as u64).to_be_bytes());}
- let random=uuid::Uuid::new_v4();let mask=&random.as_bytes()[..4];wire.extend_from_slice(mask);wire.extend(bytes.iter().enumerate().map(|(i,b)|b^mask[i%4]));
- writer.write_all(&wire).await?;writer.flush().await?;Ok(())
+ let mut header=vec![128|opcode];let len=bytes.len();
+ if len<126 {header.push(128|len as u8);}else if len<=65535{header.push(128|126);header.extend_from_slice(&(len as u16).to_be_bytes());}else{header.push(128|127);header.extend_from_slice(&(len as u64).to_be_bytes());}
+ let random=uuid::Uuid::new_v4();let mask=&random.as_bytes()[..4];header.extend_from_slice(mask);
+ writer.write_all(&header).await?;
+ // Keep the caller's bytes intact; masking one bounded chunk avoids a second
+ // allocation proportional to the entire WebSocket message.
+ const MASK_CHUNK:usize=16*1024;
+ let mut scratch=[0u8;MASK_CHUNK];
+ for (index,chunk) in bytes.chunks(MASK_CHUNK).enumerate(){
+  let offset=index*MASK_CHUNK;
+  for (i,byte) in chunk.iter().enumerate(){scratch[i]=byte^mask[(offset+i)%4];}
+  writer.write_all(&scratch[..chunk.len()]).await?;
+ }
+ writer.flush().await?;Ok(())
+}
+
+#[cfg(test)] mod tests {
+ use super::*;
+ use tokio::io::AsyncReadExt;
+ #[tokio::test]
+ async fn masked_writer_preserves_every_byte_across_length_and_chunk_boundaries(){
+  for len in [0,125,126,65535,65536,128*1024+7]{
+   let payload:Vec<u8>=(0..len).map(|i|(i%251) as u8).collect();
+   let (mut writer,mut reader)=tokio::io::duplex(len+64);
+   write(&mut writer,2,&payload).await.unwrap();drop(writer);
+   let mut wire=Vec::new();reader.read_to_end(&mut wire).await.unwrap();
+   assert_eq!(wire[0],0x82);assert_ne!(wire[1]&0x80,0);
+   let (size,mask_start)=match wire[1]&0x7f {
+    n@0..=125=>(n as usize,2),
+    126=>(u16::from_be_bytes(wire[2..4].try_into().unwrap()) as usize,4),
+    _=>(u64::from_be_bytes(wire[2..10].try_into().unwrap()) as usize,10),
+   };
+   assert_eq!(size,len);
+   let mask=&wire[mask_start..mask_start+4];
+   let decoded:Vec<u8>=wire[mask_start+4..].iter().enumerate().map(|(i,b)|b^mask[i%4]).collect();
+   assert_eq!(decoded,payload);
+  }
+ }
 }
 
 async fn drive(client:tokio::io::DuplexStream,mut commands:mpsc::Receiver<Message>)->Result<()> {

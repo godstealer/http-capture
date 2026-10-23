@@ -26,6 +26,10 @@ async fn shared_pipeline_edits_both_stages_and_retains_originals(){
  assert!(!original_response_body.is_empty());
  let snapshot=e.intercept.snapshot().items.into_iter().find(|item|item.id==i.id).unwrap();
  assert_eq!(snapshot.flow.response.as_ref().unwrap().body_base64.as_ptr(),original_response_body.as_ptr());
+ let mut oversized=decision(&i,"modify");let mut oversized_response=i.flow.response.clone().unwrap();
+ oversized_response.body_base64="!".repeat((8usize*1024*1024).div_ceil(3)*4+4).into();oversized.response=Some(oversized_response);
+ let error=e.intercept.resolve(oversized).unwrap_err();assert!(error.to_string().contains("8 MiB"),"{error:#}");
+ assert!(e.intercept.snapshot().items.iter().any(|item|item.id==i.id));
  let mut d=decision(&i,"modify");let mut r=i.flow.response.clone().unwrap();r.status=201;r.body_base64="ZWRpdGVk".into();
  let replacement_body=r.body_base64.clone();d.response=Some(r);e.intercept.resolve(d).unwrap();
  let f=task.await.unwrap();assert_eq!(f.original_request.as_ref().unwrap().method,"GET");assert_eq!(f.request.method,"POST");assert_eq!(f.original_response.as_ref().unwrap().status,200);assert_eq!(f.response.as_ref().unwrap().status,201);

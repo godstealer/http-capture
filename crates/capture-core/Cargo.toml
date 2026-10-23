@@ -19,9 +19,11 @@ transport-wreq = { path = "../transport-wreq", optional = true }
 if-addrs = "0.14"
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 aes-gcm = "0.10"
+zeroize = "1"
 sha1 = "0.10"
 getrandom = "0.2"
 md-5 = "0.10"
+openssl = { version = "0.10", features = ["vendored"] }
 hmac = "0.12"
 rquickjs = "0.14"
 regex = "1"

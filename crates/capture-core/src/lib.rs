@@ -194,17 +194,23 @@ impl Engine {
     async fn send_observed(&self, flow: &mut Flow, route: Option<&upstream::UpstreamProxy>, after_script: bool) -> transport::SendResult {
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         let context = sse::Context { tx, started: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
+        let streaming_started = context.started.clone();
         let security=self.certificates.security(&url::Url::parse(&flow.request.url)?)?;
         let send = certificates::CURRENT.scope(security,sse::UPDATES.scope(context, self.send_engines.send_via(&flow.request, route)));
         tokio::pin!(send);
-        let mut body = body_base64::GrowingBase64::default();
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
         let mut dirty = false;
-        let mut completed = None;
+        let mut completed: Option<transport::SendResult> = None;
         loop {
             if completed.is_some() && rx.is_empty() {
-                if let Some(response) = &mut flow.response { response.body_base64 = body.snapshot().into(); }
-                return completed.take().unwrap();
+                let result=completed.take().unwrap();
+                return result.and_then(|(mut response,notes)| {
+                    if streaming_started.load(std::sync::atomic::Ordering::Relaxed) {
+                        let live=flow.response.as_mut().ok_or_else(||anyhow::anyhow!("SSE response headers were not recorded"))?;
+                        response.body_base64=std::mem::take(&mut live.body_base64);
+                    }
+                    Ok((response,notes))
+                });
             }
             tokio::select! {
                 biased;
@@ -219,15 +225,17 @@ impl Engine {
                             flow.notes.push("SSE 接收中".into());
                             flow.notes.push("SSE 实时流：最多 300 秒 / 8 MiB；停止或超限保留已接收正文。".into());
                         }
-                        sse::Event::Data(data) => body.append(data),
+                        sse::Event::Data(data) => {
+                            let response=flow.response.as_mut().ok_or_else(||anyhow::anyhow!("SSE data arrived before response headers"))?;
+                            body_base64::append_complete(&mut response.body_base64,data)?;
+                        },
                     }
                     dirty = true;
                     sse::downstream(event).await?;
                 }
                 result = &mut send, if completed.is_none() => completed = Some(result),
                 _ = tick.tick(), if dirty => {
-                    if let Some(response) = &mut flow.response { response.body_base64 = body.snapshot().into(); }
-                    self.store.insert(flow)?;
+                    self.store.insert_streaming(flow,"response")?;
                     if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }
                     dirty = false;
                 }

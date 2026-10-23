@@ -40,7 +40,7 @@ assert.equal(recordedBodyEncoded([{name:'content-encoding',value:'identity, br'}
   let native=false,nativeCalls=[],fetches=[],response,handle;
   const {downloadFlowBody}=load('apps/frontend/src/api.ts',name=>name==='@tauri-apps/api/core'?{isTauri:()=>native,invoke:async(...args)=>{nativeCalls.push(args);return 'C:/saved/body.bin'}}:require(name));
   const args={id:'flow-a',variant:'originalResponse',expectedVersion:'instance:7'};
-  global.window={};global.fetch=async(...args)=>{fetches.push(args);return response};
+  global.window={};global.fetch=async(...args)=>{fetches.push(args);return args[0]==='/__capture/flows/body/prepare'?{status:404}:response};
   native=true;assert.deepEqual(await downloadFlowBody(args,{expectedBytes:7}),{kind:'saved',name:'C:/saved/body.bin',buffered:false});assert.deepEqual(nativeCalls,[['save_flow_body',args]]);assert.equal(fetches.length,0);
   const cancelled=new AbortController();cancelled.abort();await assert.rejects(downloadFlowBody(args,{signal:cancelled.signal}),{name:'AbortError'});assert.equal(nativeCalls.length,1);
   native=false;
@@ -66,5 +66,12 @@ assert.equal(recordedBodyEncoded([{name:'content-encoding',value:'identity, br'}
   const oldCreate=URL.createObjectURL,oldRevoke=URL.revokeObjectURL;URL.createObjectURL=blob=>{assert.equal(blob.size,5);return 'blob:fixture'};URL.revokeObjectURL=()=>{};
   response={ok:true,headers:new Headers({'Content-Length':'5'}),blob:async()=>{blobCalls++;return new Blob(chunks)}};
   try{assert.deepEqual(await downloadFlowBody(args,{expectedBytes:5}),{kind:'browser',buffered:true});assert.equal(blobCalls,1);assert.equal(clicked,1);assert.equal(anchor.href,'blob:fixture');assert.equal(anchor.download,'http-capture-originalResponse.bin')}finally{URL.createObjectURL=oldCreate;URL.revokeObjectURL=oldRevoke}
+  const ticket='a'.repeat(64),ticketUrl=`http://127.0.0.1:1421/session-export/download/${ticket}`;
+  global.fetch=async(...input)=>{fetches.push(input);if(input[0]==='/__capture/session-export/finish'){assert.deepEqual(JSON.parse(input[1].body),{id:ticket,commit:false});return {ok:true}}assert.equal(input[0],'/__capture/flows/body/prepare');return {status:200,ok:true,json:async()=>({url:ticketUrl,length:5})}};
+  clicked=0;blobCalls=0;
+  assert.deepEqual(await downloadFlowBody(args,{expectedBytes:5}),{kind:'browser',buffered:false});
+  assert.equal(clicked,1);assert.equal(anchor.href,ticketUrl);assert.equal(anchor.referrerPolicy,'no-referrer');assert.equal(blobCalls,0);
+  assert.deepEqual(JSON.parse(fetches.at(-1)[1].body),args);
+  await assert.rejects(downloadFlowBody(args,{expectedBytes:6}),/length differs/);assert.equal(clicked,1);assert.equal(fetches.at(-1)[0],'/__capture/session-export/finish');
   console.log('Recorded body: bounded strict ranges, UTF-8/binary boundaries, explicit selected-entity aggregation, empty-version checks, processing limits/cancellation, pinned streaming downloads, backpressure and Blob fallback passed');
 })().catch(error=>{console.error(error);process.exit(1)});

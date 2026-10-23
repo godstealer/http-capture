@@ -9,7 +9,7 @@ import ResponseBody from './ResponseBody';
 import BodyCodeEditor from './BodyCodeEditor';
 import { utf8ContentType } from './requestBody';
 import './interception.css';
-type Rule = {disabled?:boolean;exclude?:boolean;group?:string;urlRegex?:boolean;urlContains:string;host:string;method:string;status:number|null;headerName:string;headerContains:string};
+type Rule = {disabled?:boolean;migrationId?:string;exclude?:boolean;group?:string;urlRegex?:boolean;urlContains:string;host:string;method:string;status:number|null;headerName:string;headerContains:string};
 type Config = {request:boolean;response:boolean;scope:string;rules?:Rule[]};
 type Item = {id:string;stage:string;flow:Flow};
 export type InterceptSnapshot = {hits?:number[];config:Config;items:Item[]};
@@ -50,6 +50,7 @@ export function InterceptionEditor({item, onDone}: {item: Item; onDone: () => Pr
   const [request, setRequest] = useState(item.flow.request);
   const [response, setResponse] = useState(() => defaultResponse(item));
   const [replace, setReplace] = useState(false), [base64, setBase64] = useState(false), [preview, setPreview] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
   const [parser, setParser] = useState('auto'), [editorEpoch, setEditorEpoch] = useState(0);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null), fileReader = useRef<FileReader>(), fileRevision = useRef(0), alive = useRef(true);
@@ -60,7 +61,8 @@ export function InterceptionEditor({item, onDone}: {item: Item; onDone: () => Pr
   const bodyContext = useRef(context);
   bodyContext.current = context;
   let text: string | null;
-  try { text = new TextDecoder('utf-8', {fatal: true}).decode(Uint8Array.from(atob(message.bodyBase64), c => c.charCodeAt(0))); }
+  if (base64 || preview) text = null;
+  else try { text = new TextDecoder('utf-8', {fatal: true}).decode(Uint8Array.from(atob(message.bodyBase64), c => c.charCodeAt(0))); }
   catch { text = null; }
   async function replaceFile(file: File) {
     const revision = ++fileRevision.current;
@@ -132,7 +134,7 @@ export function InterceptionEditor({item, onDone}: {item: Item; onDone: () => Pr
           : !base64 && text === null ? <p className="interception-hint">{t('正文包含非 UTF-8 字节，请使用 Base64 编辑，原始字节已保留。')} <button type="button" onClick={() => setBase64(true)}>{t('切换到 Base64')}</button></p>
           : <BodyCodeEditor key={`${editingResponse}-${base64}-${editorEpoch}`} label={t('拦截正文')} value={base64 ? message.bodyBase64 : text!} parser={base64 ? 'text' : language} onChange={setBody} formatting={!base64} disabled={busy}/>}
       </section>
-      <details className="interception-original"><summary>{t('原始内容（保留备查）')}</summary><pre>{JSON.stringify(item.stage === 'request' ? item.flow.request : item.flow.response, null, 2)}</pre></details>
+      <details className="interception-original" onToggle={event => setShowOriginal(event.currentTarget.open)}><summary>{t('原始内容（保留备查）')}</summary>{showOriginal && <pre>{JSON.stringify(item.stage === 'request' ? item.flow.request : item.flow.response, null, 2)}</pre>}</details>
     </fieldset>
     {error && <p role="alert">{error}</p>}
     <div className="interception-controls interception-actions"><button disabled={busy} onClick={() => void resolve('continue')}>{t('原样放行')}</button><button className="interception-primary" disabled={busy} onClick={() => void resolve(replace ? 'replace' : 'modify')}>{replace ? t('返回自定义响应') : item.stage === 'response' ? t('替换响应并放行') : t('修改后放行')}</button><button disabled={busy} onClick={() => void resolve('abort')}>{t('终止')}</button></div>

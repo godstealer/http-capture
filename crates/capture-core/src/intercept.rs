@@ -13,6 +13,7 @@ pub struct Config { pub request: bool, pub response: bool, pub scope: String, #[
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub struct Rule {
  #[serde(default)] pub disabled: bool,
+ #[serde(default, skip_serializing_if="String::is_empty")] pub migration_id: String,
  #[serde(default)] pub exclude: bool,
  #[serde(default)] pub group: String,
  #[serde(default)] pub url_regex: bool,
@@ -92,11 +93,12 @@ impl Interceptor {
  pub fn resolve(&self, mut d:Decision)->Result<()> {
   let mut s=self.inner.lock().unwrap(); let (item,_) = s.items.get(&d.id).ok_or_else(||anyhow::anyhow!("拦截已结束或超时"))?;
   ensure!(["continue","modify","replace","abort"].contains(&d.action.as_str()),"无效操作");
-  if d.action=="modify" && item.stage=="request" { let r=d.request.as_ref().ok_or_else(||anyhow::anyhow!("缺少请求"))?; crate::http1::prepare(r)?; }
+  if d.action=="modify" && item.stage=="request" { let r=d.request.as_ref().ok_or_else(||anyhow::anyhow!("缺少请求"))?; crate::http1::validate_draft(r)?; }
   if d.action=="replace" || (d.action=="modify" && item.stage=="response") {
    let r=d.response.as_mut().ok_or_else(||anyhow::anyhow!("缺少响应"))?;
    r.retain_enabled_headers();
    ensure!((200..=599).contains(&r.status),"响应状态码必须在 200–599 之间");
+   ensure!(r.body_base64.len()<=(8usize*1024*1024).div_ceil(3)*4,"正文超过 8 MiB");
    let body=base64::engine::general_purpose::STANDARD.decode(&r.body_base64)?; ensure!(body.len()<=8*1024*1024,"正文超过 8 MiB");
    ensure!(r.headers.len()<=512,"响应头过多");
    for h in &r.headers { let _:http::HeaderName=h.name.parse()?; let _:http::HeaderValue=h.value.parse()?; }
@@ -129,6 +131,7 @@ fn validate_and_compile(config:&mut Config)->Result<()>{
  for r in &mut config.rules {
   ensure!(r.nonempty(),"规则至少需要一个条件");
   ensure!(r.group.len()<=128 && r.url_contains.len()<=2048 && r.host.len()<=253 && r.method.len()<=32 && r.header_name.len()<=256 && r.header_contains.len()<=2048,"规则条件过长");
+  ensure!(r.migration_id.is_empty() || uuid::Uuid::parse_str(&r.migration_id).is_ok(),"无效的断点迁移标识");
   r.compiled_url=if r.url_regex&&!r.url_contains.is_empty(){Some(regex::RegexBuilder::new(&r.url_contains).size_limit(1024*1024).build().map_err(|e|anyhow::anyhow!("URL 正则表达式无效：{e}"))?)}else{None};
   ensure!(r.status.is_none_or(|v|(100..=599).contains(&v)),"无效状态码");
   ensure!(r.header_contains.is_empty()||!r.header_name.is_empty(),"请填写请求头名称");

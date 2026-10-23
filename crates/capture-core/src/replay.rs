@@ -76,7 +76,16 @@ pub(crate) async fn native_via(draft: &RequestDraft, roots: &rustls::RootCertSto
         if status < 200 { continue; }
         let no_body = draft.method == "HEAD" || status == 204 || status == 304;
         let streaming = !no_body && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: upstream_tls.clone(), sent_request_headers: Some(sent_request_headers.clone()), tls_version: tls_version.clone(), status, version: version.clone(), headers: headers.clone(), body_base64: Default::default(), raw_head_base64: Some(STANDARD.encode(&raw)) }).await?;
-        let (body, trailers) = if no_body { (String::new(), false) } else { read_body_base64(&mut reader, &headers, true, streaming).await? };
+        let (body, trailers) = if no_body {
+            (String::new(), false)
+        } else if streaming {
+            // send_observed already appends each emitted chunk to its Flow.
+            // Read and validate framing without accumulating another body.
+            let (_, trailers)=copy_body(&mut reader,&mut tokio::io::sink(),&headers,true,MAX_BODY as u64,true).await?;
+            (String::new(), trailers)
+        } else {
+            read_body_base64(&mut reader, &headers, true, false).await?
+        };
         ensure!(!trailers, "Response trailers are not supported yet; refusing to silently discard them");
         return Ok((CapturedResponse { trailers: vec![],  upstream_tls, sent_request_headers: Some(sent_request_headers), tls_version, status, version, headers, body_base64: body.into(), raw_head_base64: Some(STANDARD.encode(raw)) }, notes));
     }

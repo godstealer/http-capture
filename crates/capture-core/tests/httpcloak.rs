@@ -1,5 +1,30 @@
 use capture_core::{model::*,transport::SendEngines};
-use tokio::{io::{AsyncWriteExt,BufReader},net::TcpListener};
+use tokio::{io::{AsyncReadExt,AsyncWriteExt,BufReader},net::TcpListener};
+#[tokio::test]
+async fn helper_sends_large_body_with_normalized_length_and_exact_bytes(){
+ let engines=SendEngines::with_roots(rustls::RootCertStore::empty());
+ if !engines.list().iter().any(|e|e.id=="httpcloak"&&e.available){eprintln!("Build httpcloak helper to run integration test");return;}
+ let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+ let body:Vec<u8>=(0..256*1024+7).map(|index|(index%251) as u8).collect();
+ let expected=body.clone();
+ let server=tokio::spawn(async move{
+  let(socket,_)=listener.accept().await.unwrap();let mut socket=BufReader::new(socket);
+  let raw=capture_core::http1::read_head(&mut socket).await.unwrap();
+  let (method,_,headers)=capture_core::http1::parse_request(&raw).unwrap();
+  let length=headers.iter().find(|header|header.name.eq_ignore_ascii_case("content-length")).unwrap().value.parse::<usize>().unwrap();
+  let mut received=vec![0u8;length];socket.read_exact(&mut received).await.unwrap();
+  socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await.unwrap();
+  assert_eq!(method,"POST");assert_eq!(length,expected.len());assert_eq!(received,expected);
+ });
+ let draft:RequestDraft=serde_json::from_value(serde_json::json!({
+  "engine":"httpcloak","method":"POST","url":format!("http://{address}/upload"),
+  "headers":[{"name":"User-Agent","value":"Chrome/155.0.0.0"},{"name":"Content-Length","value":"1"}],
+  "bodyBase64":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&body),
+  "tls":{"preset":"chrome","browserVersion":"155"}
+ })).unwrap();
+ let (response,_)=tokio::time::timeout(std::time::Duration::from_secs(15),engines.send(&draft)).await.unwrap().unwrap();
+ assert_eq!(response.status,200);server.await.unwrap();
+}
 #[tokio::test]
 async fn upgraded_helper_selects_chrome155_from_ua_latest_and_explicit_version(){
  tokio::time::timeout(std::time::Duration::from_secs(15),async{

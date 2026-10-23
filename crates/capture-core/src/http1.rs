@@ -2,6 +2,7 @@
 use crate::model::{Header, RequestDraft};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use std::io::Read;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use url::Url;
 
@@ -215,6 +216,24 @@ pub fn prepare(draft: &RequestDraft) -> Result<(Url, Vec<Header>, Vec<u8>, Vec<S
     let (url,headers,notes)=prepare_fields(draft,body.len() as u64)?;
     Ok((url,headers,body,notes))
 }
+/// Validate an edited request without materializing its decoded body. Sending
+/// paths still call `prepare` or their own streaming encoder as appropriate.
+pub fn validate_draft(draft:&RequestDraft)->Result<()> {
+    prepare_validated_fields(draft).map(|_|())
+}
+/// Produce normalized fields using a streaming body validation pass, for
+/// transports that serialize the original encoded body separately.
+pub(crate) fn prepare_validated_fields(draft:&RequestDraft)->Result<(Url,Vec<Header>,Vec<String>)> {
+    let mut reader=base64::read::DecoderReader::new(draft.body_base64.as_bytes(),&STANDARD);
+    let mut buffer=[0u8;16*1024];
+    let mut length=0u64;
+    loop {
+        let read=reader.read(&mut buffer).context("Invalid body base64")?;
+        if read==0 {break;}
+        length=length.checked_add(read as u64).context("Request body is too large")?;
+    }
+    prepare_fields(draft,length)
+}
 pub(crate) fn prepare_fields(draft:&RequestDraft,body_len:u64)->Result<(Url,Vec<Header>,Vec<String>)> {
     ensure!(token(&draft.method), "Invalid method");
     ensure!(!["CONNECT", "TRACE"].contains(&draft.method.as_str()), "CONNECT and TRACE are not supported by the editor");
@@ -279,6 +298,30 @@ pub fn ensure_browser_header_order(headers: &[Header]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn streaming_request_validation_matches_send_preparation() {
+        for encoded in ["", "YQ==", "YWI=", "YWJj", "AAECAw==", "YQ", "YQ=", "A", "AAAA=", "AA==A", "Y Q==", "YWJj\n", "_w=="] {
+            let draft:RequestDraft=serde_json::from_value(serde_json::json!({
+                "method":"POST","url":"https://example.test/upload","headers":[{"name":"X-Check","value":"yes"}],"bodyBase64":encoded,
+            })).unwrap();
+            assert_eq!(validate_draft(&draft).is_ok(),prepare(&draft).is_ok(),"{encoded:?}");
+            if let Ok((expected_url,expected_headers,_,expected_notes))=prepare(&draft) {
+                let (url,headers,notes)=prepare_validated_fields(&draft).unwrap();
+                assert_eq!(url,expected_url);assert_eq!(headers,expected_headers);assert_eq!(notes,expected_notes);
+            }
+        }
+        let bytes=vec![17u8;8*1024*1024+3];
+        let draft:RequestDraft=serde_json::from_value(serde_json::json!({
+            "method":"POST","url":"https://example.test/upload","headers":[{"name":"Content-Length","value":"0"}],"bodyBase64":STANDARD.encode(&bytes),
+        })).unwrap();
+        let pointer=draft.body_base64.as_ptr();
+        let (validated_url,validated_headers,validated_notes)=prepare_validated_fields(&draft).unwrap();
+        assert_eq!(draft.body_base64.as_ptr(),pointer);
+        let (url,headers,body,notes)=prepare(&draft).unwrap();
+        assert_eq!(body,bytes);
+        assert_eq!(validated_url,url);assert_eq!(validated_headers,headers);assert_eq!(validated_notes,notes);
+        assert_eq!(headers.iter().find(|h|h.name.eq_ignore_ascii_case("content-length")).unwrap().value,bytes.len().to_string());
+    }
     #[test]
     fn joins_only_request_cookies_preserving_other_fields_and_positions() {
         let mut headers = vec![

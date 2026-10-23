@@ -3,7 +3,7 @@ import BodyCodeEditor from './BodyCodeEditor';
 import type { RequestDraft } from './types';
 import { t } from './i18n';
 import {
-  bodyBytes, encodeFormBody, fileRequestBody, inferRequestBodyMode,
+  AUTO_EDIT_LIMIT, bodyByteLength, encodeFormBody, fileRequestBody, inferRequestBodyMode,
   rawBodyParser, rawContentType, readFormBody, requestBodyWorkMatches, requestContentType,
   textBody, utf8Body, withRequestBody,
   type RawBodyParser, type RequestBodyMode, type RequestBodyPart, type RequestBodyUpdateOptions,
@@ -18,7 +18,8 @@ export default function RequestBodyEditor({ draft, onChange }: {
   draft: RequestDraft; onChange: (draft: RequestDraft) => void;
 }) {
   const mime = requestContentType(draft.headers);
-  const [mode, setMode] = useState<RequestBodyMode>(() => inferRequestBodyMode(draft.bodyBase64, mime));
+  const byteLength = useMemo(() => bodyByteLength(draft.bodyBase64), [draft.bodyBase64]);
+  const [mode, setMode] = useState<RequestBodyMode>(() => inferRequestBodyMode(draft.bodyBase64, mime, byteLength));
   const [parser, setParser] = useState<RawBodyParser>(() => rawBodyParser(mime));
   const [parts, setParts] = useState<Row[]>([]);
   const [formReady, setFormReady] = useState(false);
@@ -36,9 +37,6 @@ export default function RequestBodyEditor({ draft, onChange }: {
     observed.current = { body: draft.bodyBase64, mime };
   }
   const text = useMemo(() => mode === 'raw' ? utf8Body(draft.bodyBase64) : null, [mode, draft.bodyBase64]);
-  const byteLength = useMemo(() => {
-    try { return bodyBytes(draft.bodyBase64).length; } catch { return null; }
-  }, [draft.bodyBase64]);
 
   useEffect(() => {
     mounted.current = true;
@@ -88,7 +86,7 @@ export default function RequestBodyEditor({ draft, onChange }: {
     operation.current++;
     setBusy(null); setError(''); setFileName('');
     setFileMime(mime || 'application/octet-stream');
-    const next = inferRequestBodyMode(draft.bodyBase64, mime);
+    const next = inferRequestBodyMode(draft.bodyBase64, mime, byteLength);
     setMode(next); setParser(rawBodyParser(mime));
     if (next === 'form' || next === 'multipart') void loadForm(next);
     else { setParts([]); setFormReady(false); }
@@ -230,6 +228,7 @@ export default function RequestBodyEditor({ draft, onChange }: {
 
     {mode === 'file' && <div className="request-body-card">
       <strong>{t('原始文件 / 二进制')}</strong>
+      {byteLength !== null && byteLength > AUTO_EDIT_LIMIT && <p className="request-body-hint">{t('正文较大，默认不自动解码；可手动切换到文本、表单或 Base64 编辑，现有字节保持不变。')}</p>}
       <p className="request-body-hint">{t('直接将文件原始字节作为请求正文，适合图片、压缩包等文件。')}</p>
       <fieldset disabled={busy !== null} className="request-body-form-fields">
         <label className="request-body-file-picker">{t('选择二进制文件')}

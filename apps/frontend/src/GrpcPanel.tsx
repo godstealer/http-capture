@@ -5,7 +5,8 @@ import {reflect} from './grpcReflection';
 import {invoke} from './api';
 import {useEffect,useMemo,useState,useRef,lazy,Suspense} from 'react';
 import {schema,methodPath,prepareGrpc,decodeMessages,grpcStatus,encodeMessage,base64} from './grpc';
-import type {Flow,FlowRecord,RequestDraft,RequestMetadata} from './types';
+import {decodeRecordedGrpcMessages} from './grpcRecorded';
+import type {FlowRecord,RequestDraft,RequestMetadata} from './types';
 import {isFlowMetadata,loadCompleteFlow} from './flowRecords';
 import {useRecordedFlow} from './useRecordedFlow';
 const BodyCodeEditor=lazy(()=>import('./BodyCodeEditor')); 
@@ -25,7 +26,7 @@ export default function GrpcPanel({savedDraft,onDraftChange,draft,flow,onChange,
  function setSelected(value:string){updateSelected(value);onDraftChange?.({method:value})}
  function setJson(value:string){updateJson(value);onDraftChange?.({json:value})}
  const [notice,setNotice]=useState('');
- const [decoded,setDecoded]=useState<{source:Flow|null;method:unknown;messages:unknown[];error:string}>({source:null,method:null,messages:[],error:''});
+ const [decoded,setDecoded]=useState<{key:unknown;method:unknown;messages:unknown[];error:string}>({key:null,method:null,messages:[],error:''});
  const compiled=useMemo(()=>{try{return {...schema(sources),error:''}}catch(e){return {methods:[],error:String(e)}}},[sources]);
  let path='';try{path=new URL(draft.url).pathname}catch{}
  const method=compiled.methods.find(m=>methodPath(m)===(selected||path));
@@ -52,17 +53,22 @@ export default function GrpcPanel({savedDraft,onDraftChange,draft,flow,onChange,
  }
  async function resolvedEndpoint(){if(!environmentValid)throw Error(t('请选择环境'));return resolveGrpcEndpoint(await completeRequest(),environment)}
  const needsExplicitLoad=!requestIsComplete&&!full&&!loaded.automatic;
+ const decodeSource=source&&isFlowMetadata(source)?sourceIdentity:full;
  function apply(texts:string[]){try{schema(texts);localStorage.setItem(key,JSON.stringify(texts));window.dispatchEvent(new Event('grpc-schema-changed'));setSources(texts);setProto(formatProto(texts.join('\n')));setNotice(t('已保存'));}catch(e){setNotice(String(e))}}
  const receiving=active||['sending','receiving'].includes(source?.state??'');
  useEffect(()=>{
-   let current=true;
-   setDecoded({source:null,method:null,messages:[],error:''});
-   if(visible&&connected&&!onChange&&full?.response)decodeMessages(full.response.bodyBase64,method,full.response.headers,false,receiving)
-     .then(messages=>{if(current)setDecoded({source:full,method,messages,error:''})})
-     .catch(error=>{if(current)setDecoded({source:full,method,messages:[],error:String(error)})});
-   return()=>{current=false};
- },[full,method,receiving,visible,connected,onChange]);
- const result=visible&&connected&&decoded.source===full&&decoded.method===method?decoded:null;
+   let current=true;const controller=new AbortController();
+   setDecoded({key:null,method:null,messages:[],error:''});
+   if(visible&&connected&&!onChange&&source?.response){
+     const work=isFlowMetadata(source)
+       ?decodeRecordedGrpcMessages(source,method,source.response.headers,receiving,request=>invoke('read_flow_body',{...request}),{signal:controller.signal,isCurrent:()=>current})
+       :full?.response?decodeMessages(full.response.bodyBase64,method,full.response.headers,false,receiving):null;
+     work?.then(messages=>{if(current)setDecoded({key:sourceIdentity,method,messages,error:''})})
+       .catch(error=>{if(current)setDecoded({key:sourceIdentity,method,messages:[],error:String(error)})});
+   }
+   return()=>{current=false;controller.abort()};
+ },[decodeSource,method,receiving,visible,connected,onChange]);
+ const result=visible&&connected&&decoded.key===sourceIdentity&&decoded.method===method?decoded:null;
  if(!visible)return <div className="grpc-panel request-details" hidden/>;
 
  return <div className="grpc-panel request-details">

@@ -16,6 +16,17 @@ export async function saveText(content:string,name:string,format:string,handle:H
   return t('已提交浏览器下载，请在浏览器下载列表查看保存位置');
 }
 
+// Browsers without a save picker still require a Blob for a download URL.
+// Keep serialized records as separate parts so the caller can release each
+// complete Flow before loading the next one.
+export function downloadTextParts(parts:string[],name:string,format:string):string {
+  const blob=new Blob(parts,{type:['json','har'].includes(format)?'application/json':'text/plain;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  try {const link=document.createElement('a');link.href=url;link.download=name;link.click();}
+  finally {setTimeout(()=>URL.revokeObjectURL(url),30000);}
+  return t('已提交浏览器下载，请在浏览器下载列表查看保存位置');
+}
+
 export async function saveCodeFile(content:string,name:string):Promise<string> {
   if(isTauri()) {
     const path=await invoke<string|null>('save_code_file',{content,filename:name});

@@ -72,7 +72,7 @@ Native Auto/H1/H2 sends and H1/H2 capture now stream `text/event-stream` respons
 
 Manual sends use the existing cancel button; captured SSE has a Stop SSE button. Cancellation and stream errors retain received body bytes. Sessions have an explicit 300-second / 8-MiB bound; regular requests retain the 30-second timeout. No automatic reconnect or replay is performed. Response scripts and matching response interception rules reject streaming before forwarding its headers; request-side processing remains supported.
 
-The SSE viewer shows blank-line-terminated events, event type, inherited ID, multi-line data and retry. Heartbeats and partial events remain visible in raw text. Compressed streams are forwarded live, but incremental event viewing of unfinished compressed bodies is not guaranteed (use identity encoding for live event inspection). H3, wreq and httpcloak still use buffered responses.
+The SSE viewer shows blank-line-terminated events, event type, inherited ID, multi-line data and retry. Heartbeats and partial events remain visible in raw text. Compressed streams are forwarded live with their original bytes unchanged. A local, unpublished frontend increment retains decoder state across growing SSE snapshots in manual replay and legacy full-Flow views, including stacked gzip, deflate, Brotli and Zstd Content-Encoding values in reverse decoding order. The modern metadata-only capture view reads version-pinned 64 KiB body pages, rereads only the last page when the body grows, and sends only newly arrived compressed bytes to the same decoder chain; the raw compressed page and download remain separate. Raw input and every decoded stage are limited to 8 MiB. The Zstd frame window is checked before the stream decoder receives it. Normal completion checks every compressed layer; cancelled/failed partial streams retain already decoded events. A completed large history item opened after the stream has ended still requires explicit complete-body processing. H3, wreq and httpcloak still use buffered responses.
 
 ## WebSocket capture (2026-10-09)
 
@@ -83,7 +83,7 @@ Bidirectional frame bytes are relayed unchanged, including masking, fragmentatio
 Active editor connections and message editing/resending are now available as described below. H2 extended CONNECT and H3 WebSocket are not implemented. Only rules matching this handshake and stage can block this initial path: nonempty enabled capture scripts or enabled capture-scoped interception are explicitly rejected when matched. Unrelated rules, empty scripts and replay-only interception do not block WebSocket capture. Response status conditions are evaluated after the upstream handshake response arrives. Native TLS is used for WSS, not browser fingerprint presets. Limits: 300 seconds per session, 8 MiB per frame, approximately 8 MiB total captured payload and 10000 frames. Stopping or exceeding limits closes the transport; it does not synthesize a graceful Close handshake.
 
 H3 currently has a fixed-target loopback QUIC reverse proxy and an experimental dynamic-SNI TUN ingress. The latter has local tests but has not passed Windows end-to-end acceptance; investigation is paused as of 2026-10-08 (see [TUN notes](tun.md)). The fixed-target reverse proxy is separate from the system HTTP
-proxy. Start it with a fixed origin (not a URL containing a path):
+proxy. It can be started and stopped under **Settings → TUN → Fixed-target HTTP/3 reverse proxy**. Enter an HTTPS origin with no path, query or credentials, and a local UDP port (0 selects a free port). The status displays the actual loopback address and CA certificate. This listener does not alter system routing or proxy settings; stopping the regular HTTP proxy does not stop it, but application shutdown does. It is not general browser H3 interception. The command-line entry remains available:
 
 ```powershell
 & scripts/rust.ps1 run -p capture-service --bin quic-capture -- .local/capture https://example.com 8443
@@ -109,6 +109,15 @@ response version. Existing records remain readable. The capture table uses
 the incoming protocol where available.
 
 ## Fidelity boundary
+
+HTTP does not define a browser-like order for ordinary fields with different
+names. [RFC 9110, Section 5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.3)
+requires preserving the relative order of repeated same-name field lines;
+[RFC 9113, Section 8.3](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.3)
+requires H2 pseudo-header fields before regular fields. H1 `Host` is not the
+first ordinary field by a universal rule; H2 `:authority` is a pseudo-header.
+The Header Order UI therefore reports observed/encoder order rather than a
+normative Chrome, Firefox or other browser template.
 
 H1 capture retains raw request header bytes; native forwarding preserves the
 relative order, casing, values and duplicates of end-to-end fields. Hop-by-hop

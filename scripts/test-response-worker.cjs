@@ -15,5 +15,11 @@ new Function('require', output.outputFiles[0].text)(require);
   await self.onmessage({ data: { body: 'AAECAw==', contentType: 'application/octet-stream', encoding: '', parser: 'auto' } });
   assert.equal(result.binary, true);
   assert.deepEqual(Buffer.from(await result.blob.arrayBuffer()), Buffer.from([0, 1, 2, 3]));
+  const originalAtob=global.atob;
+  global.atob=()=>{throw new Error('large response was decoded before its budget check')};
+  try {
+    await self.onmessage({data:{body:'A'.repeat(4*Math.ceil((8*1024*1024+1)/3)),contentType:'text/plain',encoding:'',parser:'auto'}});
+    assert.match(result.error,/超过 8 MiB/);
+  } finally {global.atob=originalAtob;}
   console.log('Response worker: zstd and stacked gzip/zstd, formatted JSON, exact decoded download bytes and binary blobs passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

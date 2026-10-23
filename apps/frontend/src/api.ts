@@ -20,6 +20,7 @@ export async function invoke<T = unknown>(command: string, args?: Record<string,
     begin_import:['POST','imports/begin'], append_import:['POST','imports/append'], finish_import:['POST','imports/finish'],
     delete_flows:['POST','flows/delete'], import_flows:['POST','flows/import'],
     tun_status:['GET','tun'], start_tun:['POST','tun/start'], stop_tun:['POST','tun/stop'],
+    reverse_quic_status:['GET','quic-reverse'], start_reverse_quic:['POST','quic-reverse/start'], stop_reverse_quic:['POST','quic-reverse/stop'],
     network_interfaces: ['GET', 'network/interfaces'], check_listener_port: ['POST', 'network/check-port'],
     request_workspace:['GET','workspace'], save_request_workspace:['POST','workspace'], workspace_revisions:['GET','workspace/revisions'],
     config_status:['GET','config/status'],config_export:['POST','config/export'],config_preview:['POST','config/preview'],config_import:['POST','config/import'],config_recovery:['POST','config/recovery'],
@@ -28,6 +29,7 @@ export async function invoke<T = unknown>(command: string, args?: Record<string,
     fault_rules:['GET','fault-rules'],configure_fault_rules:['POST','fault-rules'],mcp_audit:['POST','mcp/audit'],
     response_rewrite:['GET','response-rewrite'],configure_response_rewrite:['POST','response-rewrite'],
     flow_metadata_changes:['POST','flows/metadata/changes'],flow_metadata:['POST','flows/metadata'],get_flow:['POST','flows/get'],read_flow_body:['POST','flows/body/read'],
+    begin_browser_session_export:['POST','session-export/begin'],append_browser_session_export:['POST','session-export/append'],finish_browser_session_export:['POST','session-export/finish'],
     capture_scripts: ['GET', 'scripts'], set_capture_scripts: ['POST', 'scripts'],
     upstream_profiles: ['GET','upstream/profiles'], save_upstream_profile:['POST','upstream/profiles'], select_upstream_profile:['POST','upstream/select'], delete_upstream_profile:['POST','upstream/delete'],
     set_upstream: ['POST', 'upstream'], proxy_status: ['GET', 'status'], list_flows: ['GET', 'flows'], flow_revision: ['GET', 'flows/revision'],
@@ -79,6 +81,27 @@ export async function downloadFlowBody(args:FlowBodyDownload,options:{signal?:Ab
   const timeout=setTimeout(()=>controller.abort(new DOMException('Download timed out','TimeoutError')),300000);
   let response:Response|undefined;
   try {
+    if(!handle){
+      const prepared=await fetch('/__capture/flows/body/prepare',{method:'POST',redirect:'error',headers:{'X-Capture-UI':'1','Content-Type':'application/json'},
+        body:JSON.stringify({id:args.id,variant:args.variant,expectedVersion:args.expectedVersion}),signal:controller.signal});
+      // Older capture services still expose the authenticated POST download.
+      if(prepared.status!==404){
+        if(!prepared.ok)throw Error(`HTTP ${prepared.status}: ${(await prepared.text()).slice(0,2048)}`);
+        const ticket=await prepared.json() as {url?:unknown;length?:unknown};
+        if(typeof ticket.url!=='string'||!/^http:\/\/127\.0\.0\.1:1421\/session-export\/download\/[a-f0-9]{64}$/.test(ticket.url))throw Error('Invalid recorded body download URL');
+        try {
+          if(typeof ticket.length!=='number'||!Number.isSafeInteger(ticket.length)||ticket.length<0||ticket.length>MAX_BODY_DOWNLOAD
+            ||options.expectedBytes!==undefined&&ticket.length!==options.expectedBytes)throw Error('Recorded body download length differs from its metadata');
+          checkCancelled();
+          const link=document.createElement('a');link.href=ticket.url;link.download=filename;link.referrerPolicy='no-referrer';link.click();
+          return {kind:'browser',buffered:false};
+        } catch(error) {
+          await fetch('/__capture/session-export/finish',{method:'POST',headers:{'X-Capture-UI':'1','Content-Type':'application/json'},
+            body:JSON.stringify({id:ticket.url.slice(-64),commit:false}),signal:AbortSignal.timeout(5000)}).catch(()=>{});
+          throw error;
+        }
+      }
+    }
     response=await fetch('/__capture/flows/body/download',{method:'POST',redirect:'error',headers:{'X-Capture-UI':'1','Content-Type':'application/json'},
       body:JSON.stringify({id:args.id,variant:args.variant,expectedVersion:args.expectedVersion}),signal:controller.signal});
     if(!response.ok)throw Error(`HTTP ${response.status}: ${(await response.text()).slice(0,2048)}`);

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/sardanioss/httpcloak/fingerprint"
 	tr "github.com/sardanioss/httpcloak/transport"
+	utls "github.com/sardanioss/utls"
 	"io"
 	"os"
 	"sort"
@@ -66,7 +67,7 @@ func capabilities() map[string]any {
 		}
 		sort.Sort(sort.Reverse(sort.IntSlice(versions[family])))
 	}
-	return map[string]any{"customClientHello": true, "certificateRoots": true, "protocolVersion": 1, "browserVersions": versions}
+	return map[string]any{"customClientHello": true, "certificateRoots": true, "clientCertificate": true, "protocolVersion": 1, "browserVersions": versions}
 }
 func execute(in Input) (map[string]any, error) {
 	return executeWithRoots(in, nil)
@@ -74,9 +75,66 @@ func execute(in Input) (map[string]any, error) {
 
 // Custom roots extend platform trust; verification and hostname checks stay enabled.
 func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
+	result, err := executeWithRootsRaw(&in, roots)
+	return materializeResult(result, err)
+}
+
+// The CLI owns its decoded JSON input. The encoded body is retained only by
+// the streaming reader and its reopen callback until the send finishes.
+func executeOwned(in *Input) (map[string]any, error) {
+	result, err := executeWithRootsRaw(in, nil)
+	return materializeResult(result, err)
+}
+
+type helperResult struct {
+	metadata   map[string]any
+	response   *negotiatedResponse
+	preset     string
+	customNote string
+	tlsDetails map[string]any
+	proxy      *Proxy
+	cleanup    func()
+}
+
+func materializeResult(result *helperResult, err error) (map[string]any, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer result.close()
+	data, err := io.ReadAll(result.response)
+	if err != nil {
+		return nil, err
+	}
+	result.finishMetadata(int64(len(data)))
+	result.metadata["response"].(map[string]any)["bodyBase64"] = base64.StdEncoding.EncodeToString(data)
+	return result.metadata, nil
+}
+
+func (result *helperResult) close() {
+	if result.cleanup != nil {
+		result.cleanup()
+		result.cleanup = nil
+	} else if result.response != nil {
+		result.response.Close()
+	}
+}
+
+func executeWithRootsRaw(in *Input, roots *x509.CertPool) (*helperResult, error) {
+	var clientCertificate *utls.Certificate
 	if in.Security != nil {
-		if in.Security.ClientCertificatePEM != nil || in.Security.ClientPrivateKeyPEM != nil {
-			return nil, fmt.Errorf("httpcloak does not support client certificate identities")
+		certPEM, keyPEM := in.Security.ClientCertificatePEM, in.Security.ClientPrivateKeyPEM
+		if (certPEM == nil) != (keyPEM == nil) {
+			return nil, fmt.Errorf("client certificate and private key must be provided together")
+		}
+		if certPEM != nil {
+			if len(*certPEM) > 1024*1024 || len(*keyPEM) > 1024*1024 {
+				return nil, fmt.Errorf("client certificate or private key is too large")
+			}
+			parsed, err := utls.X509KeyPair([]byte(*certPEM), []byte(*keyPEM))
+			if err != nil {
+				return nil, fmt.Errorf("invalid client certificate or private key: %w", err)
+			}
+			clientCertificate = &parsed
 		}
 		if len(in.Security.TrustedCAPEM) > 64 {
 			return nil, fmt.Errorf("too many custom trust certificates")
@@ -102,7 +160,7 @@ func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
 		return nil, fmt.Errorf("unsupported preset: %s", in.Preset)
 	}
 	originalPreset := in.Preset
-	customProtocol, customNote, err := applyClientHello(&in)
+	customProtocol, customNote, err := applyClientHello(in)
 	if err != nil {
 		return nil, err
 	}
@@ -114,10 +172,15 @@ func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
 		return nil, err
 	}
 	defer fingerprint.Unregister(transportPreset)
-	body, err := base64.StdEncoding.DecodeString(in.Request.Body)
+	encodedBody := in.Request.Body
+	newBody := func() (io.Reader, error) {
+		return base64.NewDecoder(base64.StdEncoding, strings.NewReader(encodedBody)), nil
+	}
+	bodyLength, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(encodedBody)))
 	if err != nil {
 		return nil, err
 	}
+	in.Request.Body = ""
 	pairs := make([]fingerprint.HeaderPair, 0, len(in.Request.Headers))
 	for _, h := range in.Request.Headers {
 		value := []byte{}
@@ -129,14 +192,30 @@ func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
 		}
 		pairs = append(pairs, fingerprint.HeaderPair{Key: h.Name, Value: string(value)})
 	}
-	protocol, negotiateHTTP1, err := selectRequestProtocol(in, customProtocol)
+	protocol, negotiateHTTP1, err := selectRequestProtocol(*in, customProtocol)
 	if err != nil {
 		return nil, err
 	}
 	if protocol == tr.ProtocolHTTP1 {
-		pairs, err = prepareH1Headers(pairs, len(body))
+		pairs, err = prepareH1Headers(pairs, bodyLength)
 		if err != nil {
 			return nil, err
+		}
+	}
+	// The forked H2 encoder synthesizes Go-http-client/2.0 unless its header
+	// map contains User-Agent. An empty value suppresses that default on the
+	// wire; retain the original pairs for a possible ALPN handoff to H1.
+	wirePairs := pairs
+	if protocol == tr.ProtocolHTTP2 {
+		hasUserAgent := false
+		for _, pair := range pairs {
+			if strings.EqualFold(pair.Key, "user-agent") {
+				hasUserAgent = true
+				break
+			}
+		}
+		if !hasUserAgent {
+			wirePairs = append(append([]fingerprint.HeaderPair(nil), pairs...), fingerprint.HeaderPair{Key: "user-agent", Value: ""})
 		}
 	}
 	var proxy *tr.ProxyConfig
@@ -147,14 +226,19 @@ func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
 		proxy = &tr.ProxyConfig{URL: in.Proxy.URL, Username: in.Proxy.Username, Password: in.Proxy.Password}
 	}
 	transport := tr.NewTransportWithConfig(transportPreset, proxy, &tr.TransportConfig{TLSOnly: true})
-	defer transport.Close()
+	owned := true
 	// Start with browser TLS over TCP. Only a typed, pre-request ALPN mismatch
 	// may select H1 in default mode; never use the library's H3/response fallback.
 	transport.SetProtocol(protocol)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
+	defer func() {
+		if owned {
+			transport.Close()
+			cancel()
+		}
+	}()
 	var tlsDetails map[string]any
-	transport.SetTLSVerify(&tr.TLSVerify{RootCAs: roots, VerifyConnection: func(s tls.ConnectionState) error {
+	transport.SetTLSVerify(&tr.TLSVerify{RootCAs: roots, ClientCertificate: clientCertificate, VerifyConnection: func(s tls.ConnectionState) error {
 		tlsDetails = map[string]any{"version": tls.VersionName(s.Version), "cipherSuite": tls.CipherSuiteName(s.CipherSuite), "alpn": s.NegotiatedProtocol, "serverName": s.ServerName, "offeredCipherSuites": []string{}, "offeredAlpn": []string{}, "signatureSchemes": []string{}, "supportedGroups": []string{}, "certificates": []any{}}
 		certs := []any{}
 		for _, c := range s.PeerCertificates {
@@ -163,15 +247,29 @@ func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
 		tlsDetails["certificates"] = certs
 		return nil
 	}})
-	response, err := sendNegotiated(ctx, transport, &tr.Request{Method: in.Request.Method, URL: in.Request.URL, Body: body, ExactHeaders: pairs, Timeout: 25 * time.Second}, protocol, negotiateHTTP1, proxy != nil)
+	request := &tr.Request{Method: in.Request.Method, URL: in.Request.URL, ExactHeaders: wirePairs, Timeout: 25 * time.Second, BodyLength: bodyLength}
+	if bodyLength > 0 {
+		request.BodyReader, _ = newBody()
+		request.GetBody = newBody
+	}
+	response, err := sendNegotiated(ctx, transport, request, protocol, negotiateHTTP1, pairs)
 	if err != nil {
 		return nil, err
 	}
-	defer response.Close()
-	data, err := io.ReadAll(response)
-	if err != nil {
-		return nil, err
+	owned = false
+	return &helperResult{
+		response: response, preset: in.Preset, customNote: customNote,
+		tlsDetails: tlsDetails, proxy: in.Proxy,
+		cleanup: func() { response.Close(); transport.Close(); cancel() },
+	}, nil
+}
+
+func (result *helperResult) finishMetadata(bodyLength int64) {
+	if result.metadata != nil {
+		return
 	}
+	response := result.response
+	tlsDetails := result.tlsDetails
 	headers := []Header{}
 	keys := make([]string, 0, len(response.Headers))
 	for k := range response.Headers {
@@ -202,26 +300,94 @@ func executeWithRoots(in Input, roots *x509.CertPool) (map[string]any, error) {
 		}
 	}
 	if decoded {
-		headers = append(headers, Header{"content-length", strconv.Itoa(len(data))})
+		headers = append(headers, Header{"content-length", strconv.FormatInt(bodyLength, 10)})
 	}
 	version := map[string]string{"h1": "HTTP/1.1", "h2": "HTTP/2", "h3": "HTTP/3"}[response.Protocol]
 	var tlsVersion any
 	if tlsDetails != nil {
 		tlsVersion = tlsDetails["version"]
 	}
-	notes := []string{"httpcloak preset: " + in.Preset, "httpcloak ExactHeaders enabled; response headers are parsed fields, not certified wire order"}
+	notes := []string{"httpcloak preset: " + result.preset, "httpcloak ExactHeaders enabled; response headers are parsed fields, not certified wire order"}
 	if response.Protocol == "h2" {
 		notes = append(notes, "httpcloak HTTP/2 Cookie fields follow the editor; automatic Cookie splitting is disabled")
 	} else if response.Protocol == "h1" {
 		notes = append(notes, "httpcloak HTTP/1.1 joins repeated Cookie fields with '; ' at the first Cookie position; original fields remain in the editor")
 	}
-	if customNote != "" {
-		notes = append(notes, customNote)
+	if result.customNote != "" {
+		notes = append(notes, result.customNote)
 	}
 	if decoded {
 		notes = append(notes, "httpcloak decoded response body; Content-Encoding removed and Content-Length updated")
 	}
-	return map[string]any{"response": map[string]any{"status": response.StatusCode, "version": version, "headers": headers, "bodyBase64": base64.StdEncoding.EncodeToString(data), "rawHeadBase64": nil, "sentRequestHeaders": nil, "tlsVersion": tlsVersion, "upstreamTls": tlsDetails}, "notes": notes}, nil
+	result.metadata = map[string]any{"response": map[string]any{"status": response.StatusCode, "version": version, "headers": headers, "rawHeadBase64": nil, "sentRequestHeaders": nil, "tlsVersion": tlsVersion, "upstreamTls": tlsDetails}, "notes": notes}
+}
+
+// Stream the network body before writing the final metadata. A read failure
+// leaves an explicit top-level error, so a partial body cannot be accepted.
+func writeResponse(w io.Writer, result *helperResult) error {
+	defer result.close()
+	if _, err := io.WriteString(w, `{"response":{"bodyBase64":"`); err != nil {
+		return err
+	}
+	encoded := base64.NewEncoder(base64.StdEncoding, w)
+	bodyLength, readErr := io.Copy(encoded, result.response)
+	if err := encoded.Close(); err != nil {
+		return err
+	}
+	result.finishMetadata(bodyLength)
+	fields, err := json.Marshal(result.metadata["response"])
+	if err != nil {
+		return err
+	}
+	if len(fields) < 2 || fields[0] != '{' || fields[len(fields)-1] != '}' {
+		return fmt.Errorf("invalid response metadata")
+	}
+	if _, err = io.WriteString(w, `"`); err != nil {
+		return err
+	}
+	if len(fields) > 2 {
+		if _, err = io.WriteString(w, ","); err != nil {
+			return err
+		}
+		if _, err = w.Write(fields[1 : len(fields)-1]); err != nil {
+			return err
+		}
+	}
+	notes, err := json.Marshal(result.metadata["notes"])
+	if err != nil {
+		return err
+	}
+	if _, err = io.WriteString(w, `},"notes":`); err != nil {
+		return err
+	}
+	if _, err = w.Write(notes); err != nil {
+		return err
+	}
+	if readErr != nil {
+		message, err := json.Marshal(redactProxyError(readErr, result.proxy))
+		if err != nil {
+			return err
+		}
+		if _, err = io.WriteString(w, `,"error":`); err != nil {
+			return err
+		}
+		if _, err = w.Write(message); err != nil {
+			return err
+		}
+	}
+	_, err = io.WriteString(w, "}\n")
+	return err
+}
+
+func redactProxyError(err error, proxy *Proxy) string {
+	message := err.Error()
+	if proxy != nil {
+		message = strings.ReplaceAll(message, proxy.URL, "[upstream proxy]")
+		if proxy.Password != "" {
+			message = strings.ReplaceAll(message, proxy.Password, "[redacted]")
+		}
+	}
+	return message
 }
 func main() {
 	enc := json.NewEncoder(os.Stdout)
@@ -231,22 +397,17 @@ func main() {
 	}
 	var input Input
 	err := json.NewDecoder(os.Stdin).Decode(&input)
-	var result map[string]any
+	var result *helperResult
 	if err == nil {
-		result, err = execute(input)
+		result, err = executeWithRootsRaw(&input, nil)
 	}
 	if err != nil {
-		message := err.Error()
-		if input.Proxy != nil {
-			message = strings.ReplaceAll(message, input.Proxy.URL, "[upstream proxy]")
-			if input.Proxy.Password != "" {
-				message = strings.ReplaceAll(message, input.Proxy.Password, "[redacted]")
-			}
-		}
-		enc.Encode(map[string]any{"error": message})
+		enc.Encode(map[string]any{"error": redactProxyError(err, input.Proxy)})
 		return
 	}
-	enc.Encode(result)
+	if err := writeResponse(os.Stdout, result); err != nil {
+		os.Exit(1)
+	}
 }
 
 func certificateDetails(c *x509.Certificate) map[string]any {

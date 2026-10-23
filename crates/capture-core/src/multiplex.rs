@@ -155,7 +155,7 @@ mod response_spool_tests {
     }
 
     #[tokio::test]
-    async fn h2_sse_spool_preserves_streamed_events_and_final_body() {
+    async fn h2_sse_receiver_emits_every_byte_without_a_second_body() {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let (client_io, server_io) = tokio::io::duplex(16384);
             let bytes: Vec<u8> = (0..100_003).map(|n| (n % 251) as u8).collect();
@@ -180,10 +180,9 @@ mod response_spool_tests {
             let mut response = response.await.unwrap().into_body();
             let (tx, mut rx) = tokio::sync::mpsc::channel(32);
             let context = crate::sse::Context { tx, started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)) };
-            let encoded = crate::sse::UPDATES.scope(context, async {
-                recv_h2_sse_body_spooled(&mut response).await.unwrap().into_base64().await.unwrap()
+            crate::sse::UPDATES.scope(context, async {
+                recv_h2_sse_body(&mut response).await.unwrap()
             }).await;
-            assert_eq!(encoded, STANDARD.encode(&bytes));
             let mut observed = Vec::new();
             while let Ok(event) = rx.try_recv() {
                 match event { crate::sse::Event::Data(chunk) => observed.extend_from_slice(&chunk), _ => panic!("unexpected SSE event") }
@@ -490,8 +489,12 @@ where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
     let fields: Vec<Header> = ordered_headers(response.headers(), response.extensions(), None, None)?.into_iter().filter(|h| !h.name.starts_with(':')).collect();
     let streaming = draft.method != "HEAD" && status != 204 && status != 304 && crate::sse::head(&CapturedResponse { trailers: vec![],  upstream_tls: None, sent_request_headers: Some(sent_fields.clone()), tls_version: None, status, version: "HTTP/2".into(), headers: fields.clone(), body_base64: Default::default(), raw_head_base64: None }).await?;
     let mut recv = response.into_body();
+    // The observer owns the growing SSE body. Do not spool and encode a second
+    // complete copy when the stream ends; send_observed moves that body into
+    // the final response after all queued events have been processed.
     let body_base64 = if streaming {
-        recv_h2_sse_body_spooled(&mut recv).await?.into_base64().await?
+        recv_h2_sse_body(&mut recv).await?;
+        String::new()
     } else {
         recv_h2_body_spooled(&mut recv).await?.into_base64().await?
     };
@@ -510,16 +513,16 @@ async fn recv_h2_body_spooled(stream: &mut h2::RecvStream) -> Result<BodySpool> 
     }
     Ok(body)
 }
-async fn recv_h2_sse_body_spooled(stream: &mut h2::RecvStream) -> Result<BodySpool> {
-    let mut body = BodySpool::empty();
+async fn recv_h2_sse_body(stream: &mut h2::RecvStream) -> Result<()> {
+    let mut received = 0usize;
     while let Some(chunk) = stream.data().await {
         let chunk = chunk?;
-        ensure!(chunk.len() as u64 <= MAX_BODY as u64 - body.len, "SSE body exceeds 8 MiB limit");
-        body.append(&chunk).await?;
+        ensure!(chunk.len() <= MAX_BODY - received, "SSE body exceeds 8 MiB limit");
+        received += chunk.len();
         stream.flow_control().release_capacity(chunk.len())?;
         crate::sse::emit(crate::sse::Event::Data(chunk.to_vec())).await?;
     }
-    Ok(body)
+    Ok(())
 }
 
 /// Compatibility helper for callers that explicitly need decoded bytes. Capture

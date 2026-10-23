@@ -6,7 +6,7 @@ new Function('module', 'exports', buildSync({
   platform: 'node', format: 'cjs', write: false,
 }).outputFiles[0].text)(loaded, loaded.exports);
 const {
-  bodyBytes, bytesBase64, utf8Body, textBody, requestContentType, rawBodyParser,
+  AUTO_EDIT_LIMIT, bodyBytes, bodyByteLength, bytesBase64, utf8Body, textBody, requestContentType, rawBodyParser,
   inferRequestBodyMode, rawContentType, withRequestBody, readFormBody,
   encodeFormBody, fileRequestBody, requestBodyWorkMatches,
 } = loaded.exports;
@@ -34,6 +34,27 @@ const draft = (overrides = {}) => ({
   const encoded = bytesBase64(binary);
   assert.equal(encoded, Buffer.from(binary).toString('base64'));
   assert.deepEqual(bodyBytes(encoded), binary);
+  assert.equal(bodyByteLength(encoded), binary.length);
+  for (const sample of ['', 'YQ==', 'YQ', 'YWI=', 'YWI', 'YWJj', ' Y W J j\r\n', 'AA==', 'AAA=', 'AAAA', 'A', 'AA=', 'AAA==', 'A===', 'AA==A', 'AA-A', 'YQ===', 'YWJj\u00a0']) {
+    let expected = null;
+    try { expected = atob(sample).length; } catch { /* Invalid Base64 is shown as an error. */ }
+    assert.equal(bodyByteLength(sample), expected, `Base64 length must match atob for ${JSON.stringify(sample)}`);
+  }
+  let seed = 17;
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\t\r\n !_-';
+  for (let trial = 0; trial < 1000; trial++) {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const length = seed % 32;
+    let sample = '';
+    for (let index = 0; index < length; index++) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      sample += alphabet[seed % alphabet.length];
+    }
+    let expected = null;
+    try { expected = atob(sample).length; } catch { /* invalid */ }
+    assert.equal(bodyByteLength(sample), expected, `Differential Base64 case ${trial}`);
+  }
+  assert.equal(bodyByteLength('A'.repeat(8 * 1024 * 1024)), 6 * 1024 * 1024);
   assert.equal(utf8Body(encoded), null, 'binary must never become an editable UTF-8 placeholder');
   assert.equal(utf8Body('!'), null);
   assert.equal(utf8Body(textBody('中文 + 😀\n')), '中文 + 😀\n');
@@ -45,6 +66,10 @@ const draft = (overrides = {}) => ({
   assert.equal(inferRequestBodyMode('aA==', 'multipart/form-data; boundary=test'), 'multipart');
   assert.equal(inferRequestBodyMode(textBody('{"a":1}'), 'application/vnd.test+json'), 'raw');
   assert.equal(inferRequestBodyMode('', ''), 'raw');
+  const overBudget = Buffer.alloc(AUTO_EDIT_LIMIT + 1, 65).toString('base64');
+  assert.equal(inferRequestBodyMode(overBudget, 'application/json'), 'file', 'large JSON must not decode automatically');
+  assert.equal(bodyByteLength(overBudget), AUTO_EDIT_LIMIT + 1);
+  assert.equal(inferRequestBodyMode('invalid!', 'text/plain'), 'file', 'invalid Base64 stays available for correction');
   assert.equal(rawBodyParser('Application/Problem+JSON; charset=utf-8'), 'json');
   assert.equal(rawBodyParser('text/html'), 'html');
   assert.equal(rawBodyParser('text/javascript'), 'babel');
@@ -121,7 +146,11 @@ const draft = (overrides = {}) => ({
   assert.equal(multipart[1].file.name, 'original.bin');
   assert.equal(multipart[1].file.type, 'application/octet-stream');
   assert.deepEqual(new Uint8Array(await multipart[1].file.arrayBuffer()), binary);
-  const rebuilt = await encodeFormBody(multipart, 'multipart');
+  const originalRequestArrayBuffer = Request.prototype.arrayBuffer;
+  Request.prototype.arrayBuffer = () => { throw new Error('Multipart must use the body stream'); };
+  let rebuilt;
+  try { rebuilt = await encodeFormBody(multipart, 'multipart'); }
+  finally { Request.prototype.arrayBuffer = originalRequestArrayBuffer; }
   assert.match(rebuilt.contentType, /^multipart\/form-data; boundary=/);
   const parsed = await new Response(bodyBytes(rebuilt.bodyBase64), { headers: { 'Content-Type': rebuilt.contentType } }).formData();
   assert.deepEqual([...parsed.keys()], ['tag', 'upload', 'tag']);
@@ -133,6 +162,24 @@ const draft = (overrides = {}) => ({
 
   const file = new File([binary], 'opaque.bin', { type: 'application/octet-stream' });
   assert.deepEqual(await fileRequestBody(file), { bodyBase64: encoded, contentType: 'application/octet-stream' });
+  const streamedBytes = Uint8Array.from({ length: 128 * 1024 + 5 }, (_, index) => index % 251);
+  const streamedFile = new Blob([], { type: 'application/octet-stream' });
+  streamedFile.arrayBuffer = () => { throw new Error('File must use the body stream'); };
+  streamedFile.stream = () => new ReadableStream({
+    start(controller) {
+      let offset = 0;
+      for (const size of [1, 2, 4, 32767, 3, 65537, streamedBytes.length]) {
+        if (offset >= streamedBytes.length) break;
+        const end = Math.min(offset + size, streamedBytes.length);
+        controller.enqueue(streamedBytes.subarray(offset, end));
+        offset = end;
+      }
+      controller.close();
+    },
+  });
+  assert.deepEqual(await fileRequestBody(streamedFile), {
+    bodyBase64: Buffer.from(streamedBytes).toString('base64'), contentType: 'application/octet-stream',
+  }, 'stream chunks split across Base64 triplets must round-trip exactly');
   const emptyFile = new File([], 'empty.bin');
   assert.deepEqual(await fileRequestBody(emptyFile), { bodyBase64: '', contentType: 'application/octet-stream' });
   const emptyMultipart = await encodeFormBody([{ name: 'empty', value: '', file: emptyFile }], 'multipart');

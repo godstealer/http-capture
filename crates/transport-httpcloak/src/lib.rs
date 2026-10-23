@@ -1,8 +1,8 @@
 //! One isolated helper per request. Cancellation drops/kills the child, with no local TCP listener.
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::{Path, PathBuf}, process::Stdio};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, process::Command};
+use std::{collections::BTreeMap, io::{BufReader, BufWriter, Seek, SeekFrom, Write}, path::{Path, PathBuf}, process::Stdio};
+use tokio::{io::AsyncWriteExt, process::Command};
 use transport_api::{CapturedResponse, Header, RequestDraft, SharedBody, TlsProfile, UpstreamProxyConfig};
 
 /// Serialize only enabled fields without building a second header collection.
@@ -46,11 +46,30 @@ struct Input<'a,S> {
  #[serde(skip_serializing_if="Option::is_none")]
  security:Option<&'a transport_api::TlsMaterial>,
 }
+/// Keep the helper's unchanged JSON protocol without holding a second full
+/// Base64 request in a Vec. The OS removes this private file on close.
+fn spool_input<S:Serialize>(input:&Input<'_,S>)->Result<std::fs::File> {
+ let mut writer=BufWriter::new(tempfile::tempfile().context("Creating private helper input")?);
+ serde_json::to_writer(&mut writer,input).context("Serializing helper input")?;
+ writer.flush()?;
+ let mut file=writer.into_inner().map_err(|error|error.into_error())?;
+ file.seek(SeekFrom::Start(0))?;
+ Ok(file)
+}
+async fn spool_reply<R:tokio::io::AsyncRead+Unpin>(source:&mut R)->std::io::Result<std::fs::File> {
+ let mut output=tokio::fs::File::from_std(tempfile::tempfile()?);
+ tokio::io::copy(source,&mut output).await?;
+ Ok(output.into_std().await)
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct Capabilities { #[serde(default)] pub custom_client_hello: bool,#[serde(default)]pub certificate_roots:bool, pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>> }
+pub struct Capabilities { #[serde(default)] pub custom_client_hello: bool,#[serde(default)]pub certificate_roots:bool,#[serde(default)]pub client_certificate:bool, pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>> }
 #[derive(Deserialize)]
 pub struct Reply { pub response: Option<CapturedResponse>, #[serde(default)] pub notes: Vec<String>, pub error: Option<String> }
+fn parse_reply(mut file:std::fs::File)->Result<Reply> {
+ file.seek(SeekFrom::Start(0))?;
+ serde_json::from_reader(BufReader::new(file)).context("Invalid helper response")
+}
 #[derive(Clone)]
 pub struct Helper { pub path: PathBuf, pub capabilities: Capabilities }
 impl Helper {
@@ -66,21 +85,20 @@ impl Helper {
  pub async fn send_with_security<S:Serialize>(&self,request:&RequestDraft<S>,preset:&str,proxy:Option<&transport_api::UpstreamProxyConfig>,security:Option<&transport_api::TlsMaterial>)->Result<(CapturedResponse,Vec<String>)>{
   ensure!(request.tls.client_hello_hex.is_none() || self.capabilities.custom_client_hello,"This httpcloak helper does not support ClientHello Hex; rebuild the helper");
   if let Some(security)=security{
-   ensure!(security.client_certificate_pem.is_none()&&security.client_private_key_pem.is_none(),"httpcloak 当前不支持客户端证书，请为此目标选择 Native/H2/H3 或 wreq；未忽略证书配置");
+   ensure!((security.client_certificate_pem.is_none()&&security.client_private_key_pem.is_none())||self.capabilities.client_certificate,"此 httpcloak helper 不支持客户端证书，请重新构建 helper；未忽略证书配置");
    ensure!(security.trusted_ca_pem.is_empty()||self.capabilities.certificate_roots,"此 httpcloak helper 不支持自定义信任 CA，请重新构建 helper");
   }
-  let input=serde_json::to_vec(&Input{request:request.into(),preset,proxy,security})?;
+  let input=spool_input(&Input{request:request.into(),preset,proxy,security})?;
   let mut cmd=Command::new(&self.path);
   cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
   #[cfg(windows)] cmd.creation_flags(0x08000000);
   let mut child=cmd.spawn().context("Starting httpcloak helper")?;
   let mut stdin=child.stdin.take().context("Helper stdin unavailable")?;
   let mut stdout=child.stdout.take().context("Helper stdout unavailable")?;
-  let write=async { stdin.write_all(&input).await?;stdin.shutdown().await?;drop(stdin);Ok::<_,std::io::Error>(()) };
-  let read=async {let mut bytes=Vec::new();stdout.read_to_end(&mut bytes).await?;Ok::<_,std::io::Error>(bytes)};
-  let (_,bytes)=tokio::try_join!(write,read)?;
+  let write=async { let mut input=tokio::fs::File::from_std(input);tokio::io::copy(&mut input,&mut stdin).await?;stdin.shutdown().await?;drop(stdin);Ok::<_,std::io::Error>(()) };
+  let (_,output)=tokio::try_join!(write,spool_reply(&mut stdout))?;
   let status=child.wait().await?;
-  let reply:Reply=serde_json::from_slice(&bytes).context("Invalid helper response")?;
+  let reply=tokio::task::spawn_blocking(move||parse_reply(output)).await??;
   if let Some(error)=reply.error{anyhow::bail!("{error}");}
   ensure!(status.success(),"httpcloak helper exited unsuccessfully");
   Ok((reply.response.context("Missing helper response")?,reply.notes))
@@ -91,6 +109,7 @@ impl Helper {
 mod tests {
  use super::*;
  use serde_json::{json,Value};
+ use std::io::Read;
 
  #[tokio::test]
  async fn unsupported_certificate_material_is_rejected_before_spawning_helper(){
@@ -99,6 +118,15 @@ mod tests {
   let error=helper.send_with_security(&request,"chrome-155-windows",None,Some(&security)).await.err().unwrap().to_string();assert!(error.contains("不支持自定义信任 CA"));
   let security=transport_api::TlsMaterial{client_private_key_pem:Some("secret fixture".into()),..Default::default()};
   let error=helper.send_with_security(&request,"chrome-155-windows",None,Some(&security)).await.err().unwrap().to_string();assert!(error.contains("不支持客户端证书"));assert!(!error.contains("secret fixture"));
+ }
+
+ #[tokio::test]
+ async fn client_identity_reaches_helper_when_capability_is_advertised(){
+  let helper=Helper{path:PathBuf::from("does-not-exist"),capabilities:serde_json::from_value(json!({"customClientHello":true,"certificateRoots":true,"clientCertificate":true,"protocolVersion":1,"browserVersions":{}})).unwrap()};
+  let security=transport_api::TlsMaterial{client_certificate_pem:Some("certificate fixture".into()),client_private_key_pem:Some("key fixture".into()),..Default::default()};
+  let error=helper.send_with_security(&draft(),"chrome-155-windows",None,Some(&security)).await.err().unwrap().to_string();
+  assert!(error.contains("Starting httpcloak helper"));
+  assert!(!error.contains("certificate fixture")&&!error.contains("key fixture"));
  }
 
  // Deliberately has no Clone implementation: send must accept Serialize alone.
@@ -183,11 +211,28 @@ mod tests {
   let input=Input{request:(&request).into(),preset:"chrome-155-windows",proxy:None,security:None};
   assert!(std::ptr::eq(input.request.body_base64,&request.body_base64));
   assert!(std::ptr::eq(input.request.scripts,&request.scripts));
-  let bytes=serde_json::to_vec(&input).unwrap();
+  let mut bytes=Vec::new();
+  spool_input(&input).unwrap().read_to_end(&mut bytes).unwrap();
   assert_eq!(request.body_base64.as_ptr(),pointer);
   assert_eq!(request.body_base64.len(),2*1024*1024);
   let wire:Value=serde_json::from_slice(&bytes).unwrap();
   assert_eq!(wire["request"]["bodyBase64"].as_str().unwrap().len(),2*1024*1024);
   assert!(wire["request"]["bodyBase64"].as_str().unwrap().bytes().all(|byte|byte==b'A'));
+ }
+
+ #[tokio::test]
+ async fn helper_reply_streams_into_private_file_before_deserializing_body(){
+  let body="QUJD".repeat(512*1024);
+  let wire=serde_json::to_vec(&json!({"response":{"status":200,"version":"HTTP/2","headers":[],"bodyBase64":body,"rawHeadBase64":null},"notes":["ok"],"error":null})).unwrap();
+  let (mut sender,mut receiver)=tokio::io::duplex(1024);
+  let send=tokio::spawn(async move{
+   for part in wire.chunks(257){sender.write_all(part).await.unwrap();}
+   sender.shutdown().await.unwrap();
+  });
+  let file=spool_reply(&mut receiver).await.unwrap();
+  send.await.unwrap();
+  let reply=parse_reply(file).unwrap();
+  assert_eq!(reply.response.unwrap().body_base64.as_str(),body);
+  assert_eq!(reply.notes,["ok"]);
  }
 }

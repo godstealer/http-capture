@@ -10,7 +10,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 const VARIANTS: [&str; 4] = ["request", "response", "originalRequest", "originalResponse"];
-const METADATA_SQL: &str = "json_remove(f.data,'$.request.bodyBase64','$.response.bodyBase64','$.originalRequest.bodyBase64','$.originalResponse.bodyBase64')";
+const METADATA_SQL: &str = "CASE WHEN p.version=coalesce(c.version,0) THEN p.metadata ELSE json_remove(f.data,'$.request.bodyBase64','$.response.bodyBase64','$.originalRequest.bodyBase64','$.originalResponse.bodyBase64') END";
+const REFS_SQL: &str = "CASE WHEN p.version=coalesce(c.version,0) THEN p.body_refs ELSE NULL END";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,11 +90,12 @@ pub(super) fn body_location(conn: &Connection, id: &str, variant: &str) -> Resul
     ensure!(kind.as_deref() == Some("text"), "Requested body is unavailable");
     if let Some(marker) = marker {
         ensure!(marker == format!("@body:{variant}"), "Invalid stored body reference");
-        let (rowid, length, kind): (i64, u64, String) = conn.query_row(
-            "SELECT rowid,length(body),typeof(body) FROM flow_bodies WHERE flow_id=?1 AND slot=?2",
-            params![id, variant], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        let (rowid, length, capacity, kind): (i64, u64, u64, String) = conn.query_row(
+            "SELECT rowid,coalesce(logical_length,length(body)),length(body),typeof(body) FROM flow_bodies WHERE flow_id=?1 AND slot=?2",
+            params![id, variant], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional()?.context("Stored body is missing")?;
         ensure!(kind == "blob", "Invalid stored body data");
+        ensure!(length<=capacity,"Stored body length exceeds BLOB capacity");
         Ok(BodyLocation::Blob { rowid, length })
     } else {
         let encoded_length = length.context("Requested body is unavailable")?;
@@ -103,9 +105,13 @@ pub(super) fn body_location(conn: &Connection, id: &str, variant: &str) -> Resul
     }
 }
 
-fn metadata_projection(conn: &Connection, raw: String, instance: &str, version: i64) -> Result<FlowMetadata> {
+fn metadata_projection(conn: &Connection, raw: String, cached_refs: Option<String>, instance: &str, version: i64) -> Result<FlowMetadata> {
     let metadata: Value = serde_json::from_str(&raw)?;
     let id = metadata["id"].as_str().context("Invalid recorded flow metadata")?;
+    if let Some(cached_refs) = cached_refs {
+        let body_references = serde_json::from_str(&cached_refs)?;
+        return Ok(FlowMetadata { metadata, body_revision: format!("{instance}:{version}"), body_references });
+    }
     let mut body_references = BTreeMap::new();
     for variant in VARIANTS {
         let path = body_slot(variant)?;
@@ -132,7 +138,7 @@ impl Store {
         let previous = since.and_then(|value| value.strip_prefix(&format!("{}:", self.1)))
             .and_then(|value| value.parse::<i64>().ok()).filter(|value| *value >= 0 && *value <= version);
         let reset = previous.is_none();
-        let sql = format!("SELECT f.rowid,{METADATA_SQL},coalesce(c.version,0) FROM flows f LEFT JOIN flow_changes c ON c.id=f.id {} ORDER BY f.rowid DESC",
+        let sql = format!("SELECT f.rowid,{METADATA_SQL},coalesce(c.version,0),{REFS_SQL} FROM flows f LEFT JOIN flow_changes c ON c.id=f.id LEFT JOIN flow_projection p ON p.flow_id=f.id {} ORDER BY f.rowid DESC",
             if reset { "" } else { "WHERE c.version>?1" });
         let rows = {
             let mut statement = tx.prepare(&sql)?;
@@ -140,7 +146,7 @@ impl Store {
             let mut rows = Vec::new();
             while let Some(row) = cursor.next()? {
                 rows.push(FlowMetadataChange { position: row.get(0)?,
-                    flow: metadata_projection(&tx, row.get(1)?, &self.1, row.get(2)?)? });
+                    flow: metadata_projection(&tx, row.get(1)?, row.get(3)?, &self.1, row.get(2)?)? });
             }
             rows
         };
@@ -157,11 +163,11 @@ impl Store {
         valid_id(id)?;
         let mut conn = self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
         let tx = conn.transaction()?;
-        let sql = format!("SELECT {METADATA_SQL},coalesce(c.version,0) FROM flows f LEFT JOIN flow_changes c ON c.id=f.id WHERE f.id=?1");
-        let row: Option<(String, i64)> = tx.query_row(&sql, [id], |row| Ok((row.get(0)?, row.get(1)?))).optional()?;
-        let result = if let Some((raw, version)) = row {
+        let sql = format!("SELECT {METADATA_SQL},coalesce(c.version,0),{REFS_SQL} FROM flows f LEFT JOIN flow_changes c ON c.id=f.id LEFT JOIN flow_projection p ON p.flow_id=f.id WHERE f.id=?1");
+        let row: Option<(String, i64, Option<String>)> = tx.query_row(&sql, [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional()?;
+        let result = if let Some((raw, version, cached_refs)) = row {
             if let Some(expected) = expected_version { check_revision(&tx, id, expected, &self.1)?; }
-            Some(metadata_projection(&tx, raw, &self.1, version)?)
+            Some(metadata_projection(&tx, raw, cached_refs, &self.1, version)?)
         } else { None };
         tx.commit()?;
         Ok(result)
@@ -265,6 +271,65 @@ mod tests {
         // Existing full public APIs retain exact bodies and complete history.
         assert_eq!(store.list().unwrap().len(),251);
         assert_eq!(serde_json::to_value(store.get_at_revision("history-0",&metadata.body_revision).unwrap()).unwrap(),serde_json::to_value(source).unwrap());
+    }
+    #[test]
+    fn metadata_cache_survives_restart_and_legacy_rows_fall_back_without_rewrite() {
+        let directory = tempfile::tempdir().unwrap(); let path = directory.path().join("views.db");
+        let legacy = flow("legacy", 100_001);
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TABLE flows(id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, data TEXT NOT NULL);").unwrap();
+        connection.execute("INSERT INTO flows VALUES(?1,?2,?3)", params![legacy.id, legacy.started_at, serde_json::to_string(&legacy).unwrap()]).unwrap();
+        drop(connection);
+        let store = Store::open(&path).unwrap();
+        let cached_count: i64 = store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_projection WHERE flow_id='legacy'", [], |row| row.get(0)).unwrap();
+        assert_eq!(cached_count, 0, "existing rows are read without an eager whole-database rewrite");
+        let old = store.metadata("legacy", None).unwrap().unwrap();
+        assert_eq!(old.metadata, without_bodies(serde_json::to_value(&legacy).unwrap()));
+        assert_eq!(old.body_references["request"].byte_length, 100_001);
+
+        let current = flow("cached", 100_001); store.insert(&current).unwrap();
+        let (cached, refs, projection_version): (String, String, i64) = store.0.lock().unwrap().query_row("SELECT metadata,body_refs,version FROM flow_projection WHERE flow_id='cached'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&cached).unwrap(), without_bodies(serde_json::to_value(&current).unwrap()));
+        assert!(!cached.contains("bodyBase64")); assert!(!cached.contains("@body:"));
+        let references: BTreeMap<String, BodyReference> = serde_json::from_str(&refs).unwrap();
+        assert_eq!(references["request"].byte_length, 100_001);
+        assert_eq!(references["response"].byte_length, 100_002);
+        drop(store);
+        let connection = Connection::open(&path).unwrap();
+        connection.execute("UPDATE flows SET data=json_set(data,'$.notes',json_array('external update')) WHERE id='cached'", []).unwrap();
+        drop(connection);
+        let reopened = Store::open(&path).unwrap();
+        let changed_version: i64 = reopened.0.lock().unwrap().query_row("SELECT version FROM flow_changes WHERE id='cached'", [], |row| row.get(0)).unwrap();
+        assert!(changed_version > projection_version, "direct SQL edits invalidate the cached projection");
+        assert_eq!(reopened.metadata("cached", None).unwrap().unwrap().metadata["notes"][0], "external update");
+        reopened.insert(&flow("fresh",100_001)).unwrap();
+        reopened.compact().unwrap();
+        let (projection_version_after_compact,record_version_after_compact): (i64,i64) = reopened.0.lock().unwrap().query_row(
+            "SELECT p.version,c.version FROM flow_projection p JOIN flow_changes c ON c.id=p.flow_id WHERE p.flow_id='cached'",[],
+            |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_ne!(projection_version_after_compact,record_version_after_compact,"compaction must not validate a stale projection");
+        let (fresh_projection,fresh_record): (i64,i64) = reopened.0.lock().unwrap().query_row(
+            "SELECT p.version,c.version FROM flow_projection p JOIN flow_changes c ON c.id=p.flow_id WHERE p.flow_id='fresh'",[],
+            |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_eq!(fresh_projection,fresh_record,"compaction keeps a current projection usable");
+        assert_eq!(reopened.metadata("cached", None).unwrap().unwrap().metadata["notes"][0], "external update");
+        assert_eq!(reopened.metadata("legacy", None).unwrap().unwrap().body_references["response"].byte_length, 100_002);
+    }
+
+    #[test]
+    fn external_blob_change_invalidates_projection_and_pinned_body_read() {
+        let directory=tempfile::tempdir().unwrap();let store=store(directory.path());
+        store.insert(&flow("blob-change",100_001)).unwrap();
+        let before=store.metadata("blob-change",None).unwrap().unwrap();
+        store.0.lock().unwrap().execute("UPDATE flow_bodies SET body=zeroblob(length(body)) WHERE flow_id='blob-change' AND slot='response'",[]).unwrap();
+        assert!(store.read_body_at_revision("blob-change","response",&before.body_revision,0,16).is_err());
+        let after=store.metadata("blob-change",None).unwrap().unwrap();
+        assert_ne!(after.body_revision,before.body_revision);
+        assert_eq!(after.body_references["response"].byte_length,100_002);
+        let chunk=store.read_body_at_revision("blob-change","response",&after.body_revision,0,16).unwrap();
+        assert_eq!(STANDARD.decode(chunk.body_base64).unwrap(),[0u8;16]);
+        let cached:i64=store.0.lock().unwrap().query_row("SELECT count(*) FROM flow_projection WHERE flow_id='blob-change'",[],|row|row.get(0)).unwrap();
+        assert_eq!(cached,0);
     }
 
     #[test]

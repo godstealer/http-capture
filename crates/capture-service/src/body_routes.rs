@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use capture_core::{model::Flow, store::{FlowMetadata, FlowMetadataChanges, McpBodyChunk}};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io::{Seek, SeekFrom};
 use tokio::io::AsyncReadExt;
 
@@ -33,6 +33,25 @@ struct BodyRead { id: String, variant: String, expected_version: String, offset:
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BodyDownload { id: String, variant: String, expected_version: String }
+
+#[derive(Serialize)]
+struct PreparedBodyDownload { url: String, length: u64 }
+
+async fn prepare_download(State(state): State<Shared>, headers: HeaderMap, Json(input): Json<BodyDownload>) -> Result<Json<PreparedBodyDownload>, ApiError> {
+    authorize(&headers, &state)?;
+    let store=state.engine.store.clone();
+    // Copy and validate the complete, pinned entity before issuing a browser
+    // download capability. The database lock is released before navigation.
+    let (file,length)=tokio::task::spawn_blocking(move|| -> anyhow::Result<_> {
+        let mut file=tempfile::tempfile()?;
+        let length=store.copy_body_at_revision(&input.id,&input.variant,&input.expected_version,&mut file)?;
+        file.seek(SeekFrom::Start(0))?;
+        Ok((file,length))
+    }).await.map_err(error)?.map_err(error)?;
+    if length>256*1024*1024 {return Err(error("Body download exceeds 256 MiB limit"));}
+    let url=super::session_export_routes::stage_body_file(file,length)?;
+    Ok(Json(PreparedBodyDownload{url,length}))
+}
 
 async fn metadata_changes(State(state): State<Shared>, headers: HeaderMap, Json(input): Json<Changes>) -> Result<Json<FlowMetadataChanges>, ApiError> {
     authorize(&headers, &state)?;
@@ -100,6 +119,7 @@ pub(super) fn router() -> Router<Shared> {
         .route("/flows/get", post(complete))
         .route("/flows/body/read", post(read))
         .route("/flows/body/download", post(download))
+        .route("/flows/body/prepare", post(prepare_download))
         .layer(DefaultBodyLimit::max(8 * 1024))
 }
 
@@ -162,7 +182,7 @@ mod tests {
     #[tokio::test]
     async fn authenticate_before_extracting_and_reject_unknown_or_unbounded_requests() {
         let fixture = fixture().await;
-        for path in ["/flows/metadata/changes", "/flows/metadata", "/flows/get", "/flows/body/read", "/flows/body/download"] {
+        for path in ["/flows/metadata/changes", "/flows/metadata", "/flows/get", "/flows/body/read", "/flows/body/download", "/flows/body/prepare"] {
             assert_eq!(raw(fixture.address, path, "{malformed", false).await.0, 401);
             assert_eq!(call(fixture.address, path, json!({"unexpected":"field"})).await.0, 422);
         }
@@ -200,9 +220,20 @@ mod tests {
         let headers = headers.to_ascii_lowercase();
         for expected in ["content-type: application/octet-stream","content-disposition: attachment; filename=\"http-capture-body.bin\"","x-content-type-options: nosniff","cache-control: no-store"] { assert!(headers.contains(expected)); }
         assert!(headers.contains(&format!("content-length: {}",bytes.len())));
+        let (status,prepared)=call(fixture.address,"/flows/body/prepare",download.clone()).await;
+        assert_eq!(status,200);
+        assert_eq!(prepared["length"],bytes.len());
+        let url=prepared["url"].as_str().unwrap();
+        assert!(url.starts_with("http://127.0.0.1:1421/session-export/download/"));
+        let ticket=url.rsplit('/').next().unwrap().to_string();
+        let response=crate::session_export_routes::download(axum::extract::Path(ticket.clone())).await.unwrap();
+        assert_eq!(response.headers()[header::CONTENT_TYPE],"application/octet-stream");
+        assert_eq!(response.headers()[header::CONTENT_LENGTH],bytes.len().to_string());
+        assert_eq!(axum::body::to_bytes(response.into_body(),bytes.len()+1).await.unwrap().as_ref(),bytes);
+        assert!(crate::session_export_routes::download(axum::extract::Path(ticket)).await.is_err());
         fixture.state.engine.store.insert(&sample("history-0","bmV3")).unwrap();
-        for path in ["/flows/get","/flows/metadata","/flows/body/download"] {
-            let input = if path=="/flows/body/download" {download.clone()} else {json!({"id":"history-0","expectedVersion":revision})};
+        for path in ["/flows/get","/flows/metadata","/flows/body/download","/flows/body/prepare"] {
+            let input = if path=="/flows/body/download" || path=="/flows/body/prepare" {download.clone()} else {json!({"id":"history-0","expectedVersion":revision})};
             assert_eq!(call(fixture.address,path,input).await.0,400,"{path} must reject stale references");
         }
         fixture.state.engine.store.delete_flows(vec!["history-0".into()]).unwrap();

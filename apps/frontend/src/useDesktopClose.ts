@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { t } from './i18n';
 import { createCloseGuard } from './closeGuard';
 
@@ -11,7 +12,7 @@ export function useDesktopClose(flush:()=>Promise<boolean>,libraryDirty:()=>bool
   const [closing,setClosing]=useState(false);
   useEffect(()=>{
     if(!isTauri())return;
-    let disposed=false;let unlisten:(()=>void)|undefined;
+    let disposed=false;let unlisten:(()=>void)|undefined;let unlistenQuit:(()=>void)|undefined;
     const window=getCurrentWindow();
     const guard=createCloseGuard({
       blocked:()=>current.current.updating?.()??false,
@@ -28,7 +29,10 @@ export function useDesktopClose(flush:()=>Promise<boolean>,libraryDirty:()=>bool
       event.preventDefault();
       await guard.close();
     }).then(stop=>{if(disposed)stop();else unlisten=stop;}).catch(error=>{if(!disposed)current.current.onError(String(error));});
-    return()=>{disposed=true;guard.dispose();unlisten?.();};
+    void listen('desktop-close-requested',()=>{void guard.close();})
+      .then(stop=>{if(disposed)stop();else unlistenQuit=stop;})
+      .catch(error=>{if(!disposed)current.current.onError(String(error));});
+    return()=>{disposed=true;guard.dispose();unlisten?.();unlistenQuit?.();};
   },[]);
   return closing;
 }

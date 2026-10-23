@@ -1,4 +1,4 @@
-use crate::{http1::prepare, model::*, transport::{EngineContract,SendFuture}};
+use crate::{http1::prepare_validated_fields, model::*, transport::{EngineContract,SendFuture}};
 use std::path::PathBuf;
 pub struct HttpcloakEngine(pub transport_httpcloak::Helper);
 impl HttpcloakEngine {
@@ -21,7 +21,7 @@ impl EngineContract<RequestDraft,crate::upstream::UpstreamProxy> for HttpcloakEn
   anyhow::ensure!(draft.pseudo_headers.iter().all(|h|matches!(h.name.as_str(),":method"|":scheme"|":authority"|":path")),"httpcloak does not support extended HTTP/2 pseudo headers");
   let versions=self.0.capabilities.browser_versions.get(&draft.tls.preset).ok_or_else(||anyhow::anyhow!("Unsupported httpcloak browser"))?;
   let version=crate::browser_profiles::requested(draft,versions)?;
-  let (_,headers,_,mut notes)=prepare(draft)?;
+  let (_,headers,mut notes)=prepare_validated_fields(draft)?;
   let mut outgoing=draft.clone();outgoing.headers=headers;
   if !outgoing.pseudo_headers.is_empty(){
    notes.push("httpcloak regenerates HTTP/2 pseudo headers from the current method and URL using the selected browser preset order; captured pseudo headers remain in the original request".into());

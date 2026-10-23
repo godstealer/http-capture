@@ -94,9 +94,10 @@ impl Store {
         ensure!(kind.as_deref()==Some("text"), "Requested body is unavailable");
         let (plan, bytes) = if let Some(marker) = marker {
             ensure!(marker==format!("@body:{direction}"), "Invalid stored body reference");
-            let rowid:i64=tx.query_row("SELECT rowid FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,direction],|r|r.get(0))?;
+            let (rowid,stored_length):(i64,u64)=tx.query_row("SELECT rowid,coalesce(logical_length,length(body)) FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,direction],|r|Ok((r.get(0)?,r.get(1)?)))?;
             let blob=tx.blob_open(rusqlite::DatabaseName::Main,"flow_bodies","body",rowid,true)?;
-            let plan=crate::body_read::BodyReadPlan::new(blob.len() as u64,offset,length)?;
+            ensure!(stored_length<=blob.len() as u64,"Stored body length exceeds BLOB capacity");
+            let plan=crate::body_read::BodyReadPlan::new(stored_length,offset,length)?;
             let mut bytes=vec![0;plan.length];
             if plan.length>0 {blob.read_at_exact(&mut bytes,usize::try_from(plan.start)?)?;}
             (plan,bytes)

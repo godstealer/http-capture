@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -151,6 +152,9 @@ func TestAutoALPNH1SendsPostOnceAndKeepsExactHeaders(t *testing.T) {
 				want := []string{"X-Start: one", "Cookie: same=1; quoted=\"x;y\"; same=2; empty=", "X-Middle: middle", "X-Start: two"}
 				got := []string{}
 				for _, line := range actual.head {
+					if strings.HasPrefix(strings.ToLower(line), "user-agent:") {
+						t.Fatal("ALPN H1 handoff added a User-Agent absent from the editor", line)
+					}
 					if strings.HasPrefix(line, "X-") || strings.HasPrefix(line, "Cookie:") || strings.HasPrefix(line, "cookie:") {
 						got = append(got, line)
 					}
@@ -217,6 +221,50 @@ func TestAutoALPNKeepsHTTP2CookieWireFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAbsentUserAgentDoesNotBecomeGoDefault(t *testing.T) {
+	t.Run("h2", func(t *testing.T) {
+		url, roots, received := h2CookieWireServer(t)
+		_, err := executeWithRoots(Input{Preset: "chrome-155-windows", Request: Draft{Method: "GET", URL: url,
+			Headers: []Header{{Name: "x-only", Value: "kept"}}}}, roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual := <-received
+		if actual.err != nil {
+			t.Fatal(actual.err)
+		}
+		ordinary := []string{}
+		for _, field := range actual.fields {
+			if !strings.HasPrefix(field.Name, ":") {
+				ordinary = append(ordinary, field.Name+":"+field.Value)
+			}
+		}
+		if !reflect.DeepEqual(ordinary, []string{"x-only:kept"}) {
+			t.Fatal("unexpected H2 fields", ordinary)
+		}
+	})
+	t.Run("h1", func(t *testing.T) {
+		seen := make(chan http.Header, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			seen <- request.Header.Clone()
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+		_, err := execute(Input{Preset: "chrome-155-windows", Request: Draft{Method: "GET", URL: server.URL,
+			Headers: []Header{{Name: "x-only", Value: "kept"}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual := <-seen
+		if _, exists := actual["User-Agent"]; exists {
+			t.Fatal("unexpected H1 User-Agent", actual)
+		}
+		if actual.Get("X-Only") != "kept" {
+			t.Fatal("editor header changed", actual)
+		}
+	})
 }
 
 func TestALPNStrictChoicesAndUntrustedCertificateNeverFallBack(t *testing.T) {
@@ -339,7 +387,7 @@ func TestALPNHandoffCancellationClosesSocket(t *testing.T) {
 	transport.SetTLSVerify(&tr.TLSVerify{RootCAs: fixture.roots})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	response, err := sendNegotiated(ctx, transport, &tr.Request{Method: "POST", URL: fixture.url, Body: []byte("once"), Timeout: 3 * time.Second}, tr.ProtocolHTTP2, true, false)
+	response, err := sendNegotiated(ctx, transport, &tr.Request{Method: "POST", URL: fixture.url, Body: []byte("once"), Timeout: 3 * time.Second}, tr.ProtocolHTTP2, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,6 +610,90 @@ func TestNegotiatedHTTP2PostUsesOneTLSConnection(t *testing.T) {
 			}
 			if connects != nil && (connects.Load() != 1 || unexpected.Load() != 0) {
 				t.Fatal("SOCKS H2 raced H3 or redialed")
+			}
+		})
+	}
+}
+
+func TestProxiedHTTP2ResponseStreamsBeforeServerEOF(t *testing.T) {
+	for _, route := range []string{"http", "socks5"} {
+		t.Run(route, func(t *testing.T) {
+			finish := make(chan struct{})
+			first := bytes.Repeat([]byte("abc"), 16*1024)
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.ProtoMajor != 2 {
+					t.Errorf("expected h2, got %s", r.Proto)
+				}
+				_, _ = w.Write(first)
+				w.(http.Flusher).Flush()
+				<-finish
+			}))
+			server.EnableHTTP2 = true
+			server.StartTLS()
+			defer server.Close()
+			roots := x509.NewCertPool()
+			roots.AddCert(server.Certificate())
+			input := Input{Preset: "chrome-152-windows", Request: Draft{Method: "GET", URL: "https://127.0.0.1:1/stream"}}
+			var proxy *httptest.Server
+			if route == "socks5" {
+				address, _, _ := socksALPNProxy(t, strings.TrimPrefix(server.URL, "https://"))
+				input.Proxy = &Proxy{URL: address}
+			} else {
+				proxy = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "CONNECT" {
+						w.WriteHeader(400)
+						return
+					}
+					upstream, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "https://"))
+					if err != nil {
+						w.WriteHeader(502)
+						return
+					}
+					client, buffered, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						upstream.Close()
+						return
+					}
+					defer client.Close()
+					defer upstream.Close()
+					fmt.Fprint(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
+					go io.Copy(upstream, buffered)
+					io.Copy(client, upstream)
+				}))
+				defer proxy.Close()
+				input.Proxy = &Proxy{URL: proxy.URL}
+			}
+			result, err := executeWithRootsRaw(&input, roots)
+			if err != nil {
+				close(finish)
+				t.Fatal(err)
+			}
+			output := &responseProgressWriter{progress: make(chan struct{}, 1)}
+			completed := make(chan error, 1)
+			go func() { completed <- writeResponse(output, result) }()
+			select {
+			case <-output.progress:
+			case <-time.After(3 * time.Second):
+				close(finish)
+				<-completed
+				t.Fatal("proxied response was buffered until EOF")
+			}
+			close(finish)
+			if err := <-completed; err != nil {
+				t.Fatal(err)
+			}
+			var reply struct {
+				Response struct {
+					Body    string `json:"bodyBase64"`
+					Version string `json:"version"`
+				} `json:"response"`
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &reply); err != nil {
+				t.Fatal(err)
+			}
+			if reply.Error != "" || reply.Response.Version != "HTTP/2" || reply.Response.Body != base64.StdEncoding.EncodeToString(first) {
+				t.Fatal("proxied stream changed")
 			}
 		})
 	}

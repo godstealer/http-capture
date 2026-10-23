@@ -5,6 +5,7 @@ export type RawBodyParser = 'text' | 'json' | 'html' | 'babel' | 'css';
 export type RequestBodyPart = { name: string; value: string; file?: File };
 export type EncodedRequestBody = { bodyBase64: string; contentType: string };
 export type RequestBodyUpdateOptions = { preserveContentEncoding?: boolean };
+export const AUTO_EDIT_LIMIT = 8 * 1024 * 1024;
 
 export function requestContentType(headers: Header[]): string {
   return headers.find(header => !header.disabled && header.name.toLowerCase() === 'content-type')?.value ?? '';
@@ -15,12 +16,60 @@ export function contentTypeName(value: string): string {
 export function bodyBytes(encoded: string) {
   return Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
 }
+/** Match the browser's forgiving Base64 length without allocating decoded bytes. */
+export function bodyByteLength(encoded: string): number | null {
+  let digits = 0, padding = 0;
+  for (let index = 0; index < encoded.length; index++) {
+    const code = encoded.charCodeAt(index);
+    if (code === 9 || code === 10 || code === 12 || code === 13 || code === 32) continue;
+    if (code === 61) { if (++padding > 2) return null; continue; }
+    if (padding) return null;
+    if (!((code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+      || (code >= 48 && code <= 57) || code === 43 || code === 47)) return null;
+    digits++;
+  }
+  const remainder = digits % 4;
+  if (remainder === 1 || (padding && (digits + padding) % 4 !== 0)) return null;
+  return Math.floor(digits / 4) * 3 + (remainder === 2 ? 1 : remainder === 3 ? 2 : 0);
+}
 export function bytesBase64(bytes: Uint8Array): string {
   const chunks: string[] = [];
   for (let offset = 0; offset < bytes.length; offset += 32768) {
     chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 32768)));
   }
   return btoa(chunks.join(''));
+}
+/** Encode a body stream without materializing a second full-size binary buffer. */
+async function streamBase64(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const encoded: string[] = [];
+  const carry = new Uint8Array(3);
+  let carryLength = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value?.length) continue;
+      let offset = 0;
+      while (carryLength && carryLength < 3 && offset < value.length) carry[carryLength++] = value[offset++];
+      if (carryLength === 3) {
+        encoded.push(bytesBase64(carry));
+        carryLength = 0;
+      }
+      // 32766 is a multiple of three, so padding is only added after the
+      // final stream chunk, even when the source splits at arbitrary bytes.
+      while (offset + 3 <= value.length) {
+        const end = offset + Math.min(32766, Math.floor((value.length - offset) / 3) * 3);
+        encoded.push(bytesBase64(value.subarray(offset, end)));
+        offset = end;
+      }
+      while (offset < value.length) carry[carryLength++] = value[offset++];
+    }
+    if (carryLength) encoded.push(bytesBase64(carry.subarray(0, carryLength)));
+    return encoded.join('');
+  } finally {
+    reader.releaseLock();
+  }
 }
 export function utf8Body(encoded: string): string | null {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bodyBytes(encoded)); }
@@ -37,7 +86,10 @@ export function rawBodyParser(mime: string): RawBodyParser {
   if (type === 'text/css') return 'css';
   return 'text';
 }
-export function inferRequestBodyMode(bodyBase64: string, mime: string): RequestBodyMode {
+export function inferRequestBodyMode(bodyBase64: string, mime: string, length: number | null = bodyByteLength(bodyBase64)): RequestBodyMode {
+  // Automatic mode selection must not decode a large captured draft merely to
+  // guess whether it is editable text. The user can still choose an editor.
+  if (length === null || length > AUTO_EDIT_LIMIT) return 'file';
   const type = contentTypeName(mime);
   if (type === 'application/x-www-form-urlencoded') return 'form';
   if (type === 'multipart/form-data') return 'multipart';
@@ -143,10 +195,10 @@ export async function encodeFormBody(parts: RequestBodyPart[], mode: 'form' | 'm
     else form.append(part.name, part.value);
   }
   const request = new Request('http://localhost/', { method: 'POST', body: form });
-  return { bodyBase64: bytesBase64(new Uint8Array(await request.arrayBuffer())), contentType: request.headers.get('content-type')! };
+  return { bodyBase64: await streamBase64(request.body!), contentType: request.headers.get('content-type')! };
 }
 export async function fileRequestBody(file: Blob): Promise<EncodedRequestBody> {
-  return { bodyBase64: bytesBase64(new Uint8Array(await file.arrayBuffer())), contentType: file.type || 'application/octet-stream' };
+  return { bodyBase64: await streamBase64(file.stream()), contentType: file.type || 'application/octet-stream' };
 }
 
 /** Async body work may merge into newer headers/URL, but never a newer body,

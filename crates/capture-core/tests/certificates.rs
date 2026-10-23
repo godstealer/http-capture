@@ -3,7 +3,7 @@ use base64::{engine::general_purpose::STANDARD,Engine as _};
 use std::sync::Arc;
 use tokio::{io::{AsyncReadExt,AsyncWriteExt},net::TcpListener};
 fn configure(engine:&Engine,kind:&str,certificate:&str,key:&str,port:u16){
- let state=engine.certificates.import(Import{name:kind.into(),kind:kind.into(),host:"localhost".into(),port,certificate_base64:STANDARD.encode(certificate),private_key_pem:key.into(),expected_version:engine.certificates.snapshot().unwrap().version}).unwrap();
+ let state=engine.certificates.import(Import{name:kind.into(),kind:kind.into(),host:"localhost".into(),port,certificate_base64:STANDARD.encode(certificate),private_key_pem:key.into(),container_format:None,password:None,expected_version:engine.certificates.snapshot().unwrap().version}).unwrap();
  engine.certificates.change(Change{action:"enable".into(),id:Some(state.entries.last().unwrap().id.clone()),enabled:true,expected_version:state.version}).unwrap();
 }
 #[tokio::test]

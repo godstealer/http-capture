@@ -30,7 +30,7 @@ async function load(file){
     builder.onLoad({filter:/[/\\]i18n\.ts$/},()=>({contents:'export const t=(key,args={})=>key.replace(/\\{([^}]+)\\}/g,(_,name)=>String(args[name]??""));export const useLanguage=()=>({language:"zh-CN"});export const currentLanguage=()=>"zh-CN";'}));
     builder.onLoad({filter:/[/\\](ResponseBody|RecordedBody|GrpcPanel|SplitPane|FileProgress|HeaderOrder|WebSocketFrames)\.tsx$/},args=>{const name=args.path.split(/[/\\]/).at(-1).replace('.tsx','');return{contents:`export function ${name}(){};export default ${name};`}});
     builder.onLoad({filter:/[/\\]importSession\.ts$/},()=>({contents:'export const importSession=(...args)=>globalThis.__historyImport(...args);'}));
-    builder.onLoad({filter:/[/\\]saveFile\.ts$/},()=>({contents:'export const chooseSave=(...args)=>globalThis.__historyChoose(...args);export const saveText=(...args)=>globalThis.__historySave(...args);'}));
+    builder.onLoad({filter:/[/\\]saveFile\.ts$/},()=>({contents:'export const chooseSave=(...args)=>globalThis.__historyChoose(...args);export const downloadTextParts=(...args)=>globalThis.__historySave(...args);'}));
     builder.onLoad({filter:/[/\\]har\.ts$/},()=>({contents:'export const serializeHar=(...args)=>globalThis.__historyHar(...args);'}));
   }}]});
   const m={exports:{}};new Function('module','exports','require',output.outputFiles[0].text)(m,m.exports,name=>name==='react'?react:name==='react/jsx-runtime'?{jsx,jsxs:jsx}:name==='react-dom'?{createPortal:n=>n}:name==='lucide-react'?new Proxy({},{get:()=>()=>null}):require(name));return m.exports;
@@ -89,10 +89,37 @@ function metadata(value=full){const result=structuredClone(value);result.bodyRev
   const {RequestOverview}=await load('RequestDetails.tsx');const overview=harness(RequestOverview,{request:meta.request,flow:meta});assert(overview.all(n=>n.type?.name==='PropertyTable').flatMap(n=>n.props.rows).some(([name,value])=>name==='请求'&&value==='16 B'));overview.props={request:meta.originalRequest,flow:meta};overview.render();assert(overview.all(n=>n.type?.name==='PropertyTable').flatMap(n=>n.props.rows).some(([name,value])=>name==='请求'&&value==='0 B'));overview.dispose();
   const {saveSession}=await load('sessions.ts');const order=[],saved=[];
   global.__historyChoose=async()=>{order.push('picker');return undefined};global.__historySave=async(...args)=>{saved.push(args);return'saved'};
-  global.__historyInvoke=async(command,args)=>{order.push('body');assert.equal(command,'get_flow');assert.deepEqual(args,{id:meta.id,expectedVersion:meta.bodyRevision});return full};
-  await saveSession([meta],'json');assert.deepEqual(order,['picker','body']);assert.deepEqual(JSON.parse(saved[0][0]).flows,[full],'session exports all four complete entities and duplicate headers');
-  for(const raw of [true,false]){global.__historyHar=async(items,rawMode)=>{assert.deepEqual(items,[full]);assert.equal(rawMode,raw);return'complete HAR'};await saveSession([meta],'har',()=>{},raw);assert.equal(saved.at(-1)[0],'complete HAR')}
+  global.__historyInvoke=async(command,args)=>{if(command==='begin_browser_session_export')throw Error('HTTP 404: old service');order.push('body');assert.equal(command,'get_flow');assert.deepEqual(args,{id:meta.id,expectedVersion:meta.bodyRevision});return full};
+  await saveSession([meta],'json');assert.deepEqual(order,['picker','body']);assert.deepEqual(JSON.parse(saved[0][0].join('')).flows,[full],'session exports all four complete entities and duplicate headers');
+  await saveSession([meta,meta],'json');assert.deepEqual(JSON.parse(saved[1][0].join('')).flows,[full,full]);assert.equal(saved[1][0].length,5,'compatibility download keeps separate record parts');
+  for(const raw of [true,false]){global.__historyHar=async(items,rawMode)=>{assert.deepEqual(items,[full]);assert.equal(rawMode,raw);return JSON.stringify({log:{entries:[{marker:'complete HAR'}]}})};await saveSession([meta],'har',()=>{},raw);assert.equal(JSON.parse(saved.at(-1)[0].join('')).log.entries[0].marker,'complete HAR')}
   global.__historyChoose=async()=>null;const reads=order.length;await saveSession([meta]);assert.equal(order.length,reads,'cancelling picker does not fetch a complete body');
-  global.__historyChoose=async()=>undefined;global.__historyInvoke=async()=>{throw Error('Recorded flow changed')};const writes=saved.length;await assert.rejects(()=>saveSession([meta]),/changed/);assert.equal(saved.length,writes,'a failed complete read never saves metadata or a partial session');
+  global.__historyChoose=async()=>undefined;let completedReads=0;global.__historyInvoke=async(command)=>{if(command==='begin_browser_session_export')throw Error('HTTP 404: old service');if(++completedReads===2)throw Error('Recorded flow changed');return full};const writes=saved.length;await assert.rejects(()=>saveSession([meta,meta]),/changed/);assert.equal(saved.length,writes,'a failed later complete read never submits a partial session');
+  const ticket='a'.repeat(64),chunks=[];let clicked;const originalCreate=document.createElement;
+  document.createElement=()=>({click(){clicked={href:this.href,download:this.download,referrerPolicy:this.referrerPolicy}}});
+  global.__historyInvoke=async(command,args)=>{
+    if(command==='begin_browser_session_export')return ticket;
+    if(command==='append_browser_session_export'){chunks.push(args);return args.offset+args.bytes.length}
+    if(command==='get_flow')return full;
+    if(command==='finish_browser_session_export')return args.commit?{url:`http://127.0.0.1:1421/session-export/download/${ticket}`}:null;
+    throw Error(`unexpected ${command}`)
+  };
+  try{await saveSession([meta,meta],'json')}finally{document.createElement=originalCreate}
+  let expectedOffset=0;for(const chunk of chunks){assert.equal(chunk.offset,expectedOffset);assert(chunk.bytes.length<=65536);expectedOffset+=chunk.bytes.length}
+  assert.deepEqual(JSON.parse(Buffer.concat(chunks.map(chunk=>Buffer.from(chunk.bytes))).toString()).flows,[full,full]);
+  assert.equal(clicked.href,`http://127.0.0.1:1421/session-export/download/${ticket}`);assert.equal(clicked.referrerPolicy,'no-referrer');
+  const largeFull={...full,request:{...full.request,bodyBase64:'A'.repeat(70000)}};chunks.length=0;
+  global.__historyInvoke=async(command,args)=>{
+    if(command==='begin_browser_session_export')return ticket;
+    if(command==='append_browser_session_export'){chunks.push(args);return args.offset+args.bytes.length}
+    if(command==='get_flow')return largeFull;
+    if(command==='finish_browser_session_export')return args.commit?{url:`http://127.0.0.1:1421/session-export/download/${ticket}`}:null;
+    throw Error(`unexpected ${command}`)
+  };
+  document.createElement=()=>({click(){}});
+  try{await saveSession([metadata(largeFull)],'json')}finally{document.createElement=originalCreate}
+  assert(chunks.some(chunk=>chunk.bytes.length===65536),'large record uses bounded upload chunks');
+  let largeOffset=0;for(const chunk of chunks){assert.equal(chunk.offset,largeOffset);largeOffset+=chunk.bytes.length}
+  assert.deepEqual(JSON.parse(Buffer.concat(chunks.map(chunk=>Buffer.from(chunk.bytes))).toString()).flows,[largeFull]);
   console.log('History actions UI: metadata-only display, original empty body, pinned copy/edit/rewrite, hidden-result guards, exact exports and save-picker cancellation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

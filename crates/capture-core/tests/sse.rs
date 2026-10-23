@@ -117,6 +117,13 @@ async fn h2_sse_capture_streams_and_preserves_completed_body() {
         let chunk = body.data().await.unwrap().unwrap(); assert_eq!(chunk.as_ref(), FIRST); body.flow_control().release_capacity(chunk.len()).unwrap();
         let live = received(&engine).await; assert_eq!(live.client_protocol.as_deref(), Some("HTTP/2"));
         release.send(()).unwrap(); assert_eq!(capture_core::multiplex::recv_h2_body(&mut body).await.unwrap(), b"data: last\n\n");
+        let completed=tokio::time::timeout(Duration::from_secs(3),async {
+            loop {
+                if let Some(flow)=engine.store.list().unwrap().into_iter().find(|flow|flow.state=="completed") {break flow;}
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("H2 SSE capture must save final body");
+        assert_eq!(STANDARD.decode(&completed.response.unwrap().body_base64).unwrap(),[FIRST,b"data: last\n\n"].concat());
         driver.abort(); capture.abort(); server.abort();
     }).await.unwrap();
 }

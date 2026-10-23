@@ -53,6 +53,14 @@ const page=(bytes,total=bytes.length,offset=0)=>({offset,totalBytes:total,bodyBa
   respond=async()=>page(Uint8Array.of(0,255,65));const binary=harness(Component,{...props,mode:'raw'});await binary.tick();assert(binary.button('原始文本片段').props.disabled);assert.equal(binary.all(n=>n.type==='pre')[0].props.children,'00000000  00 ff 41');binary.click('Base64');binary.click('复制当前片段');assert.equal(copied.at(-1),'AP9B');binary.dispose();
   respond=async()=>page(Buffer.from('abc'));const encoded=harness(Component,{...props,mode:'raw',headers:[{name:'Content-Encoding',value:'gzip'}]});await encoded.tick();assert(encoded.button('原始文本片段').props.disabled);assert(text(encoded.tree).includes('片段保留内容编码'));encoded.dispose();
 
+  const liveHeaders=[{name:'Content-Type',value:'text/event-stream'},{name:'Content-Encoding',value:'gzip'}];
+  const live=harness(Component,{...props,flow:{...flow('live-sse'),state:'receiving'},headers:liveHeaders});await live.tick();
+  assert.equal(live.all(node=>typeof node.type==='function'&&node.type.name==='RecordedSseLive').length,1,'live compressed SSE mounts bounded range view');
+  assert.equal(live.all(node=>typeof node.type==='function'&&node.type.name==='ResponseBody').length,0,'an unfinished gzip prefix never enters the complete-body worker');
+  live.props={...live.props,flow:{...flow('live-sse',3,'instance:2'),state:'completed'}};live.render();await live.tick();
+  assert.equal(live.all(node=>typeof node.type==='function'&&node.type.name==='RecordedSseLive').length,0,'small completed SSE returns to complete-body view');
+  live.dispose();
+
   const old=deferred(),fresh=deferred();respond=args=>args.id==='old'?old.promise:fresh.promise;
   const stale=harness(Component,{...props,flow:flow('old')});stale.props={...props,flow:flow('fresh')};stale.render();fresh.resolve(page(Buffer.from('NEW')));await stale.tick();old.resolve(page(Buffer.from('OLD')));await stale.tick();assert.equal(stale.all(n=>typeof n.type==='function')[0].props.body,'TkVX','late selection responses cannot replace current bytes');
   const original=deferred();respond=()=>original.promise;stale.props={...props,flow:flow('fresh'),variant:'originalResponse'};stale.render();assert.equal(calls.at(-1)[1].variant,'originalResponse');stale.props={...stale.props,connected:false};stale.render();original.resolve(page(Buffer.from('OLD')));await stale.tick();assert(text(stale.tree).includes('内核已断开'));assert.equal(stale.all(n=>typeof n.type==='function').length,0);assert(!stale.slots.some(slot=>slot?.page),'disconnection releases cached bytes');

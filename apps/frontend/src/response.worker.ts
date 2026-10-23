@@ -2,10 +2,14 @@ import { formatResponse, responseLanguage } from './formatResponse';
 import { decodeZstd } from './decodeZstd';
 import { decodeBrotli } from './decodeBrotli';
 import { responseType } from './responseType';
+import { exceedsInlineResponseBudget } from './responseBodyBudget';
 
 self.onmessage = async (event: MessageEvent<{ body: string; contentType: string; encoding: string; parser: string }>) => {
   const { body, contentType, encoding, parser } = event.data;
   try {
+    if (parser !== 'bytes' && exceedsInlineResponseBudget(body)) {
+      throw new Error('正文超过 8 MiB，请查看 Base64 或下载原始字节');
+    }
     let bytes: Uint8Array<ArrayBuffer> = Uint8Array.from(atob(body), c => c.charCodeAt(0));
     for (const name of encoding.toLowerCase().split(',').map(s => s.trim()).filter(s => s && s !== 'identity').reverse()) {
       if (name === 'zstd') { bytes = decodeZstd(bytes); continue; }

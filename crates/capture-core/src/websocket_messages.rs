@@ -1,11 +1,11 @@
 //! Inspection only: reassembly/decompression never alters the relayed frames.
-use crate::{model::Header,websocket::Frame};
+use crate::{model::{Header,SharedBody},websocket::Frame};
 use base64::{Engine as _,engine::general_purpose::STANDARD};
 use serde::{Serialize,Deserialize};
 use flate2::{Decompress,FlushDecompress};
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct Message {pub direction:String,pub at_ms:u64,pub opcode:u8,pub payload_base64:String,pub frame_count:usize,pub error:Option<String>}
+pub struct Message {pub direction:String,pub at_ms:u64,pub opcode:u8,pub payload_base64:SharedBody,pub frame_count:usize,pub error:Option<String>}
 struct Direction {pending:Option<(u8,bool,u64,usize,Vec<u8>)>,inflater:Decompress,reset:bool,broken:bool}
 pub struct Assembler {client:Direction,server:Direction,total:usize}
 impl Assembler {
@@ -17,6 +17,14 @@ impl Assembler {
  pub fn push(&mut self,frame:&Frame)->Option<Message>{
   if frame.opcode>=8{return None;}
   let state=if frame.direction=="client"{&mut self.client}else{&mut self.server};
+  if frame.opcode!=0 && frame.fin && !frame.compressed {
+   // A complete plain frame is already the complete message. Validate its
+   // Base64 with bounded scratch space, then share the encoded allocation.
+   let mut decoder=base64::read::DecoderReader::new(frame.payload_base64.as_bytes(),&STANDARD);
+   let length=std::io::copy(&mut decoder,&mut std::io::sink()).ok()? as usize;
+   state.pending=None;self.total+=length;
+   return Some(Message{direction:frame.direction.clone(),at_ms:frame.at_ms,opcode:frame.opcode,payload_base64:frame.payload_base64.clone(),frame_count:1,error:None});
+  }
   if frame.opcode!=0 {state.pending=Some((frame.opcode,frame.compressed,frame.at_ms,0,Vec::new()));}
   let pending=state.pending.as_mut()?;pending.3+=1;pending.4.extend(STANDARD.decode(&frame.payload_base64).ok()?);
   if !frame.fin{return None;}
@@ -40,13 +48,24 @@ impl Assembler {
    match result {Ok(decoded)=>payload=decoded,Err(e)=>{state.broken=true;payload.clear();error=Some(e.to_string());}}
   }
   self.total+=payload.len();
-  Some(Message{direction:frame.direction.clone(),at_ms,opcode,payload_base64:STANDARD.encode(payload),frame_count,error})
+  Some(Message{direction:frame.direction.clone(),at_ms,opcode,payload_base64:STANDARD.encode(payload).into(),frame_count,error})
  }
 }
 #[cfg(test)]
 mod tests {
  use super::*;
- fn frame(opcode:u8,fin:bool,compressed:bool,payload:&[u8])->Frame{Frame{direction:"server".into(),at_ms:1,opcode,fin,compressed,payload_base64:STANDARD.encode(payload)}}
+ fn frame(opcode:u8,fin:bool,compressed:bool,payload:&[u8])->Frame{Frame{direction:"server".into(),at_ms:1,opcode,fin,compressed,payload_base64:STANDARD.encode(payload).into()}}
+ #[test] fn plain_single_frame_shares_encoded_message_without_changing_json(){
+  let plain=frame(2,true,false,&vec![7;1024*1024]);let pointer=plain.payload_base64.as_ptr();
+  let message=Assembler::new(&[]).push(&plain).unwrap();
+  assert_eq!(message.payload_base64.as_ptr(),pointer);
+  assert_eq!(message.payload_base64.len(),plain.payload_base64.len());
+  assert_eq!(serde_json::to_value(&message).unwrap()["payloadBase64"],plain.payload_base64.as_str());
+  let session=crate::websocket::Session{state:"open".into(),frames:vec![plain],messages:vec![message]};
+  for _ in 0..32 {let copy=session.clone();assert_eq!(copy.frames[0].payload_base64.as_ptr(),pointer);assert_eq!(copy.messages[0].payload_base64.as_ptr(),pointer);}
+  let mut invalid=frame(1,true,false,b"ok");invalid.payload_base64="%%%=".into();
+  assert!(Assembler::new(&[]).push(&invalid).is_none());
+ }
  #[test] fn fragments_and_control_frames(){let mut a=Assembler::new(&[]);assert!(a.push(&frame(1,false,false,b"hel")).is_none());assert!(a.push(&frame(9,true,false,b"ping")).is_none());let m=a.push(&frame(0,true,false,b"lo")).unwrap();assert_eq!(STANDARD.decode(m.payload_base64).unwrap(),b"hello");assert_eq!(m.frame_count,2);}
  #[test] fn compression_with_context_takeover(){let mut a=Assembler::new(&[]);let mut compressor=flate2::Compress::new(flate2::Compression::default(),false);for _ in 0..3{let body=b"dictionary reuse dictionary reuse";let mut output=Vec::with_capacity(256);compressor.compress_vec(body,&mut output,flate2::FlushCompress::Sync).unwrap();assert!(output.ends_with(&[0,0,255,255]));output.truncate(output.len()-4);let m=a.push(&frame(1,true,true,&output)).unwrap();assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(STANDARD.decode(m.payload_base64).unwrap(),body);}}
 }

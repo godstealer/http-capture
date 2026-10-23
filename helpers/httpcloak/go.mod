@@ -9,6 +9,8 @@ require (
 	github.com/sardanioss/utls v1.10.5
 )
 
+replace github.com/sardanioss/httpcloak => ./fork/httpcloak
+
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect

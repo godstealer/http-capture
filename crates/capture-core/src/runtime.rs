@@ -1,18 +1,20 @@
 //! The single listener/lifecycle owner shared by desktop, REST and MCP adapters.
-use crate::{model::{Flow, ProxyStatus, RequestDraft}, proxy::{self, ProxyHandle}, Engine};
+use crate::{model::{Flow, ProxyStatus, RequestDraft}, proxy::{self, ProxyHandle}, quic_proxy::{self,QuicHandle}, Engine};
+use serde::Serialize;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tokio::sync::Mutex;
 
 pub struct CaptureRuntime {
     pub engine: Arc<Engine>,
     pub proxy: Mutex<Option<ProxyHandle>>,
+    reverse_quic: Mutex<Option<(QuicHandle,String)>>,
     pub network_lifecycle: Mutex<()>,
     pub configuration_migration: Mutex<()>,
     pub shutting_down: AtomicBool,
 }
 impl CaptureRuntime {
     pub fn new(engine: Arc<Engine>) -> Arc<Self> {
-        Arc::new(Self { engine, proxy: Mutex::new(None), network_lifecycle: Mutex::new(()), configuration_migration:Mutex::new(()), shutting_down: AtomicBool::new(false) })
+        Arc::new(Self { engine, proxy: Mutex::new(None), reverse_quic:Mutex::new(None), network_lifecycle: Mutex::new(()), configuration_migration:Mutex::new(()), shutting_down: AtomicBool::new(false) })
     }
     pub fn ensure_network_ready(&self) -> Result<(), String> {
         if self.shutting_down.load(Ordering::Acquire) { Err("应用正在安装更新或退出，请稍后再操作".into()) } else { self.engine.store.configuration_ready().map_err(|error|error.to_string()) }
@@ -31,6 +33,7 @@ impl CaptureRuntime {
             Err(error) => errors.push(format!("恢复系统代理任务失败：{error}")),
         }
         if let Some(proxy) = self.proxy.lock().await.take() { proxy.stop().await; }
+        if let Some((reverse,_))=self.reverse_quic.lock().await.take(){reverse.stop().await;}
         if let Err(error) = self.engine.tun.stop().await { errors.push(format!("停止 TUN 失败：{error}")); }
         if errors.is_empty() { Ok(()) } else { Err(errors.join("；")) }
     }
@@ -55,6 +58,30 @@ impl CaptureRuntime {
         if let Some(proxy) = handle.take() { proxy.stop().await; }
         restored
     }
+    pub async fn reverse_quic_status(&self)->ReverseQuicStatus {
+        let mut active=self.reverse_quic.lock().await;
+        if active.as_ref().is_some_and(|(handle,_)|handle.is_finished()) {
+            if let Some((handle,_))=active.take(){handle.stop().await;}
+        }
+        ReverseQuicStatus{running:active.is_some(),address:active.as_ref().map(|(handle,_)|handle.address.to_string()),
+            target:active.as_ref().map(|(_,target)|target.clone()),ca_path:self.engine.ca.cert_path.to_string_lossy().into_owned()}
+    }
+    pub async fn start_reverse_quic(&self,target:String,port:u16)->Result<ReverseQuicStatus,String>{
+        let _lifecycle=self.network_lifecycle.lock().await;self.ensure_network_ready()?;
+        let target=url::Url::parse(&target).map_err(|error|error.to_string())?;
+        quic_proxy::validate_target(&target).map_err(|error|error.to_string())?;
+        let mut active=self.reverse_quic.lock().await;
+        if active.as_ref().is_some_and(|(handle,_)|handle.is_finished()) {if let Some((handle,_))=active.take(){handle.stop().await;}}
+        if active.is_some(){return Err("H3 reverse proxy is already running".into());}
+        let handle=quic_proxy::start_reverse(self.engine.clone(),target.clone(),port).await.map_err(|error|format!("{error:#}"))?;
+        let address=handle.address.to_string();*active=Some((handle,target.to_string()));
+        Ok(ReverseQuicStatus{running:true,address:Some(address),target:Some(target.to_string()),ca_path:self.engine.ca.cert_path.to_string_lossy().into_owned()})
+    }
+    pub async fn stop_reverse_quic(&self)->Result<ReverseQuicStatus,String>{
+        let _lifecycle=self.network_lifecycle.lock().await;
+        if let Some((handle,_))=self.reverse_quic.lock().await.take(){handle.stop().await;}
+        Ok(self.reverse_quic_status().await)
+    }
     pub async fn replay(&self, request: RequestDraft, parent_id: Option<String>, execution_id: Option<String>) -> Result<Flow, String> {
         let execution_id = {
             let _lifecycle = self.network_lifecycle.lock().await;
@@ -64,3 +91,6 @@ impl CaptureRuntime {
         self.engine.replay(request, parent_id, Some(execution_id)).await.map_err(|e| e.to_string())
     }
 }
+#[derive(Clone,Debug,Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct ReverseQuicStatus {pub running:bool,pub address:Option<String>,pub target:Option<String>,pub ca_path:String}

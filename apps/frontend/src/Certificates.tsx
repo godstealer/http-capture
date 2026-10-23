@@ -10,10 +10,11 @@ const labels={ca:'抓包 CA',client:'客户端证书',trust:'服务器信任'};
 export default function Certificates({connected,active=true}:{connected:boolean;active?:boolean}){
  const [snapshot,setSnapshot]=useState<Snapshot>(),[kind,setKind]=useState<Kind>('ca'),[name,setName]=useState(''),[host,setHost]=useState(''),[port,setPort]=useState('443');
  const [certificate,setCertificate]=useState(''),[privateKey,setPrivateKey]=useState(''),[certName,setCertName]=useState(''),[keyName,setKeyName]=useState('');
+ const [p12,setP12]=useState(false),[encryptedKey,setEncryptedKey]=useState(false),[password,setPassword]=useState('');
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[confirmation,setConfirmation]=useState<{action:string;id:string|null;enabled?:boolean;version:string}>();
  const generation=useRef(0),certInput=useRef<HTMLInputElement>(null),keyInput=useRef<HTMLInputElement>(null),busyNow=useRef(false),certRead=useRef(0),keyRead=useRef(0);
  const context=useRef({connected,active});context.current={connected,active};
- function clearFiles(){certRead.current++;keyRead.current++;setCertificate('');setPrivateKey('');setCertName('');setKeyName('');if(certInput.current)certInput.current.value='';if(keyInput.current)keyInput.current.value='';}
+ function clearFiles(){certRead.current++;keyRead.current++;setCertificate('');setPrivateKey('');setCertName('');setKeyName('');setP12(false);setEncryptedKey(false);setPassword('');if(certInput.current)certInput.current.value='';if(keyInput.current)keyInput.current.value='';}
  useEffect(()=>{const ticket=++generation.current;setConfirmation(undefined);setError('');setNotice('');clearFiles();
   if(active&&connected)void invoke<Snapshot>('certificates').then(value=>{if(ticket===generation.current)setSnapshot(value)}).catch(error=>{if(ticket===generation.current)setError(String(error))});
   return()=>{generation.current++;certRead.current++;keyRead.current++};
@@ -21,11 +22,11 @@ export default function Certificates({connected,active=true}:{connected:boolean;
  async function load(){if(busyNow.current||!connected)return;const ticket=++generation.current;setError('');try{const value=await invoke<Snapshot>('certificates');if(ticket===generation.current)setSnapshot(value)}catch(error){if(ticket===generation.current)setError(String(error))}}
  async function read(file:File,isKey:boolean){
   const counter=isKey?keyRead:certRead,ticket=++counter.current,epoch=generation.current;setError('');
-  if(isKey){setPrivateKey('');setKeyName('')}else{setCertificate('');setCertName('')}
+  if(isKey){setPrivateKey('');setKeyName('');setEncryptedKey(false)}else{setCertificate('');setCertName('');setP12(false);setPassword('')}
   if(file.size>1024*1024){setError(t('证书或私钥文件不能超过 1 MiB。'));return;}
   try{const bytes=new Uint8Array(await file.arrayBuffer());if(ticket!==counter.current||epoch!==generation.current||!context.current.active||!context.current.connected)return;
-   if(isKey){const value=new TextDecoder('utf-8',{fatal:true}).decode(bytes);if(!value.includes('-----BEGIN ')||value.includes('ENCRYPTED'))throw Error(t('请选择未加密的 PEM 私钥文件。'));setPrivateKey(value);setKeyName(file.name)}
-   else{setCertificate(bytesBase64(bytes));setCertName(file.name)}
+   if(isKey){const value=new TextDecoder('utf-8',{fatal:true}).decode(bytes);if(!value.includes('-----BEGIN '))throw Error(t('请选择 PEM 私钥文件。'));setPrivateKey(value);setEncryptedKey(value.includes('ENCRYPTED'));setKeyName(file.name)}
+   else{const container=/\.(p12|pfx)$/i.test(file.name);setCertificate(bytesBase64(bytes));setCertName(file.name);setP12(container);if(container){keyRead.current++;setPrivateKey('');setKeyName('');setEncryptedKey(false);if(keyInput.current)keyInput.current.value=''}}
   }catch(error){if(ticket===counter.current&&epoch===generation.current)setError(String(error))}
  }
  async function mutate(command:'import_certificate'|'change_certificate',input:Record<string,unknown>){
@@ -36,7 +37,7 @@ export default function Certificates({connected,active=true}:{connected:boolean;
   finally{busyNow.current=false;setBusy(false)}
  }
  function importFile(){const number=Number(port);if(kind!=='ca'&&(!/^\d+$/.test(port)||!Number.isInteger(number)||number<1||number>65535)){setError(t('端口必须为 1–65535 的整数。'));return;}
-  void mutate('import_certificate',{name,kind,host:kind==='ca'?'':host,port:kind==='ca'?443:number,certificateBase64:certificate,privateKeyPem:kind==='trust'?'':privateKey,expectedVersion:snapshot?.version});
+  void mutate('import_certificate',{name,kind,host:kind==='ca'?'':host,port:kind==='ca'?443:number,certificateBase64:certificate,privateKeyPem:kind==='trust'||p12?'':privateKey,...(p12?{containerFormat:'p12'}:{}),...(p12||encryptedKey?{password}:{}),expectedVersion:snapshot?.version});
  }
  function confirm(action:string,id:string|null,enabled=false){if(snapshot)setConfirmation({action,id,enabled,version:snapshot.version})}
  if(!active)return null;
@@ -47,14 +48,15 @@ export default function Certificates({connected,active=true}:{connected:boolean;
   {snapshot?.restartRequired&&<p className="format-note" role="status">{t('抓包 CA 变更将在重启内核后生效；当前连接继续使用原 CA。重启后请在客户端信任新 CA。')}</p>}
   {error&&<p role="alert" className="bad">{error}</p>}{notice&&<p role="status">{notice}</p>}
   <div className="certificate-kinds" role="group" aria-label={t('证书用途')}>{(['ca','client','trust']as const).map(value=><button type="button" key={value} aria-pressed={kind===value} disabled={busy} onClick={()=>{setKind(value);setConfirmation(undefined);clearFiles();setError('');setNotice('')}}>{t(labels[value])}</button>)}</div>
-  <p>{kind==='ca'?t('导入自己的 CA 证书和配套私钥，用于签发抓包证书；仅导入不会替换当前 CA。'):kind==='client'?t('为精确域名和端口配置 mTLS 身份。Native、Auto、H2、H3、gRPC、WebSocket 和 wreq 可使用；httpcloak 暂不支持，会明确拒绝。'):t('添加验证上游 HTTPS 服务器的信任 CA；仍验证证书链、有效期和域名。域名留空时适用于所有目标。')}</p>
-  <p className="muted">{t('当前支持 PEM / DER 证书与未加密 PEM 私钥；P12/PFX 和加密私钥请先转换。Windows 使用当前用户加密保护，其他系统使用受限本机文件。')}</p>
+  <p>{kind==='ca'?t('导入自己的 CA 证书和配套私钥，用于签发抓包证书；仅导入不会替换当前 CA。'):kind==='client'?t('为精确域名和端口配置 mTLS 身份。Native、Auto、H2、H3、gRPC、WebSocket、wreq 和新版 httpcloak helper 可使用。'):t('添加验证上游 HTTPS 服务器的信任 CA；仍验证证书链、有效期和域名。域名留空时适用于所有目标。')}</p>
+  <p className="muted">{t('支持 PEM / DER 证书、P12/PFX 容器和加密 PEM 私钥；解锁密码仅用于本次导入，不保存。Windows 使用当前用户加密保护，其他系统使用受限本机文件。')}</p>
   <fieldset disabled={busy||!connected||!snapshot} className="certificate-form"><legend>{t('导入证书')}</legend>
    <label>{t('名称')}<input value={name} maxLength={100} onChange={event=>setName(event.target.value)}/></label>
    {kind!=='ca'&&<><label>{t('精确域名或 IP')}<input value={host} maxLength={253} placeholder={kind==='client'?'api.example.com':t('留空表示所有目标')} onChange={event=>setHost(event.target.value)}/></label><label>{t('端口')}<input type="text" inputMode="numeric" value={port} onChange={event=>setPort(event.target.value.replace(/\D/g,''))}/></label></>}
-   <label>{t('公钥证书文件')}<input ref={certInput} type="file" accept=".pem,.crt,.cer,.der" onChange={event=>{const file=event.target.files?.[0];if(file)void read(file,false)}}/>{certName&&<small>{certName}</small>}</label>
-   {kind!=='trust'&&<label>{t('配套私钥文件')}<input ref={keyInput} type="file" accept=".pem,.key" onChange={event=>{const file=event.target.files?.[0];if(file)void read(file,true)}}/>{keyName&&<small>{keyName}</small>}</label>}
-   <button type="button" disabled={!name.trim()||!certificate||(kind!=='trust'&&!privateKey)||(kind==='client'&&!host.trim())} onClick={importFile}>{busy?t('处理中…'):t('导入并保存')}</button>
+   <label>{t('公钥证书或 P12/PFX 文件')}<input ref={certInput} type="file" accept=".pem,.crt,.cer,.der,.p12,.pfx" onChange={event=>{const file=event.target.files?.[0];if(file)void read(file,false)}}/>{certName&&<small>{certName}</small>}</label>
+   {kind!=='trust'&&!p12&&<label>{t('配套私钥文件')}<input ref={keyInput} type="file" accept=".pem,.key" onChange={event=>{const file=event.target.files?.[0];if(file)void read(file,true)}}/>{keyName&&<small>{keyName}</small>}</label>}
+   {(p12||encryptedKey)&&<label>{t('证书或私钥密码')}<input type="password" autoComplete="off" value={password} onChange={event=>setPassword(event.target.value)} maxLength={1024}/></label>}
+   <button type="button" disabled={!name.trim()||!certificate||(kind!=='trust'&&!p12&&!privateKey)||(kind==='client'&&!host.trim())} onClick={importFile}>{busy?t('处理中…'):t('导入并保存')}</button>
   </fieldset>
   {kind==='ca'&&snapshot&&<div className="setting-card"><div><strong>{t('内置抓包 CA')}</strong><p>{snapshot.activeCa===null?t('当前使用'):t('保留原内置 CA，可切回使用。')}</p></div><button type="button" disabled={busy||!connected||snapshot.selectedCa===null} onClick={()=>confirm('selectCa',null)}>{snapshot.selectedCa===null?t('已选择'):t('切换为此 CA')}</button></div>}
   <div className="certificate-list">{snapshot?.entries.filter(item=>item.kind===kind).map(item=><article className="setting-card certificate-item" key={item.id}>
