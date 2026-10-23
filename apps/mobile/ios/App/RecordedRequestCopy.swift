@@ -40,7 +40,9 @@ struct RecordedRequestCopy {
         byteLength = length
         self.method = method
         self.url = url
-        let rows = request["headers"] as? [[String: Any]] ?? []
+        guard let rows = request["headers"] as? [[String: Any]] else {
+            throw CopyError.invalid("这条记录的请求头不完整")
+        }
         var lines: [String] = []
         for row in rows where row["disabled"] as? Bool != true {
             guard let name = row["name"] as? String,
@@ -50,7 +52,9 @@ struct RecordedRequestCopy {
             if name.hasPrefix(":") { continue }
             guard !name.isEmpty, !name.contains(":"),
                   !name.contains("\r"), !name.contains("\n"),
-                  !value.contains("\r"), !value.contains("\n") else {
+                  !value.contains("\r"), !value.contains("\n"),
+                  name == name.trimmingCharacters(in: .whitespaces),
+                  value == value.trimmingCharacters(in: .whitespaces) else {
                 throw CopyError.invalid("请求头包含移动编辑器无法表示的字符")
             }
             lines.append("\(name): \(value)")
@@ -84,7 +88,10 @@ struct RecordedRequestCopy {
 
     func draft() throws -> ManualRequestDraft {
         guard bytes.count == byteLength else { throw CopyError.invalid("请求正文尚未读完") }
-        if let text = String(data: bytes, encoding: .utf8) {
+        if let text = String(data: bytes, encoding: .utf8),
+           !text.unicodeScalars.contains(where: { scalar in
+               scalar.value < 0x20 && scalar.value != 0x09 && scalar.value != 0x0A && scalar.value != 0x0D
+           }) {
             return ManualRequestDraft(method: method, url: url, headers: headers,
                                       body: text, bodyMode: .text)
         }

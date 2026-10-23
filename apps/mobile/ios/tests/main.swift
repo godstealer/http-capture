@@ -75,6 +75,25 @@ do {
         _ = try invalid.append(["offset": 1, "totalBytes": 3, "bodyBase64": "AP8=", "nextOffset": 3])
         preconditionFailure("不连续的正文分段应被拒绝")
     } catch RecordedRequestCopy.CopyError.invalid(_) { }
+    var spaced = flow
+    var request = spaced["request"] as! [String: Any]
+    request["headers"] = [["name": "X-Test", "value": " value"]]
+    spaced["request"] = request
+    do {
+        _ = try RecordedRequestCopy(flow: spaced)
+        preconditionFailure("无法保留前导空格的请求头不能静默改写")
+    } catch RecordedRequestCopy.CopyError.invalid(_) { }
+    let controlFlow: [String: Any] = [
+        "id": "control", "bodyRevision": "run:1",
+        "request": ["method": "POST", "url": "https://example.test/", "headers": []],
+        "bodyReferences": ["request": ["byteLength": 2]]
+    ]
+    var control = try RecordedRequestCopy(flow: controlFlow)
+    let controlComplete = try control.append(["offset": 0, "totalBytes": 2,
+                                              "bodyBase64": "AEE=", "nextOffset": NSNull()])
+    let controlDraft = try control.draft()
+    expect(controlComplete && controlDraft.bodyMode == .base64,
+           "含控制字节的 UTF-8 正文应通过 Base64 编辑")
     print("iOS request body codec: PASS")
 } catch {
     fatalError(error.localizedDescription)
