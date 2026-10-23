@@ -1,0 +1,44 @@
+name: iOS mobile build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  simulator:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: |
+          cd apps/mobile/ios
+          xcodegen generate
+      - name: Build unsigned simulator app and Packet Tunnel
+        run: |
+          simulator_arch="$(uname -m)"
+          case "$simulator_arch" in
+            arm64|x86_64) ;;
+            *) echo "Unsupported macOS runner architecture: $simulator_arch" >&2; exit 1 ;;
+          esac
+          xcodebuild \
+            -project apps/mobile/ios/HTTPCaptureMobile.xcodeproj \
+            -scheme HTTPCaptureMobile \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath apps/mobile/ios/build/DerivedData \
+            ARCHS="$simulator_arch" \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Verify app and extension
+        run: |
+          simulator_arch="$(uname -m)"
+          app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/HTTPCaptureMobile.app
+          test -d "$app"
+          test -d "$app/PlugIns/PacketTunnel.appex"
+          test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
+          lipo -verify_arch "$simulator_arch" "$app/HTTPCaptureMobile"
+          lipo -verify_arch "$simulator_arch" "$app/PlugIns/PacketTunnel.appex/PacketTunnel"

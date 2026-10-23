@@ -1,8 +1,8 @@
 use crate::{http1::*, model::*, Engine};
 use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, sync::Arc, time::Duration};
-use tokio::{io::{AsyncRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, sync::oneshot, task::{JoinHandle, JoinSet}};
+use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, pin::Pin, sync::Arc, task::{Context as TaskContext, Poll}, time::Duration};
+use tokio::{io::{AsyncRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf}, net::{TcpListener, TcpStream}, sync::oneshot, task::{JoinHandle, JoinSet}};
 use tokio_rustls::LazyConfigAcceptor;
 
 pub struct ProxyHandle {
@@ -34,6 +34,49 @@ pub async fn start_at(engine: Arc<Engine>, requested: SocketAddr) -> Result<Prox
 }
 pub async fn start_tun_bridge(engine: Arc<Engine>) -> Result<ProxyHandle> {
     start_mode(engine, "127.0.0.1:0".parse().unwrap(), true).await
+}
+
+fn looks_like_http_method(bytes: &[u8]) -> bool {
+    const METHODS: &[&[u8]] = &[
+        b"GET ", b"POST ", b"PUT ", b"PATCH ", b"DELETE ", b"HEAD ",
+        b"OPTIONS ", b"TRACE ", b"CONNECT ", b"PROPFIND ", b"REPORT ",
+        b"MKCOL ", b"MOVE ", b"COPY ", b"LOCK ", b"UNLOCK ", b"SEARCH ",
+        b"PURGE ", b"M-SEARCH ", b"NOTIFY ", b"SUBSCRIBE ", b"UNSUBSCRIBE ",
+    ];
+    METHODS.iter().any(|method| method.starts_with(bytes) || bytes.starts_with(method))
+}
+
+// LazyConfigAcceptor consumes the ClientHello before we know whether the
+// stream should be decrypted. Keep exactly those bytes for a raw passthrough.
+struct HelloReplay<S> { inner: S, recorded: Option<Vec<u8>> }
+impl<S: AsyncRead + Unpin> AsyncRead for HelloReplay<S> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        match Pin::new(&mut self.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                if let Some(recorded) = &mut self.recorded {
+                    let chunk = &buf.filled()[before..];
+                    if recorded.len().saturating_add(chunk.len()) > 256 * 1024 {
+                        return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "TLS ClientHello exceeds replay limit")));
+                    }
+                    recorded.extend_from_slice(chunk);
+                }
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+impl<S: AsyncWrite + Unpin> AsyncWrite for HelloReplay<S> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 async fn start_mode(engine: Arc<Engine>, requested: SocketAddr, transparent: bool) -> Result<ProxyHandle> {
     ensure!(!requested.ip().is_multicast(), "监听地址不能是组播地址");
@@ -121,6 +164,22 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
         }
         stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
         stream.flush().await?;
+        if transparent {
+            // Some TUN connections are neither HTTP nor TLS. A server-first
+            // protocol may not send anything until its origin replies, so do
+            // not wait indefinitely for client bytes before opening upstream.
+            let initial = match tokio::time::timeout(Duration::from_millis(300), stream.fill_buf()).await {
+                Ok(result) => Some(result?),
+                Err(_) => None,
+            };
+            if initial == Some(&[][..]) { return Ok(()); }
+            if initial.is_none_or(|bytes| bytes.first() != Some(&22) && !looks_like_http_method(bytes)) {
+                let route = engine.upstream.snapshot();
+                let mut upstream = crate::upstream::connect(&url, route.as_ref()).await?.stream;
+                tokio::io::copy_bidirectional(&mut stream, &mut upstream).await?;
+                return Ok(());
+            }
+        }
         if transparent && stream.fill_buf().await?.first().is_some_and(|b| *b != 22) {
             url.set_scheme("http").map_err(|_|anyhow::anyhow!("Invalid HTTP scheme"))?;
             let head=read_head(&mut stream).await?;
@@ -136,13 +195,29 @@ async fn handle(stream: TcpStream, engine: Arc<Engine>, address: SocketAddr, tra
             }
             stream.shutdown().await?;return Ok(());
         }
-        let start = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream).await?;
+        let mut start = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), HelloReplay {
+            inner: stream,
+            recorded: transparent.then(Vec::new),
+        }).await?;
         if transparent {
             if let Some(name)=start.client_hello().server_name() { url.set_host(Some(name))?; }
         }
         prevent_loop(&url, address).await?;
-        let offers = start.client_hello().alpn().into_iter().flatten()
-            .filter(|p| *p == b"h2" || *p == b"http/1.1").map(Vec::from).collect();
+        let advertised:Vec<Vec<u8>> = start.client_hello().alpn().into_iter().flatten().map(Vec::from).collect();
+        let non_http_alpn = !advertised.is_empty()
+            && advertised.iter().all(|p| p.as_slice() != b"h2" && p.as_slice() != b"http/1.1");
+        if transparent && (non_http_alpn || crate::decryption::matches(&hostname(&url), &bypass)) {
+            let route = engine.upstream.snapshot();
+            let mut upstream = crate::upstream::connect(&url, route.as_ref()).await?.stream;
+            let mut client = start.io;
+            let hello = client.recorded.take().unwrap_or_default();
+            upstream.write_all(&hello).await?;
+            tokio::io::copy_bidirectional(&mut client.inner, &mut upstream).await?;
+            return Ok(());
+        }
+        start.io.recorded = None;
+        let offers = advertised.into_iter()
+            .filter(|p| p.as_slice() == b"h2" || p.as_slice() == b"http/1.1").collect();
         let upstream_tls = if engine.blocking.blocks_host_before_tls(&url, "capture") { None } else { match Box::pin(crate::capture_tls::CaptureTls::prepare(&engine, &url, offers)).await {
             Ok(context) => Some(context),
             Err(error) => {

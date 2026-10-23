@@ -27,3 +27,10 @@ Thumbs.db
 apps/desktop/src-tauri/release-resources/
 apps/desktop/src-tauri/tauri.release.json
 release-assets/
+apps/mobile/android/.gradle/
+apps/mobile/android/app/build/
+apps/mobile/android/app/src/main/jniLibs/
+apps/mobile/android/local.properties
+# Generated iOS project and native Apple static library.
+apps/mobile/ios/*.xcodeproj/
+apps/mobile/ios/build/

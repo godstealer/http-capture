@@ -1,0 +1,24 @@
+[package]
+name = "http-capture-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+capture-core = { path = "../../../../crates/capture-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+jni = "0.21.1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# TUN TCP/DNS bridge; the capture engine remains the local HTTP proxy.
+tun2proxy = { version = "0.7.15", default-features = false }
+# QuickJS has no pre-generated Android arm64 bindings.
+rquickjs = { version = "0.14", features = ["bindgen"] }
+
+[dev-dependencies]
+tempfile = "3"

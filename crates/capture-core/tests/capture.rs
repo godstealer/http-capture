@@ -342,6 +342,38 @@ async fn tun_connect_ip_uses_sni_for_certificate_and_upstream() {
 
 
 #[tokio::test]
+async fn tun_connect_respects_tls_decryption_bypass() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin_ca = CertificateAuthority::load_or_create(&dir.path().join("origin")).unwrap();
+    let engine = Engine::open(&dir.path().join("capture")).unwrap();
+    engine.store.save_setting("decryption.bypass.v1", &vec!["localhost"]).unwrap();
+    let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_addr = origin.local_addr().unwrap();
+    let acceptor = TlsAcceptor::from(origin_ca.server_config("localhost").unwrap());
+    let server = tokio::spawn(async move {
+        let (tcp, _) = origin.accept().await.unwrap();
+        let mut tls = acceptor.accept(tcp).await.unwrap();
+        tls.write_all(b"direct").await.unwrap();
+        tls.shutdown().await.unwrap();
+    });
+    let bridge = proxy::start_tun_bridge(engine.clone()).await.unwrap();
+    let mut tunnel = BufReader::new(TcpStream::connect(bridge.address).await.unwrap());
+    tunnel.write_all(format!("CONNECT {origin_addr} HTTP/1.1\r\nHost: {origin_addr}\r\n\r\n").as_bytes()).await.unwrap();
+    assert!(read_head(&mut tunnel).await.unwrap().starts_with(b"HTTP/1.1 200"));
+    let pem = std::fs::read(&origin_ca.cert_path).unwrap();
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut &pem[..]) { roots.add(cert.unwrap()).unwrap(); }
+    let config = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    let mut client = TlsConnector::from(Arc::new(config)).connect("localhost".try_into().unwrap(), tunnel).await.unwrap();
+    let mut data = Vec::new();
+    client.read_to_end(&mut data).await.unwrap();
+    assert_eq!(data, b"direct");
+    assert!(engine.store.list().unwrap().is_empty());
+    bridge.stop().await;
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn tun_connect_carries_plain_http_and_ordered_headers() {
     let dir=tempfile::tempdir().unwrap();let engine=Engine::open(dir.path()).unwrap();
     let origin=TcpListener::bind("127.0.0.1:0").await.unwrap();let address=origin.local_addr().unwrap();

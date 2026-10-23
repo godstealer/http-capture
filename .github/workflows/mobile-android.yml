@@ -1,0 +1,41 @@
+name: Android mobile build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.0.2'
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev libdbus-1-dev libssl-dev perl make pkg-config
+          sdkmanager --install 'platforms;android-33' 'build-tools;33.0.2' 'ndk;27.2.12479018'
+      - name: Build Android arm64 and x86_64 APK
+        run: |
+          libclang="$(find /usr/lib -name libclang.so -print -quit)"
+          test -n "$libclang"
+          export LIBCLANG_PATH="$(dirname "$libclang")"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          bash scripts/build-android.sh debug both
+      - name: Verify both native architectures are packaged
+        run: |
+          apk=apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -Z1 "$apk" | grep -Fx 'lib/arm64-v8a/libhttp_capture_android.so'
+          unzip -Z1 "$apk" | grep -Fx 'lib/x86_64/libhttp_capture_android.so'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: http-capture-android-debug
+          path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
