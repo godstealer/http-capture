@@ -35,6 +35,7 @@ public final class CaptureVpnService extends VpnService {
     public static final String EXTRA_PORT = "port";
     public static final String EXTRA_ALLOWED_PACKAGES = "allowed_packages";
     public static final String EXTRA_CAPTURE_QUIC = "capture_quic";
+    public static final String EXTRA_SYSTEM_PROXY_HINT = "system_proxy_hint";
     private static final String CHANNEL = "capture-vpn";
     private static final int NOTIFICATION_ID = 1001;
     private static volatile boolean active;
@@ -127,6 +128,7 @@ public final class CaptureVpnService extends VpnService {
         destroyed = false;
         int port = intent.getIntExtra(EXTRA_PORT, 0);
         captureQuic = intent.getBooleanExtra(EXTRA_CAPTURE_QUIC, false);
+        boolean systemProxyHint = intent.getBooleanExtra(EXTRA_SYSTEM_PROXY_HINT, true);
         String[] allowedPackages = intent.getStringArrayExtra(EXTRA_ALLOWED_PACKAGES);
         if (port < 1 || port > 65535) {
             message = "VPN 端口无效";
@@ -137,11 +139,11 @@ public final class CaptureVpnService extends VpnService {
         managed = true;
         stopPending = false;
         message = "正在建立 VPN…";
-        worker.execute(() -> connect(port, allowedPackages));
+        worker.execute(() -> connect(port, allowedPackages, systemProxyHint));
         return START_NOT_STICKY;
     }
 
-    private void connect(int port, String[] allowedPackages) {
+    private void connect(int port, String[] allowedPackages, boolean systemProxyHint) {
         try {
             JSONObject proxy = new JSONObject(NativeCapture.start(getFilesDir().getAbsolutePath(), port));
             if (!proxy.optBoolean("ok")) throw new IllegalStateException(proxy.optString("error"));
@@ -168,7 +170,7 @@ public final class CaptureVpnService extends VpnService {
                 }
                 if (added == 0) throw new IllegalStateException("选中的应用已卸载，请重新选择");
             }
-            if (Build.VERSION.SDK_INT >= 29) {
+            if (systemProxyHint && Build.VERSION.SDK_INT >= 29) {
                 builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", port));
             }
             tunnel = builder.establish();

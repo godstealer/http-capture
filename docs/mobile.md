@@ -14,7 +14,7 @@ iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无�
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,378,997 字节，SHA-256 `DDD332296856509DADE38D74EE7EE2FCFB33F64E50C4FC9F1A09BB939DF83C51`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,473,680 字节，SHA-256 `86DD0461984C5017F86BFCCE37C779049101986628F66461D0EE84A9864E4527`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
@@ -212,6 +212,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 2026-10-25：Android 切网时显式停止旧 TUN，即使旧转发任务已因失联而返回网络错误，完成桥与 QUIC 清理后仍允许在新网络建立新任务；真正的停止超时和任务异常仍返回错误。arm64-v8a、x86_64 原生库及调试 APK 本地重编通过；断网后恢复仍待设备实测。
 
 Android 模拟器冒烟现增加同一端口连续两次启动/停止 VPN，并在每次停止后检查回环代理端口已释放，覆盖快速重启时的资源清理。测试 APK 已在本地编译通过；当前 Windows 无可运行模拟器或连接设备，执行结果须等集中推送后的 Android CI。
+
+Android 10 及以上可在启动前关闭“向应用公布本机 HTTP 代理”。开关默认保持开启以兼容原行为；关闭时 VPN 仍建立完整路由并由 TUN 转发流量，便于测试不使用系统代理提示的应用及 TUN 来源识别。系统代理只是一项建议，应用可以忽略；开关需要重启 VPN 才会生效。模拟器快速启停回归分别启动开启和关闭两种设置，实际流量与代理公布状态仍待设备验证。依据：[Android `VpnService.Builder.setHttpProxy`](https://developer.android.com/reference/android/net/VpnService.Builder#setHttpProxy(android.net.ProxyInfo))。
 
 待完成顺序：
 

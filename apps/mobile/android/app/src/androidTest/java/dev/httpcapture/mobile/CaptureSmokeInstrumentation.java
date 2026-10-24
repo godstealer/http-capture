@@ -99,6 +99,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 Intent start = new Intent(getTargetContext(), CaptureVpnService.class);
                 start.setAction(CaptureVpnService.ACTION_START);
                 start.putExtra(CaptureVpnService.EXTRA_PORT, port);
+                start.putExtra(CaptureVpnService.EXTRA_SYSTEM_PROXY_HINT, attempt == 0);
                 getTargetContext().startForegroundService(start);
                 long deadline = System.currentTimeMillis() + 30_000;
                 while (System.currentTimeMillis() < deadline && !CaptureVpnService.isActive()) {

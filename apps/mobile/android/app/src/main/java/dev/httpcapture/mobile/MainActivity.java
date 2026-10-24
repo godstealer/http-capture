@@ -72,6 +72,7 @@ public final class MainActivity extends Activity {
     private Button selectApps;
     private Button addApp;
     private CheckBox captureQuic;
+    private CheckBox systemProxyHint;
     private Button previousPage;
     private Button nextPage;
     private EditText urlSearch;
@@ -186,6 +187,14 @@ public final class MainActivity extends Activity {
         captureQuic.setOnCheckedChangeListener((button, checked) ->
             getPreferences(MODE_PRIVATE).edit().putBoolean("capture_quic", checked).apply());
         layout.addView(captureQuic);
+
+        systemProxyHint = new CheckBox(this);
+        systemProxyHint.setText("向应用公布本机 HTTP 代理（Android 10+；关闭后仍通过 VPN 抓包）");
+        systemProxyHint.setChecked(getPreferences(MODE_PRIVATE).getBoolean("system_proxy_hint", true));
+        systemProxyHint.setEnabled(Build.VERSION.SDK_INT >= 29);
+        systemProxyHint.setOnCheckedChangeListener((button, checked) ->
+            getPreferences(MODE_PRIVATE).edit().putBoolean("system_proxy_hint", checked).apply());
+        layout.addView(systemProxyHint);
 
         start = button(layout, "启动 VPN 抓包", view -> startCapture());
         stop = button(layout, "停止", view -> stopCapture());
@@ -312,6 +321,7 @@ public final class MainActivity extends Activity {
         selectApps.setEnabled(enabled);
         addApp.setEnabled(enabled);
         captureQuic.setEnabled(enabled);
+        systemProxyHint.setEnabled(enabled && Build.VERSION.SDK_INT >= 29);
     }
 
     private void updatePagingControls() {
@@ -533,6 +543,7 @@ public final class MainActivity extends Activity {
         intent.putExtra(CaptureVpnService.EXTRA_ALLOWED_PACKAGES,
             selectedApps.toArray(new String[0]));
         intent.putExtra(CaptureVpnService.EXTRA_CAPTURE_QUIC, captureQuic.isChecked());
+        intent.putExtra(CaptureVpnService.EXTRA_SYSTEM_PROXY_HINT, systemProxyHint.isChecked());
         try {
             ComponentName started = Build.VERSION.SDK_INT >= 26
                 ? startForegroundService(intent) : startService(intent);
