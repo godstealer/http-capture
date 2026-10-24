@@ -158,8 +158,8 @@ public final class CaptureVpnService extends VpnService {
                     try {
                         builder.addAllowedApplication(packageName);
                         added++;
-                    } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
-                        // An app may have been uninstalled since the selection was saved.
+                    } catch (android.content.pm.PackageManager.NameNotFoundException error) {
+                        throw new IllegalStateException("抓包应用未安装或系统未允许查询：" + packageName, error);
                     }
                 }
                 if (added == 0) throw new IllegalStateException("选中的应用已卸载，请重新选择");
