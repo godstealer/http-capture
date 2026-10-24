@@ -193,6 +193,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 
 2026-10-25：Android 切网重建增加代次检查，失效的重建任务停止旧 TUN 后不再用已丢失的网络启动；巡检在等待新网络和重建期间不把暂时停止的转发器误判为永久故障。Android 原生 Rust 8 项测试、本地双架构交叉编译与调试 APK 组装通过；转发任务自行退出时还会停止可选 QUIC 监听器。仍需真机验证 Wi-Fi/蜂窝连续切换、短时断网恢复和手动停止的竞态。
 
+2026-10-25：iOS 宿主在读取系统 VPN 配置期间禁用启动按钮，避免用户快速点击时新建重复的 `NETunnelProviderManager`；配置读取失败后恢复按钮并显示错误。此项 Swift 改动尚待 Mac 编译和设备首次启动验收。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。

@@ -134,8 +134,8 @@ final class TunnelController: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var tunnelStarting = false
     @Published private(set) var tunnelStopping = false
-    @Published private(set) var busy = false
-    @Published private(set) var message = "VPN 未启动"
+    @Published private(set) var busy = true
+    @Published private(set) var message = "正在读取 VPN 配置…"
     @Published private(set) var requests: [CapturedRequest] = []
     @Published private(set) var requestPageLoading = false
     @Published private(set) var selectedDetail = ""
@@ -258,7 +258,11 @@ final class TunnelController: ObservableObject {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if let error { self.message = error.localizedDescription; return }
+                if let error {
+                    self.busy = false
+                    self.message = error.localizedDescription
+                    return
+                }
                 self.manager = managers?.first(where: {
                     ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "dev.httpcapture.mobile.ios.PacketTunnel"
                 })
@@ -272,6 +276,7 @@ final class TunnelController: ObservableObject {
                 }
                 self.watchStatus()
                 self.refreshStatus()
+                self.busy = false
             }
         }
     }
