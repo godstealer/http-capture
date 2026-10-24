@@ -2,6 +2,7 @@
 //! arguments and results; HTTP/TLS, persistence and capture rules stay in core.
 use capture_core::store::McpRequestFilter;
 use capture_core::store::{Collection, SavedRequest};
+use capture_core::config_migration::{self, ExportOptions};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use jni::{
     objects::{GlobalRef, JClass, JString, JValue},
@@ -10,6 +11,7 @@ use jni::{
     JavaVM,
 };
 use std::{
+    collections::BTreeMap,
     io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
@@ -358,6 +360,60 @@ fn export_session(data_dir: &Path, path: &Path) -> Result<serde_json::Value, Str
     })();
     if result.is_err() { let _ = std::fs::remove_file(path); }
     result
+}
+
+fn export_configuration(data_dir: &Path, path: &Path, options_json: &str,
+    passphrase: &str) -> Result<serde_json::Value, String> {
+    let store = session_store(data_dir)?;
+    let options: ExportOptions = serde_json::from_str(options_json)
+        .map_err(|error| format!("Invalid export options: {error}"))?;
+    let exported = config_migration::export_protected(
+        &store, BTreeMap::new(), options, env!("CARGO_PKG_VERSION"),
+        (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    config_migration::save_atomic(path, &exported.document)
+        .map_err(|error| format!("{error:#}"))?;
+    serde_json::to_value(exported.summary).map_err(|error| error.to_string())
+}
+
+fn read_configuration(path: &Path) -> Result<String, String> {
+    let length = std::fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if length == 0 || length > config_migration::MAX_ENCRYPTED_DOCUMENT_BYTES as u64 {
+        return Err("Configuration file must be 1 byte–24 MiB".into());
+    }
+    std::fs::read_to_string(path).map_err(|error| error.to_string())
+}
+
+fn preview_configuration(data_dir: &Path, path: &Path, passphrase: &str)
+    -> Result<serde_json::Value, String> {
+    let document = read_configuration(path)?;
+    let store = session_store(data_dir)?;
+    let preview = config_migration::preview_protected(
+        &store, &document, (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    serde_json::to_value(preview).map_err(|error| error.to_string())
+}
+
+fn import_configuration(data_dir: &Path, path: &Path, selected_json: &str,
+    expected_revision: &str, passphrase: &str) -> Result<serde_json::Value, String> {
+    // Hold the capture lock through commit so a concurrent VPN start cannot
+    // reopen the old configuration between the stopped check and the freeze.
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    if current.is_some() {
+        return Err("Stop VPN capture before importing configuration".into());
+    }
+    let selected: Vec<String> = serde_json::from_str(selected_json)
+        .map_err(|error| format!("Invalid selected categories: {error}"))?;
+    let document = read_configuration(path)?;
+    let store = offline_store(data_dir)?;
+    let prepared = config_migration::prepare_import_protected(
+        &store, &document, &selected, expected_revision, BTreeMap::new(),
+        env!("CARGO_PKG_VERSION"), (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    let imported = config_migration::commit_import(&store, prepared)
+        .map_err(|error| format!("{error:#}"))?;
+    drop(current);
+    serde_json::to_value(imported).map_err(|error| error.to_string())
 }
 
 fn metadata(data_dir: &Path, id: &str) -> Result<serde_json::Value, String> {
@@ -776,6 +832,51 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_exportSession(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_exportConfiguration(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, path: JString<'_>,
+    options: JString<'_>, passphrase: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        let path: String = env.get_string(&path).map_err(|error| error.to_string())?.into();
+        let options: String = env.get_string(&options).map_err(|error| error.to_string())?.into();
+        let passphrase: String = env.get_string(&passphrase).map_err(|error| error.to_string())?.into();
+        export_configuration(Path::new(&data_dir), Path::new(&path), &options, &passphrase)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_previewConfiguration(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, path: JString<'_>,
+    passphrase: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        let path: String = env.get_string(&path).map_err(|error| error.to_string())?.into();
+        let passphrase: String = env.get_string(&passphrase).map_err(|error| error.to_string())?.into();
+        preview_configuration(Path::new(&data_dir), Path::new(&path), &passphrase)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_importConfiguration(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, path: JString<'_>,
+    selected: JString<'_>, expected_revision: JString<'_>, passphrase: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        let path: String = env.get_string(&path).map_err(|error| error.to_string())?.into();
+        let selected: String = env.get_string(&selected).map_err(|error| error.to_string())?.into();
+        let expected_revision: String = env.get_string(&expected_revision).map_err(|error| error.to_string())?.into();
+        let passphrase: String = env.get_string(&passphrase).map_err(|error| error.to_string())?.into();
+        import_configuration(Path::new(&data_dir), Path::new(&path), &selected, &expected_revision, &passphrase)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_metadata(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
@@ -1068,6 +1169,38 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_tunnelStatus(
 mod tests {
     use super::*;
     static SERIAL: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn portable_configuration_imports_after_preview_and_freezes_old_store() {
+        let _guard = SERIAL.lock().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        configure_blocking(source.path(), &serde_json::json!({
+            "enabled": true, "scope": "capture", "rules": [{
+                "id": "portable-block", "enabled": true, "matchType": "host",
+                "pattern": "portable.example", "method": ""
+            }]
+        }).to_string()).unwrap();
+        let file = source.path().join("config.hccfg");
+        let summary = export_configuration(source.path(), &file, "{}", "").unwrap();
+        assert!(summary["sections"].as_array().unwrap().iter()
+            .any(|section| section["id"] == "blocking"));
+        let preview = preview_configuration(target.path(), &file, "").unwrap();
+        let revision = preview["expectedRevision"].as_str().unwrap();
+        assert!(import_configuration(target.path(), &file, r#"["blocking"]"#, "wrong", "").is_err());
+        let result = import_configuration(target.path(), &file, r#"["blocking"]"#, revision, "").unwrap();
+        assert_eq!(result["requiresRestart"], true);
+        assert!(offline_store(target.path()).unwrap().configuration_ready().is_err());
+        let reopened = capture_core::store::Store::open(&target.path().join("sessions.db")).unwrap();
+        let blocking: serde_json::Value = reopened.setting("blocking.v1").unwrap().unwrap();
+        assert_eq!(blocking["rules"][0]["id"], "portable-block");
+        assert_eq!(blocking["enabled"], false);
+
+        let encrypted = source.path().join("config-encrypted.hccfg");
+        export_configuration(source.path(), &encrypted, "{}", "android-secret").unwrap();
+        assert!(preview_configuration(source.path(), &encrypted, "wrong-secret").is_err());
+        assert!(preview_configuration(source.path(), &encrypted, "android-secret").is_ok());
+    }
 
     #[test]
     fn rejects_invalid_port_without_opening_state() {

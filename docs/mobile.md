@@ -12,7 +12,7 @@ iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无�
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，121,496,510 字节，SHA-256 `4f5c3de89b01be8aaba3e6c891148ce42eb4b008285f7401720ff4c44eec408a`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,593,262 字节，SHA-256 `fe50b1723dd20826598c8fa7d538f59bcb4f5a7a300323b8b3c4ac06a355217a`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
@@ -173,6 +173,10 @@ iOS 抓包首页连接期间每两秒轮询最新一页请求。列表现改为�
 已添加 Mac 上的签名设备构建入口：`bash scripts/build-ios-device.sh TEAM_ID [DEVICE_UDID]`。脚本生成 Xcode 工程，以指定 Apple Team 对宿主和 Packet Tunnel 进行自动签名，分别校验签名及实际写入的 App Group、Packet Tunnel 权限；提供设备 UDID 时用 Xcode 的 `devicectl` 安装。需要在 Xcode 登录可用的开发者账号，并为两个 Bundle ID、App Group 和 Packet Tunnel 配置可用的签名权限。此脚本尚未在 Mac 和 iPhone 上执行；签名构建或安装成功也仍需手动授权 VPN 并验收抓包流量。
 
 iOS 工作流先构建并安装无签名模拟器 App，启动后保存首页截图，再上传 `http-capture-ios-simulator` 与 `http-capture-ios-launch` 附件；随后在同一台 Mac 上额外编译无签名的 iPhone arm64 宿主与扩展并核对架构。[首次模拟器启动](https://github.com/godstealer/http-capture/actions/runs/40065417596) 已通过，截图确认首页实际显示；后续[端口输入修复运行](https://github.com/godstealer/http-capture/actions/runs/40066439156) 的截图确认默认端口显示为 `8899` 而非 `8,899`。模拟器附件不能安装到 iPhone，设备目标编译和首页截图也不能代替签名、VPN 权限与流量验收。
+
+## Android 全局配置迁移
+
+2026-10-25：Android 已接入与桌面版相同的 `http-capture-config` v1 文件格式。导出可选请求数据、脚本/插件代码、桌面工作区和代理用户名，可设置密码生成加密 `.hccfg`；默认排除这些敏感内容。导入使用系统文件选择器，先校验并预览文件，按类别勾选后替换；仅在 VPN/本机代理停止时提交，原配置保存为数据库恢复点，提交后退出并重新打开应用。代理密码、CA 私钥、证书信任、流量记录和设备级 App 选择不会迁移；导入后的抓包、规则和脚本初始关闭。Android 原生定向测试验证跨目录导出/预览/导入、过期版本拒绝及旧存储冻结；双架构调试 APK 重建与 v2 签名校验通过。文件选择器、加密文件交互和重启后的配置展示仍待真机验收。iOS 尚未接入全局配置迁移。
 
 ## 上游 CA 证书
 

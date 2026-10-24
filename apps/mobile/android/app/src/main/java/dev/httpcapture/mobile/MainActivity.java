@@ -63,6 +63,7 @@ public final class MainActivity extends Activity {
     private Button stop;
     private Button exportCa;
     private Button exportSessionButton;
+    private Button exportConfigButton;
     private Button blockingRules;
     private Button responseRewriteRules;
     private Button manualRequest;
@@ -93,6 +94,8 @@ public final class MainActivity extends Activity {
     private boolean vpnPermissionPending;
     private int pendingVpnPort;
     private String certificatePem;
+    private String pendingConfigurationExportOptions;
+    private String pendingConfigurationExportPassphrase;
     private final Set<String> selectedApps = new HashSet<>();
     private static final int SAVE_CA_REQUEST = 1201;
     private static final int VPN_REQUEST = 1202;
@@ -100,6 +103,8 @@ public final class MainActivity extends Activity {
     private static final int PICK_TRUST_CA = 1204;
     private static final int NOTIFICATION_REQUEST = 1205;
     private static final int SAVE_SESSION_REQUEST = 1206;
+    private static final int SAVE_CONFIG_REQUEST = 1207;
+    private static final int PICK_CONFIG_REQUEST = 1208;
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
@@ -184,6 +189,8 @@ public final class MainActivity extends Activity {
         stop = button(layout, "停止", view -> stopCapture());
         exportCa = button(layout, "保存 CA 公钥证书", view -> saveCertificate());
         exportSessionButton = button(layout, "导出抓包记录 JSON", view -> chooseSessionExport());
+        exportConfigButton = button(layout, "导出全局配置", view -> chooseConfigurationExport());
+        button(layout, "导入全局配置", view -> chooseConfigurationImport());
         button(layout, "上游 CA 证书", view -> showTrustedCertificates());
         blockingRules = button(layout, "阻止规则", view -> loadBlocking());
         responseRewriteRules = button(layout, "响应修改规则", view -> loadResponseRewrite());
@@ -2488,6 +2495,232 @@ public final class MainActivity extends Activity {
         startActivityForResult(save, SAVE_SESSION_REQUEST);
     }
 
+    private void chooseConfigurationExport() {
+        LinearLayout choices = new LinearLayout(this);
+        choices.setOrientation(LinearLayout.VERTICAL);
+        CheckBox data = new CheckBox(this);
+        data.setText("包含请求头值、正文、变量及响应修改规则");
+        choices.addView(data);
+        CheckBox code = new CheckBox(this);
+        code.setText("包含脚本、插件和代码模板");
+        choices.addView(code);
+        CheckBox workspace = new CheckBox(this);
+        workspace.setText("包含桌面请求工作区");
+        choices.addView(workspace);
+        CheckBox usernames = new CheckBox(this);
+        usernames.setText("包含上游代理用户名（不包含密码）");
+        choices.addView(usernames);
+        EditText password = new EditText(this);
+        password.setHint("加密密码（推荐；留空导出普通 JSON）");
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        choices.addView(password);
+        new AlertDialog.Builder(this).setTitle("导出全局配置")
+            .setMessage("默认排除请求敏感数据、代码和工作区。证书私钥、代理密码、流量记录不会导出。")
+            .setView(choices).setNegativeButton("取消", null)
+            .setPositiveButton("选择保存位置", (dialog, which) -> {
+                try {
+                    pendingConfigurationExportOptions = new JSONObject()
+                        .put("includeRequestData", data.isChecked())
+                        .put("includeCode", code.isChecked())
+                        .put("includeWorkspace", workspace.isChecked())
+                        .put("includeProxyUsernames", usernames.isChecked()).toString();
+                    pendingConfigurationExportPassphrase = password.getText().toString();
+                    launchConfigurationSavePicker(!pendingConfigurationExportPassphrase.isEmpty());
+                } catch (JSONException error) { status.setText("导出选项无效：" + error.getMessage()); }
+            }).show();
+    }
+
+    private void launchConfigurationSavePicker(boolean encrypted) {
+        Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        save.addCategory(Intent.CATEGORY_OPENABLE);
+        save.setType(encrypted ? "application/octet-stream" : "application/json");
+        save.putExtra(Intent.EXTRA_TITLE, "http-capture-config-" + System.currentTimeMillis()
+            + (encrypted ? ".hccfg" : ".json"));
+        startActivityForResult(save, SAVE_CONFIG_REQUEST);
+    }
+
+    private void exportConfigurationTo(Uri destination) {
+        String options = pendingConfigurationExportOptions;
+        String passphrase = pendingConfigurationExportPassphrase;
+        pendingConfigurationExportOptions = null;
+        pendingConfigurationExportPassphrase = null;
+        if (options == null) { status.setText("导出选项已失效，请重试"); return; }
+        exportConfigButton.setEnabled(false);
+        status.setText("正在导出配置…");
+        worker.execute(() -> {
+            File temporary = new File(getCacheDir(), "config-" + UUID.randomUUID() + ".json");
+            try {
+                JSONObject reply = parseReply(NativeCapture.exportConfiguration(
+                    getFilesDir().getAbsolutePath(), temporary.getAbsolutePath(),
+                    options, passphrase == null ? "" : passphrase));
+                if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                try (InputStream input = new FileInputStream(temporary);
+                     OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                    if (output == null) throw new IllegalStateException("无法打开目标文件");
+                    byte[] buffer = new byte[64 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                    output.flush();
+                }
+                main.post(() -> status.setText("全局配置已导出；分享前请检查规则和请求名称"));
+            } catch (Exception error) {
+                main.post(() -> status.setText("配置导出失败：" + error.getMessage()));
+            } finally {
+                if (temporary.exists()) temporary.delete();
+                main.post(() -> exportConfigButton.setEnabled(true));
+            }
+        });
+    }
+
+    private void chooseConfigurationImport() {
+        if (CaptureVpnService.isManaged() || CaptureVpnService.isStopping() || running) {
+            status.setText("请先停止 VPN 和本机代理，再导入配置");
+            return;
+        }
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        pick.addCategory(Intent.CATEGORY_OPENABLE);
+        pick.setType("*/*");
+        startActivityForResult(pick, PICK_CONFIG_REQUEST);
+    }
+
+    private void previewConfiguration(Uri source) {
+        status.setText("正在检查配置文件…");
+        worker.execute(() -> {
+            File temporary = new File(getCacheDir(), "import-" + UUID.randomUUID() + ".hccfg");
+            try (InputStream input = getContentResolver().openInputStream(source);
+                 OutputStream output = new java.io.FileOutputStream(temporary)) {
+                if (input == null) throw new IllegalStateException("无法打开配置文件");
+                byte[] buffer = new byte[64 * 1024];
+                int count;
+                long total = 0;
+                while ((count = input.read(buffer)) != -1) {
+                    total += count;
+                    if (total > 24L * 1024 * 1024) throw new IllegalArgumentException("配置文件最多 24 MiB");
+                    output.write(buffer, 0, count);
+                }
+                if (total == 0) throw new IllegalArgumentException("配置文件为空");
+                main.post(() -> askConfigurationPassword(temporary));
+            } catch (Exception error) {
+                temporary.delete();
+                main.post(() -> status.setText("配置读取失败：" + error.getMessage()));
+            }
+        });
+    }
+
+    private void askConfigurationPassword(File temporary) {
+        EditText password = new EditText(this);
+        password.setHint("未加密则留空");
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        new AlertDialog.Builder(this).setTitle("预览导入配置")
+            .setMessage("加密文件请输入密码；普通 JSON 留空。导入前可以选择类别。")
+            .setView(password).setNegativeButton("取消", (dialog, which) -> temporary.delete())
+            .setPositiveButton("预览", (dialog, which) -> loadConfigurationPreview(temporary,
+                password.getText().toString())).show();
+    }
+
+    private void loadConfigurationPreview(File temporary, String passphrase) {
+        status.setText("正在预览配置…");
+        worker.execute(() -> {
+            JSONObject reply = parseReply(NativeCapture.previewConfiguration(
+                getFilesDir().getAbsolutePath(), temporary.getAbsolutePath(), passphrase));
+            main.post(() -> {
+                if (!reply.optBoolean("ok")) {
+                    status.setText("配置预览失败：" + reply.optString("error"));
+                    new AlertDialog.Builder(this).setTitle("配置预览失败")
+                        .setMessage(reply.optString("error"))
+                        .setNegativeButton("取消", (dialog, which) -> temporary.delete())
+                        .setPositiveButton("重试密码", (dialog, which) -> askConfigurationPassword(temporary))
+                        .show();
+                    return;
+                }
+                showConfigurationChoices(temporary, passphrase, reply.optJSONObject("value"));
+            });
+        });
+    }
+
+    private void showConfigurationChoices(File temporary, String passphrase, JSONObject preview) {
+        if (preview == null) { temporary.delete(); return; }
+        JSONArray sections = preview.optJSONArray("sections");
+        if (sections == null || sections.length() == 0) { temporary.delete(); status.setText("配置文件没有可导入的类别"); return; }
+        String[] labels = new String[sections.length()];
+        String[] ids = new String[sections.length()];
+        boolean[] checked = new boolean[sections.length()];
+        for (int i = 0; i < sections.length(); i++) {
+            JSONObject section = sections.optJSONObject(i);
+            ids[i] = section == null ? "" : section.optString("id");
+            labels[i] = configurationSectionLabel(ids[i]) + " · "
+                + (section == null ? 0 : section.optInt("count")) + " 项";
+            checked[i] = true;
+        }
+        StringBuilder importMessage = new StringBuilder("来源版本：")
+            .append(preview.optString("sourceVersion"))
+            .append("。导入会替换所选类别，并保存原配置恢复点；所有抓包和规则开关需重新启用。");
+        JSONArray warnings = preview.optJSONArray("warnings");
+        if (warnings != null) for (int i = 0; i < Math.min(warnings.length(), 6); i++)
+            importMessage.append("\n• ").append(warnings.optString(i));
+        new AlertDialog.Builder(this).setTitle("选择导入类别")
+            .setMessage(importMessage.toString())
+            .setMultiChoiceItems(labels, checked, (dialog, index, value) -> checked[index] = value)
+            .setNegativeButton("取消", (dialog, which) -> temporary.delete())
+            .setPositiveButton("继续", (dialog, which) -> {
+                JSONArray chosen = new JSONArray();
+                for (int i = 0; i < ids.length; i++) if (checked[i]) chosen.put(ids[i]);
+                if (chosen.length() == 0) { temporary.delete(); status.setText("请至少选择一个配置类别"); return; }
+                new AlertDialog.Builder(this).setTitle("确认替换配置？")
+                    .setMessage("导入后需要完全退出并重新打开应用。已有类别会被替换，恢复点保存在本机数据库中。")
+                    .setNegativeButton("取消", (cancel, index) -> temporary.delete())
+                    .setPositiveButton("导入", (confirm, index) -> importConfigurationFile(
+                        temporary, passphrase, chosen.toString(), preview.optString("expectedRevision")))
+                    .show();
+            }).show();
+    }
+
+    private static String configurationSectionLabel(String id) {
+        switch (id) {
+            case "preferences": return "界面偏好";
+            case "library": return "请求集合";
+            case "workspace": return "桌面请求工作区";
+            case "interception": return "拦截规则";
+            case "blocking": return "阻止规则";
+            case "faults": return "故障模拟规则";
+            case "responseRewrite": return "响应修改规则";
+            case "scripts": return "脚本";
+            case "plugins": return "插件";
+            case "decryption": return "解密排除域名";
+            case "upstream": return "上游代理";
+            case "mcp": return "MCP 客户端";
+            default: return id;
+        }
+    }
+
+    private void importConfigurationFile(File temporary, String passphrase,
+        String sections, String revision) {
+        if (CaptureVpnService.isManaged() || CaptureVpnService.isStopping() || running) {
+            temporary.delete(); status.setText("抓包仍在运行，请先停止再导入"); return;
+        }
+        status.setText("正在导入配置…");
+        worker.execute(() -> {
+            JSONObject reply = parseReply(NativeCapture.importConfiguration(
+                getFilesDir().getAbsolutePath(), temporary.getAbsolutePath(),
+                sections, revision, passphrase));
+            temporary.delete();
+            main.post(() -> {
+                if (!reply.optBoolean("ok")) {
+                    status.setText("配置导入失败：" + reply.optString("error"));
+                    return;
+                }
+                status.setText("配置已导入，请重新打开应用");
+                new AlertDialog.Builder(this).setTitle("配置导入完成")
+                    .setMessage("已保存恢复点。应用现在需要完全退出；重新打开后检查配置，并手动启用所需规则。")
+                    .setCancelable(false)
+                    .setPositiveButton("退出应用", (dialog, which) -> {
+                        finishAffinity();
+                        android.os.Process.killProcess(android.os.Process.myPid());
+                    }).show();
+            });
+        });
+    }
+
     private void exportSessionTo(Uri destination) {
         exportSessionButton.setEnabled(false);
         status.setText("正在导出抓包记录…");
@@ -2683,6 +2916,17 @@ public final class MainActivity extends Activity {
         if (requestCode == SAVE_SESSION_REQUEST) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null)
                 exportSessionTo(data.getData());
+            return;
+        }
+        if (requestCode == SAVE_CONFIG_REQUEST) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                exportConfigurationTo(data.getData());
+            else { pendingConfigurationExportOptions = null; pendingConfigurationExportPassphrase = null; }
+            return;
+        }
+        if (requestCode == PICK_CONFIG_REQUEST) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                previewConfiguration(data.getData());
             return;
         }
         if (requestCode != SAVE_CA_REQUEST || resultCode != RESULT_OK || data == null || data.getData() == null || certificatePem == null) return;
