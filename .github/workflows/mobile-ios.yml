@@ -68,6 +68,8 @@ jobs:
           simulator_arch="$(uname -m)"
           app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/HTTPCaptureMobile.app
           test -d "$app"
+          test -f "$app/Assets.car"
+          test "$(plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw -o - "$app/Info.plist")" = AppIcon
           test -d "$app/PlugIns/PacketTunnel.appex"
           test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
           lipo "$app/HTTPCaptureMobile" -verify_arch "$simulator_arch"
@@ -126,6 +128,8 @@ jobs:
         run: |
           app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphoneos/HTTPCaptureMobile.app
           test -f "$app/HTTPCaptureMobile"
+          test -f "$app/Assets.car"
+          test "$(plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw -o - "$app/Info.plist")" = AppIcon
           test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
           lipo "$app/HTTPCaptureMobile" -verify_arch arm64
           lipo "$app/PlugIns/PacketTunnel.appex/PacketTunnel" -verify_arch arm64

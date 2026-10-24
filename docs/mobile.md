@@ -2,6 +2,8 @@
 
 状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过真机验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路；此前版本曾通过 Simulator 与无签名 iPhone arm64 编译，近期 App Group、宿主 Rust 链接和离线功能改动尚未经过 Mac 重编。签名及 iPhone 设备验收尚未完成。当前没有可交付的正式移动安装包。
 
+Android 已复用桌面图标作为启动图标，本地构建和 Lint 验证通过。iOS 已从同一矢量图标生成 1024×1024、无透明通道的 App Icon 并配置 Asset Catalog；本地检查尺寸、像素不透明性和项目 YAML，通过 Mac 构建时还会核对宿主包内 `Assets.car` 与 `CFBundleIconName`。这批 iOS 资源尚待 Mac CI 编译。
+
 iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无记录或 URL 搜索无结果时显示提示。Swift 界面改动尚待下次 Mac 构建和模拟器/设备验收。
 
 从抓包记录复制为新请求的正文上限已与手动请求编辑器对齐为 1 MiB：Android 和 iOS 均逐段读取原始字节；可读文本超过 64 KiB 时自动改用 Base64 编辑，避免文本输入上限阻止重发。超过 1 MiB 的记录仍拒绝复制。Android 复制期间显示读取状态并可取消，取消后不会打开编辑器；Activity 关闭后也不再弹出旧结果。Android 字节级回归、1 MiB 二进制请求离线保存后从请求库重发至本机 HTTP 服务的完整字节比对、调试 APK 构建均通过，最新 APK 的 v2 签名验证通过；iOS 复制期间也可取消后续分段读取；源码和回归用例已更新，需下一次 Mac CI 编译并在设备上验证复制、编辑及发送。
