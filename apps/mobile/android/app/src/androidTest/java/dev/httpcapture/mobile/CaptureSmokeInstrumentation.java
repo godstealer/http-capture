@@ -139,6 +139,16 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (application == null || application.optInt("uid", -1) < 0) {
                 throw new AssertionError("VPN source app UID was not identified: " + origin);
             }
+            int probeUID = -1;
+            JSONArray headers = flow.getJSONObject("request").getJSONArray("headers");
+            for (int index = 0; index < headers.length(); index++) {
+                JSONObject header = headers.getJSONObject(index);
+                if ("X-VPN-Probe-UID".equalsIgnoreCase(header.optString("name")))
+                    probeUID = Integer.parseInt(header.getString("value"));
+            }
+            if (probeUID < 0 || application.getInt("uid") != probeUID) {
+                throw new AssertionError("VPN source UID differs from probe UID: " + origin + " / " + probeUID);
+            }
             runVpnTlsSmoke();
         } finally {
             Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);

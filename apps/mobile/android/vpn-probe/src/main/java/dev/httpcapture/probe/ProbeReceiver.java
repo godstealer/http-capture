@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
+import android.os.Process;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -40,7 +41,8 @@ public final class ProbeReceiver extends BroadcastReceiver {
         try (Socket socket = new Socket("10.0.2.2", 18080)) {
             socket.setSoTimeout(10_000);
             socket.getOutputStream().write(("GET /vpn-smoke HTTP/1.1\r\n"
-                    + "Host: 10.0.2.2:18080\r\nConnection: close\r\n\r\n")
+                    + "Host: 10.0.2.2:18080\r\nX-VPN-Probe-UID: " + Process.myUid()
+                    + "\r\nConnection: close\r\n\r\n")
                     .getBytes(StandardCharsets.US_ASCII));
             InputStream response = socket.getInputStream();
             if (response.read() != 'H') throw new IllegalStateException("origin did not respond with HTTP");
