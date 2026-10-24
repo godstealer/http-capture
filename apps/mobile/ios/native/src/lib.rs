@@ -95,6 +95,7 @@ struct Active {
     runtime: Arc<CaptureRuntime>,
     executor: tokio::runtime::Runtime,
     bridge: capture_core::proxy::ProxyHandle,
+    quic: Option<capture_core::quic_proxy::QuicHandle>,
     sender: mpsc::Sender<Vec<u8>>,
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<Result<usize, String>>,
@@ -109,6 +110,7 @@ fn active() -> &'static Mutex<Option<Active>> {
 fn start(
     path: &Path,
     port: u16,
+    capture_quic: bool,
     callback: PacketCallback,
     context: usize,
 ) -> Result<serde_json::Value, String> {
@@ -149,6 +151,22 @@ fn start(
     args.direct_udp_for_http = true;
     args.ipv6_enabled = true;
     args.virtual_dns_pool_v6 = Some("fd00:198:19::/96".parse().map_err(|e| format!("{e}"))?);
+    let quic = if capture_quic {
+        match executor.block_on(capture_core::quic_proxy::start_tun(runtime.engine.clone())) {
+            Ok(quic) => {
+                args.udp_443_redirect = Some(quic.address);
+                Some(quic)
+            }
+            Err(error) => {
+                executor.block_on(bridge.stop());
+                let _ = executor.block_on(runtime.shutdown_network());
+                executor.shutdown_background();
+                return Err(format!("HTTP/3 capture could not start: {error:#}"));
+            }
+        }
+    } else {
+        None
+    };
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let task = executor.spawn(async move {
@@ -160,6 +178,7 @@ fn start(
         runtime,
         executor,
         bridge,
+        quic,
         sender,
         cancel,
         task,
@@ -187,6 +206,9 @@ fn stop() -> Result<serde_json::Value, String> {
         capture.task.abort();
     }
     capture.executor.block_on(capture.bridge.stop());
+    if let Some(quic) = capture.quic.take() {
+        capture.executor.block_on(quic.stop());
+    }
     let network_result = capture
         .executor
         .block_on(capture.runtime.shutdown_network());
@@ -421,13 +443,14 @@ unsafe fn input_string<'a>(ptr: *const c_char) -> Result<&'a str, String> {
 pub unsafe extern "C" fn hc_ios_start(
     path: *const c_char,
     port: u16,
+    capture_quic: bool,
     callback: Option<PacketCallback>,
     context: *mut c_void,
 ) -> *mut c_char {
     reply((|| {
         let path = input_string(path)?;
         let callback = callback.ok_or("Missing packet callback")?;
-        start(Path::new(path), port, callback, context as usize)
+        start(Path::new(path), port, capture_quic, callback, context as usize)
     })())
 }
 
@@ -507,7 +530,7 @@ mod tests {
     fn rejects_bad_port() {
         let dir = tempfile::tempdir().unwrap();
         unsafe extern "C" fn packet(_: *const u8, _: usize, _: *mut c_void) {}
-        assert!(start(dir.path(), 0, packet, 0).is_err());
+        assert!(start(dir.path(), 0, false, packet, 0).is_err());
     }
 
     #[test]
@@ -544,7 +567,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        let result = start(directory.path(), port, packet, 0).unwrap();
+        let result = start(directory.path(), port, false, packet, 0).unwrap();
         assert!(result.is_object());
         assert!(command(r#"{"method":"status"}"#).is_ok());
         assert_eq!(

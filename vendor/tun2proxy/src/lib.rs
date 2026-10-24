@@ -168,6 +168,15 @@ pub async fn run<D>(
 where
     D: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    if let Some(redirect) = args.udp_443_redirect {
+        if !args.direct_udp_for_http
+            || args.proxy.proxy_type != ProxyType::Http
+            || !redirect.ip().is_loopback()
+            || redirect.port() == 0
+        {
+            return Err("UDP/443 redirect requires direct HTTP UDP and a loopback listener".into());
+        }
+    }
     log::info!("{} {} starting...", env!("CARGO_PKG_NAME"), version_info!());
     log::info!(
         "Proxy {} server: {}",
@@ -464,9 +473,15 @@ where
                 let direct_udp =
                     args.direct_udp_for_http && args.proxy.proxy_type == ProxyType::Http;
                 if direct_udp {
-                    // Virtual DNS assigns a synthetic IP. Resolve it outside the
-                    // VPN before opening the direct UDP socket.
-                    if let Some(name) = domain_name.as_ref() {
+                    // The HTTP/3 listener derives the real origin from the TLS
+                    // ClientHello SNI. Send UDP/443 there without resolving a
+                    // virtual DNS address or leaking it to the network.
+                    let redirect = args.udp_443_redirect.filter(|_| info.dst.port() == 443);
+                    if let Some(redirect) = redirect {
+                        info.dst = redirect;
+                    } else if let Some(name) = domain_name.as_ref() {
+                        // Virtual DNS assigns a synthetic IP. Resolve it outside
+                        // the VPN before opening the direct UDP socket.
                         let original_family_is_ipv4 = info.dst.is_ipv4();
                         let resolved = tokio::net::lookup_host((name.as_str(), info.dst.port()))
                             .await
@@ -1090,6 +1105,107 @@ mod mobile_fault_tests {
             .expect("TUN loop should stop")
             .expect("TUN task should not panic")
             .expect("UDP relay must not fail the VPN loop");
+    }
+
+    #[tokio::test]
+    async fn http_proxy_mode_redirects_udp_443_to_local_h3_ingress() {
+        let ingress = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (device, mut peer) = tokio::io::duplex(4096);
+        let mut args = Args::default();
+        args.proxy = ArgProxy::try_from("http://127.0.0.1:18080").unwrap();
+        args.direct_udp_for_http = true;
+        args.udp_443_redirect = Some(ingress.local_addr().unwrap());
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run(device, 1500, args, shutdown.clone()));
+
+        let payload = b"quic-packet";
+        let original = [203, 0, 113, 7];
+        let packet = PacketBuilder::ipv4([10, 0, 0, 2], original, 64).udp(41003, 443);
+        let mut bytes = Vec::with_capacity(packet.size(payload.len()));
+        packet.write(&mut bytes, payload).unwrap();
+        peer.write_all(&bytes).await.unwrap();
+
+        let mut received = [0_u8; 64];
+        let (size, source) = tokio::time::timeout(
+            Duration::from_secs(2),
+            ingress.recv_from(&mut received),
+        )
+        .await
+        .expect("UDP/443 must reach the local H3 ingress")
+        .unwrap();
+        assert_eq!(&received[..size], payload);
+        ingress.send_to(b"h3-response", source).await.unwrap();
+
+        let mut response = [0_u8; 1500];
+        let size = tokio::time::timeout(Duration::from_secs(2), peer.read(&mut response))
+            .await
+            .expect("H3 reply must return through the TUN")
+            .unwrap();
+        let packet = SlicedPacket::from_ip(&response[..size]).unwrap();
+        match packet.transport {
+            Some(TransportSlice::Udp(udp)) => {
+                assert_eq!(udp.payload(), b"h3-response");
+                assert_eq!(udp.source_port(), 443);
+            }
+            other => panic!("expected a UDP reply, got {other:?}"),
+        }
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("TUN loop should stop")
+            .expect("TUN task should not panic")
+            .expect("UDP redirect must not fail the VPN loop");
+    }
+
+    #[tokio::test]
+    async fn http_proxy_mode_redirects_ipv6_udp_443_to_ipv4_loopback() {
+        let ingress = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (device, mut peer) = tokio::io::duplex(4096);
+        let mut args = Args::default();
+        args.proxy = ArgProxy::try_from("http://127.0.0.1:18080").unwrap();
+        args.direct_udp_for_http = true;
+        args.ipv6_enabled = true;
+        args.udp_443_redirect = Some(ingress.local_addr().unwrap());
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run(device, 1500, args, shutdown.clone()));
+
+        let source = "fd00:198:18::2".parse::<Ipv6Addr>().unwrap().octets();
+        let target = "2001:db8::7".parse::<Ipv6Addr>().unwrap().octets();
+        let payload = b"quic6";
+        let packet = PacketBuilder::ipv6(source, target, 64).udp(41004, 443);
+        let mut bytes = Vec::with_capacity(packet.size(payload.len()));
+        packet.write(&mut bytes, payload).unwrap();
+        peer.write_all(&bytes).await.unwrap();
+
+        let mut received = [0_u8; 64];
+        let (size, sender) = tokio::time::timeout(Duration::from_secs(2), ingress.recv_from(&mut received))
+            .await
+            .expect("IPv6 UDP/443 must reach IPv4 loopback")
+            .unwrap();
+        assert_eq!(&received[..size], payload);
+        ingress.send_to(b"h3-6", sender).await.unwrap();
+
+        let mut response = [0_u8; 1500];
+        let size = tokio::time::timeout(Duration::from_secs(2), peer.read(&mut response))
+            .await
+            .expect("IPv6 H3 reply must return through the TUN")
+            .unwrap();
+        let packet = SlicedPacket::from_ip(&response[..size]).unwrap();
+        match packet.transport {
+            Some(TransportSlice::Udp(udp)) => {
+                assert_eq!(udp.payload(), b"h3-6");
+                assert_eq!(udp.source_port(), 443);
+            }
+            other => panic!("expected an IPv6 UDP reply, got {other:?}"),
+        }
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("TUN loop should stop")
+            .expect("TUN task should not panic")
+            .expect("IPv6 UDP redirect must not fail the VPN loop");
     }
 
     #[tokio::test]

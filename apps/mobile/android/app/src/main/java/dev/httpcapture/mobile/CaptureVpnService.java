@@ -28,6 +28,7 @@ public final class CaptureVpnService extends VpnService {
     public static final String ACTION_STOP = "dev.httpcapture.mobile.STOP_VPN";
     public static final String EXTRA_PORT = "port";
     public static final String EXTRA_ALLOWED_PACKAGES = "allowed_packages";
+    public static final String EXTRA_CAPTURE_QUIC = "capture_quic";
     private static final String CHANNEL = "capture-vpn";
     private static final int NOTIFICATION_ID = 1001;
     private static volatile boolean active;
@@ -61,6 +62,7 @@ public final class CaptureVpnService extends VpnService {
     private Network underlyingNetwork;
     private volatile int networkGeneration;
     private volatile boolean destroyed;
+    private boolean captureQuic;
 
     public static boolean isActive() { return active; }
     public static boolean isManaged() { return managed; }
@@ -77,6 +79,7 @@ public final class CaptureVpnService extends VpnService {
         if (!ACTION_START.equals(intent.getAction())) return START_NOT_STICKY;
         if (managed || stopPending) return START_NOT_STICKY;
         int port = intent.getIntExtra(EXTRA_PORT, 0);
+        captureQuic = intent.getBooleanExtra(EXTRA_CAPTURE_QUIC, false);
         String[] allowedPackages = intent.getStringArrayExtra(EXTRA_ALLOWED_PACKAGES);
         if (port < 1 || port > 65535) {
             message = "VPN 端口无效";
@@ -123,7 +126,7 @@ public final class CaptureVpnService extends VpnService {
             }
             tunnel = builder.establish();
             if (tunnel == null) throw new IllegalStateException("系统未建立 VPN；请重新授权");
-            JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd()));
+            JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
             if (!started.optBoolean("ok")) throw new IllegalStateException(started.optString("error"));
             if (destroyed) throw new IllegalStateException("VPN 服务已停止");
             active = true;
@@ -187,7 +190,7 @@ public final class CaptureVpnService extends VpnService {
         try {
             JSONObject stopped = new JSONObject(NativeCapture.stopTunnel());
             if (!stopped.optBoolean("ok")) throw new IllegalStateException(stopped.optString("error"));
-            JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd()));
+            JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
             if (!started.optBoolean("ok")) throw new IllegalStateException(started.optString("error"));
             message = "VPN 抓包运行中 · 网络连接已更新";
         } catch (Exception error) {

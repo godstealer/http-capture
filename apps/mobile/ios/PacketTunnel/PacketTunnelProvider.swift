@@ -26,6 +26,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         let port = number.intValue
+        let captureQuic = (configuration.providerConfiguration?["capture_quic"] as? NSNumber)?.boolValue ?? false
         lifecycleLock.lock()
         if isStarting || isRunning {
             lifecycleLock.unlock()
@@ -68,7 +69,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         do {
             let dataDirectory = try makeDataDirectory()
             let pointer = dataDirectory.withCString { path in
-                hc_ios_start(path, UInt16(port), Self.outputPacket, Unmanaged.passUnretained(self).toOpaque())
+                hc_ios_start(path, UInt16(port), captureQuic, Self.outputPacket, Unmanaged.passUnretained(self).toOpaque())
             }
             let response = consumeResponse(pointer)
             lifecycleLock.unlock()

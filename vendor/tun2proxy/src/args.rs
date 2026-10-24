@@ -42,6 +42,12 @@ pub struct Args {
     #[serde(default)]
     pub direct_udp_for_http: bool,
 
+    /// Optional loopback HTTP/3 capture ingress for UDP destination port 443.
+    /// Other UDP continues to use its original destination.
+    #[arg(long, value_name = "HOST:PORT")]
+    #[serde(default)]
+    pub udp_443_redirect: Option<SocketAddr>,
+
     /// Name of the tun interface, such as tun0, utun4, etc.
     /// If this option is not provided, the OS will generate a random one.
     #[arg(short, long, value_name = "name", value_parser = validate_tun)]
@@ -193,6 +199,7 @@ impl Default for Args {
         Args {
             proxy: ArgProxy::default(),
             direct_udp_for_http: false,
+            udp_443_redirect: None,
             tun: None,
             #[cfg(unix)]
             tun_fd: None,

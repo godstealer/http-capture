@@ -20,6 +20,10 @@ struct ContentView: View {
                             .frame(width: 100)
                             .disabled(tunnel.connected)
                     }
+                    Toggle("尝试抓取 HTTP/3（UDP/443）", isOn: $tunnel.captureQuic)
+                        .disabled(tunnel.shouldOfferStop || tunnel.busy || tunnel.tunnelStopping)
+                    Text("开启后需信任本 CA；ECH 或隐藏 SNI 的连接仍不能解密。其他 UDP 保持直连。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Text(tunnel.message).foregroundStyle(.secondary)
                     Button(tunnel.shouldOfferStop ? "停止抓包" : "启动抓包") {
                         if tunnel.shouldOfferStop { tunnel.stop() } else { tunnel.start() }

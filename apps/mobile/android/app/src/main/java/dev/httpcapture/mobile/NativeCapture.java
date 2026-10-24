@@ -16,7 +16,7 @@ public final class NativeCapture {
     public static native String status();
     public static native String configureBlocking(String configJson);
     public static native String sendRequest(String requestJson);
-    public static native String startTunnel(int tunFd);
+    public static native String startTunnel(int tunFd, boolean captureQuic);
     public static native String stopTunnel();
     public static native String tunnelStatus();
 }

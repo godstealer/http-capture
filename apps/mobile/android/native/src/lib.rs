@@ -20,6 +20,7 @@ struct MobileTunnel {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<Result<usize, String>>,
     bridge: capture_core::proxy::ProxyHandle,
+    quic: Option<capture_core::quic_proxy::QuicHandle>,
 }
 
 struct MobileCapture {
@@ -89,7 +90,7 @@ fn stop() -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-fn start_tunnel(fd: i32) -> Result<(), String> {
+fn start_tunnel(fd: i32, capture_quic: bool) -> Result<(), String> {
     if fd < 0 {
         return Err("Invalid VPN file descriptor".into());
     }
@@ -123,6 +124,22 @@ fn start_tunnel(fd: i32) -> Result<(), String> {
     // Java's ParcelFileDescriptor owns the fd and closes it after the task exits.
     args.close_fd_on_drop = Some(false);
     args.dns = ArgDns::Virtual;
+    let quic = if capture_quic {
+        match capture.executor.block_on(capture_core::quic_proxy::start_tun(
+            capture.runtime.engine.clone(),
+        )) {
+            Ok(quic) => {
+                args.udp_443_redirect = Some(quic.address);
+                Some(quic)
+            }
+            Err(error) => {
+                capture.executor.block_on(bridge.stop());
+                return Err(format!("HTTP/3 capture could not start: {error:#}"));
+            }
+        }
+    } else {
+        None
+    };
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let task = capture.executor.spawn(async move {
@@ -134,6 +151,7 @@ fn start_tunnel(fd: i32) -> Result<(), String> {
         cancel,
         task,
         bridge,
+        quic,
     });
     Ok(())
 }
@@ -157,6 +175,9 @@ fn stop_tunnel_inner(capture: &mut MobileCapture) -> Result<(), String> {
         }
     };
     capture.executor.block_on(tunnel.bridge.stop());
+    if let Some(quic) = tunnel.quic.take() {
+        capture.executor.block_on(quic.stop());
+    }
     outcome
 }
 
@@ -532,8 +553,9 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_startTunnel(
     env: JNIEnv<'_>,
     _class: JClass<'_>,
     fd: jint,
+    capture_quic: jni::sys::jboolean,
 ) -> jstring {
-    jni_reply(env, start_tunnel(fd).map(|()| serde_json::Value::Null))
+    jni_reply(env, start_tunnel(fd, capture_quic != 0).map(|()| serde_json::Value::Null))
 }
 
 #[cfg(target_os = "android")]

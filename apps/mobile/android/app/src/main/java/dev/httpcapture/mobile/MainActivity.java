@@ -65,6 +65,7 @@ public final class MainActivity extends Activity {
     private Button manualRequest;
     private Button selectApps;
     private Button addApp;
+    private CheckBox captureQuic;
     private Button previousPage;
     private Button nextPage;
     private EditText urlSearch;
@@ -154,6 +155,13 @@ public final class MainActivity extends Activity {
         updateAppSelectionLabel();
         addApp = button(layout, "按包名添加应用", view -> addAppByPackageName());
 
+        captureQuic = new CheckBox(this);
+        captureQuic.setText("尝试抓取 HTTP/3（UDP/443，需信任 CA）");
+        captureQuic.setChecked(getPreferences(MODE_PRIVATE).getBoolean("capture_quic", false));
+        captureQuic.setOnCheckedChangeListener((button, checked) ->
+            getPreferences(MODE_PRIVATE).edit().putBoolean("capture_quic", checked).apply());
+        layout.addView(captureQuic);
+
         start = button(layout, "启动 VPN 抓包", view -> startCapture());
         stop = button(layout, "停止", view -> stopCapture());
         exportCa = button(layout, "保存 CA 公钥证书", view -> saveCertificate());
@@ -167,7 +175,7 @@ public final class MainActivity extends Activity {
         manualRequest.setEnabled(false);
 
         TextView hint = new TextView(this);
-        hint.setText("首次启动需要授权系统 VPN；HTTPS 正文还需要目标 App 信任本 CA。VPN 接管 IPv4/IPv6，普通 UDP 直连但不抓取内容。");
+        hint.setText("首次启动需要授权系统 VPN；HTTPS 正文还需要目标 App 信任本 CA。普通 UDP 直连且不记录；开启 HTTP/3 后，UDP/443 会尝试进入本机解密入口，不支持 ECH/隐藏 SNI。");
         layout.addView(hint);
 
         LinearLayout searchRow = new LinearLayout(this);
@@ -265,6 +273,7 @@ public final class MainActivity extends Activity {
     private void setAppSelectionEnabled(boolean enabled) {
         selectApps.setEnabled(enabled);
         addApp.setEnabled(enabled);
+        captureQuic.setEnabled(enabled);
     }
 
     private void updatePagingControls() {
@@ -483,6 +492,7 @@ public final class MainActivity extends Activity {
         intent.putExtra(CaptureVpnService.EXTRA_PORT, selectedPort);
         intent.putExtra(CaptureVpnService.EXTRA_ALLOWED_PACKAGES,
             selectedApps.toArray(new String[0]));
+        intent.putExtra(CaptureVpnService.EXTRA_CAPTURE_QUIC, captureQuic.isChecked());
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
         running = true;

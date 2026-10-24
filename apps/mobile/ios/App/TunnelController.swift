@@ -133,6 +133,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var responseSaving = false
     @Published private(set) var sendingManualRequest = false
     @Published var port = 8899
+    @Published var captureQuic = false
     @Published var urlFilterInput = ""
 
     private var manager: NETunnelProviderManager?
@@ -166,6 +167,7 @@ final class TunnelController: ObservableObject {
                 if let number = (self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["port"] as? NSNumber {
                     self.port = number.intValue
                 }
+                self.captureQuic = ((self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["capture_quic"] as? NSNumber)?.boolValue ?? false
                 self.watchStatus()
                 self.refreshStatus()
             }
@@ -183,7 +185,7 @@ final class TunnelController: ObservableObject {
         let configuration = NETunnelProviderProtocol()
         configuration.providerBundleIdentifier = "dev.httpcapture.mobile.ios.PacketTunnel"
         configuration.serverAddress = "HTTP Capture"
-        configuration.providerConfiguration = ["port": port]
+        configuration.providerConfiguration = ["port": port, "capture_quic": captureQuic]
         profile.protocolConfiguration = configuration
         profile.localizedDescription = "HTTP Capture"
         profile.isEnabled = true
