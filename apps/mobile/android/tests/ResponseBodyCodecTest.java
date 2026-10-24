@@ -2,6 +2,7 @@ package dev.httpcapture.mobile;
 
 import java.util.Arrays;
 import java.util.Base64;
+import java.nio.charset.StandardCharsets;
 
 /** Run with javac/java on a host JDK; no device or Android test library needed. */
 public final class ResponseBodyCodecTest {
@@ -11,6 +12,12 @@ public final class ResponseBodyCodecTest {
         check(Arrays.equals(binary, ResponseBodyCodec.decodeBase64(" \n" + encoded + "\r\n")),
             "binary body changed after Base64 decode");
         check(ResponseBodyCodec.decodeBase64("").length == 0, "empty body");
+        check(ResponseBodyCodec.isReadableUtf8("中文\ntext".getBytes(StandardCharsets.UTF_8)),
+            "ordinary UTF-8 text should use text editor");
+        check(!ResponseBodyCodec.isReadableUtf8(new byte[] {'A', 0, 'B'}),
+            "NUL bytes should use Base64 editor");
+        check(!ResponseBodyCodec.isReadableUtf8(new byte[] {(byte) 255}),
+            "invalid UTF-8 should use Base64 editor");
 
         byte[] maximum = new byte[ResponseBodyCodec.MAX_BODY_BYTES];
         maximum[maximum.length - 1] = (byte) 255;

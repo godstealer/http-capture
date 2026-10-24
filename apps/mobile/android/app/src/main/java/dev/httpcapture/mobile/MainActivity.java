@@ -1718,8 +1718,7 @@ public final class MainActivity extends Activity {
             if (editing) {
                 String savedBase64 = original.optJSONObject("replacement").optString("bodyBase64");
                 byte[] savedBytes = ResponseBodyCodec.decodeBase64(savedBase64);
-                boolean utf8 = java.util.Arrays.equals(savedBytes,
-                    new String(savedBytes, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8));
+                boolean utf8 = ResponseBodyCodec.isReadableUtf8(savedBytes);
                 if (utf8) body.setText(new String(savedBytes, StandardCharsets.UTF_8));
                 binaryBody.setText(savedBase64);
                 binaryMode.setChecked(!utf8);
