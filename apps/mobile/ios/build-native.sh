@@ -20,5 +20,7 @@ rustup target add "$rust_target"
 cd "$workspace"
 cargo build --locked --release -p http-capture-ios --target "$rust_target"
 mkdir -p "$ios_root/build/native"
-cp "$workspace/target/$rust_target/release/libhttp_capture_ios.a" \
-   "$ios_root/build/native/libhttp_capture_ios.a"
+temporary="$ios_root/build/native/libhttp_capture_ios.a.$$"
+trap 'rm -f "$temporary"' EXIT
+cp "$workspace/target/$rust_target/release/libhttp_capture_ios.a" "$temporary"
+mv -f "$temporary" "$ios_root/build/native/libhttp_capture_ios.a"

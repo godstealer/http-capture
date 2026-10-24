@@ -222,9 +222,32 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func makeDataDirectory() throws -> String {
-        let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("HTTP Capture", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let files = FileManager.default
+        guard let shared = files.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.httpcapture.mobile.ios") else {
+            throw tunnelError("App Group 未启用，无法安全共享抓包记录")
+        }
+        let directory = shared.appendingPathComponent("HTTP Capture", isDirectory: true)
+        if !files.fileExists(atPath: directory.path) {
+            let legacyRoot = try files.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                           appropriateFor: nil, create: true)
+            let legacy = legacyRoot.appendingPathComponent("HTTP Capture", isDirectory: true)
+            if files.fileExists(atPath: legacy.path) {
+                // Copy the stopped extension's database, journals and CA together.
+                // Keep the original until the shared copy is ready, then publish
+                // the directory with one rename so the host never sees half a migration.
+                let staging = shared.appendingPathComponent(".HTTP-Capture-Migrating-\(UUID().uuidString)",
+                                                         isDirectory: true)
+                do {
+                    try files.copyItem(at: legacy, to: staging)
+                    try files.moveItem(at: staging, to: directory)
+                } catch {
+                    try? files.removeItem(at: staging)
+                    throw error
+                }
+            } else {
+                try files.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+        }
         return directory.path
     }
 

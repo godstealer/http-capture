@@ -15,6 +15,9 @@ char *hc_ios_start(const char *data_dir, uint16_t port, bool capture_quic,
                    hc_ios_packet_callback callback, void *context);
 char *hc_ios_stop(void);
 char *hc_ios_command(const char *request_json);
+// Read-only capture history while the Packet Tunnel is stopped. The caller
+// passes the App Group's HTTP Capture directory and frees the JSON result.
+char *hc_ios_offline_command(const char *data_dir, const char *request_json);
 bool hc_ios_input_packet(const uint8_t *packet, size_t length);
 void hc_ios_free_string(char *result);
 

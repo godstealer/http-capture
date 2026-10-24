@@ -88,15 +88,15 @@ struct ContentView: View {
                         }
                     }
                     .buttonStyle(.borderless)
-                    .disabled(!tunnel.connected)
                     HStack {
                         Button("刷新") { tunnel.refreshRequests() }
                         Spacer()
                         Button("新建请求") { showingManualRequest = true }
+                            .disabled(!tunnel.connected)
                         Button("已保存") { showingSavedRequests = true }
+                            .disabled(!tunnel.connected)
                     }
                     .buttonStyle(.borderless)
-                    .disabled(!tunnel.connected)
                     ForEach(tunnel.requests) { request in
                         Button { tunnel.showDetail(id: request.id) } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -110,13 +110,13 @@ struct ContentView: View {
                     }
                     HStack {
                         Button("上一页") { tunnel.previousRequestsPage() }
-                            .disabled(!tunnel.connected || !tunnel.hasPreviousRequests || tunnel.requestPageLoading)
+                            .disabled(!tunnel.hasPreviousRequests || tunnel.requestPageLoading)
                         Spacer()
                         Text("第 \(tunnel.requestPageNumber) 页")
                             .font(.footnote).foregroundStyle(.secondary)
                         Spacer()
                         Button("下一页") { tunnel.refreshRequests(loadMore: true) }
-                            .disabled(!tunnel.connected || !tunnel.hasMoreRequests || tunnel.requestPageLoading)
+                            .disabled(!tunnel.hasMoreRequests || tunnel.requestPageLoading)
                     }
                     .buttonStyle(.borderless)
                     if tunnel.requestPageLoading { ProgressView("正在读取请求记录…") }
@@ -159,7 +159,7 @@ struct ContentView: View {
                                 Button("返回请求详情") { tunnel.showMetadataSummary() }
                             }
                             Button("复制到新请求") { tunnel.copySelectedRequest() }
-                                .disabled(tunnel.replayLoading)
+                                .disabled(!tunnel.connected || tunnel.replayLoading)
                             if tunnel.replayLoading { ProgressView("正在读取完整请求正文…") }
                             if let error = tunnel.replayError {
                                 Text(error).font(.footnote).foregroundStyle(.red)

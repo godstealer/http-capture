@@ -1,13 +1,13 @@
-//! C ABI for the iOS Packet Tunnel extension. The host app talks to the
-//! extension through NetworkExtension provider messages, never by opening a
-//! second copy of the capture database or the loopback proxy.
+//! C ABI for the iOS Packet Tunnel extension and read-only host history.
+//! The host uses provider messages while the tunnel is connected and a
+//! separate SQLite reader in the App Group when it is stopped.
 use capture_core::store::McpRequestFilter;
 use capture_core::store::{Collection, SavedRequest};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +25,7 @@ const MAX_UPLOAD_BODY: usize = 1024 * 1024;
 const MAX_UPLOAD_CHUNK: usize = 16 * 1024;
 static UPLOAD_IDS: AtomicU64 = AtomicU64::new(1);
 const SESSION_EXPORT_CHUNK: usize = 32 * 1024;
+static OFFLINE_STORE: OnceLock<Mutex<Option<(PathBuf, Arc<capture_core::store::Store>)>>> = OnceLock::new();
 
 struct RequestUpload {
     token: u64,
@@ -517,6 +518,74 @@ fn finish_session_export(token: u64) -> Result<serde_json::Value, String> {
     Ok(serde_json::Value::Null)
 }
 
+fn offline_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, String> {
+    let path = data_dir.join("sessions.db");
+    if !path.is_file() {
+        return Err("尚无共享抓包记录；升级后请先启动一次 VPN 迁移旧记录".into());
+    }
+    let mut cached = OFFLINE_STORE.get_or_init(|| Mutex::new(None))
+        .lock().map_err(|_| "Offline history is unavailable")?;
+    if let Some((opened, store)) = cached.as_ref() {
+        if opened == &path { return Ok(store.clone()); }
+    }
+    let store = Arc::new(capture_core::store::Store::open(&path)
+        .map_err(|error| format!("{error:#}"))?);
+    *cached = Some((path, store.clone()));
+    Ok(store)
+}
+
+fn history_command(store: &capture_core::store::Store, method: &str,
+                   request: &serde_json::Value) -> Result<serde_json::Value, String> {
+    match method {
+        "recent" => {
+            let cursor = request.get("cursor").and_then(|value| value.as_i64());
+            let url_contains = match request.get("urlContains") {
+                Some(value) => Some(value.as_str().ok_or("Invalid URL filter")?.to_owned())
+                    .filter(|value| !value.is_empty()),
+                None => None,
+            };
+            let flows = store.mcp_list_requests(McpRequestFilter {
+                cursor, url_contains, limit: 50, ..Default::default()
+            }).map_err(|error| format!("{error:#}"))?;
+            serde_json::to_value(flows).map_err(|error| error.to_string())
+        }
+        "metadata" => {
+            let id = request.get("id").and_then(|value| value.as_str())
+                .ok_or("Missing request ID")?;
+            let flow = store.metadata(id, None).map_err(|error| format!("{error:#}"))?
+                .ok_or("Recorded flow not found")?;
+            serde_json::to_value(flow).map_err(|error| error.to_string())
+        }
+        "body_preview" => {
+            let id = request.get("id").and_then(|value| value.as_str())
+                .ok_or("Missing request ID")?;
+            let variant = request.get("variant").and_then(|value| value.as_str())
+                .ok_or("Missing body variant")?;
+            let revision = request.get("revision").and_then(|value| value.as_str())
+                .ok_or("Missing body revision")?;
+            let offset = match request.get("offset") {
+                Some(value) => value.as_u64().ok_or("Invalid body offset")?,
+                None => 0,
+            };
+            let mut chunk = store.read_body_at_revision(id, variant, revision, offset, 16 * 1024)
+                .map_err(|error| format!("{error:#}"))?;
+            chunk.align_utf8_boundary().map_err(|error| error.to_string())?;
+            serde_json::to_value(chunk).map_err(|error| error.to_string())
+        }
+        _ => Err("Offline command is read-only and limited to capture history".into()),
+    }
+}
+
+fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, String> {
+    if request.len() > 128 * 1024 { return Err("Request exceeds 128 KiB".into()); }
+    let request: serde_json::Value = serde_json::from_str(request).map_err(|error| error.to_string())?;
+    let method = request.get("method").and_then(|value| value.as_str()).ok_or("Missing method")?;
+    if !matches!(method, "recent" | "metadata" | "body_preview") {
+        return Err("Offline command is read-only and limited to capture history".into());
+    }
+    history_command(offline_store(data_dir)?.as_ref(), method, &request)
+}
+
 fn command(request: &str) -> Result<serde_json::Value, String> {
     let request: serde_json::Value = serde_json::from_str(request).map_err(|e| e.to_string())?;
     let method = request
@@ -662,40 +731,8 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
             serde_json::to_value(capture.executor.block_on(capture.runtime.status()))
                 .map_err(|e| e.to_string())
         }
-        "recent" => {
-            let cursor = request.get("cursor").and_then(|v| v.as_i64());
-            let url_contains = match request.get("urlContains") {
-                Some(value) => Some(value.as_str().ok_or("Invalid URL filter")?.to_owned())
-                    .filter(|value| !value.is_empty()),
-                None => None,
-            };
-            let flows = capture
-                .runtime
-                .engine
-                .store
-                .mcp_list_requests(McpRequestFilter {
-                    cursor,
-                    url_contains,
-                    limit: 50,
-                    ..Default::default()
-                })
-                .map_err(|e| format!("{e:#}"))?;
-            serde_json::to_value(flows).map_err(|e| e.to_string())
-        }
-        "metadata" => {
-            let id = request
-                .get("id")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing request ID")?;
-            let flow = capture
-                .runtime
-                .engine
-                .store
-                .metadata(id, None)
-                .map_err(|e| format!("{e:#}"))?
-                .ok_or("Recorded flow not found")?;
-            serde_json::to_value(flow).map_err(|e| e.to_string())
-        }
+        "recent" | "metadata" | "body_preview" =>
+            history_command(&capture.runtime.engine.store, method, &request),
         "certificate" => std::fs::read_to_string(&capture.runtime.engine.ca.cert_path)
             .map(serde_json::Value::String)
             .map_err(|e| e.to_string()),
@@ -715,32 +752,6 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(capture.runtime.engine.certificates.change(input)
                 .map_err(|e| format!("{e:#}"))?).map_err(|e| e.to_string())
-        }
-        "body_preview" => {
-            let id = request
-                .get("id")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing request ID")?;
-            let variant = request
-                .get("variant")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing body variant")?;
-            let revision = request
-                .get("revision")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing body revision")?;
-            let offset = match request.get("offset") {
-                Some(value) => value.as_u64().ok_or("Invalid body offset")?,
-                None => 0,
-            };
-            let mut chunk = capture
-                .runtime
-                .engine
-                .store
-                .read_body_at_revision(id, variant, revision, offset, 16 * 1024)
-                .map_err(|e| format!("{e:#}"))?;
-            chunk.align_utf8_boundary().map_err(|e| e.to_string())?;
-            serde_json::to_value(chunk).map_err(|e| e.to_string())
         }
         "blocking" => serde_json::to_value(capture.runtime.engine.blocking.snapshot())
             .map_err(|e| e.to_string()),
@@ -823,6 +834,17 @@ pub unsafe extern "C" fn hc_ios_command(request: *const c_char) -> *mut c_char {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn hc_ios_offline_command(
+    data_dir: *const c_char, request: *const c_char,
+) -> *mut c_char {
+    reply((|| {
+        let data_dir = input_string(data_dir)?;
+        let request = input_string(request)?;
+        offline_command(Path::new(data_dir), request)
+    })())
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn hc_ios_input_packet(packet: *const u8, length: usize) -> bool {
     if packet.is_null() || length < 20 || length > MAX_PACKET {
         return false;
@@ -854,6 +876,33 @@ mod tests {
     use super::*;
     use std::io::{BufRead, Read, Write};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn offline_history_is_read_only_and_keeps_body_revision_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(offline_command(dir.path(), r#"{"method":"recent"}"#).is_err());
+        assert!(!dir.path().join("sessions.db").exists());
+        let store = capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let flow = serde_json::from_value(serde_json::json!({
+            "id": "offline-ios-flow", "parentId": null, "startedAt": 1,
+            "durationMs": 2, "source": "capture", "request": {
+                "method": "POST", "url": "https://example.test/offline-ios",
+                "headers": [], "bodyBase64": "eHl6"
+            },
+            "response": null, "error": null, "rawRequestHeadBase64": null, "notes": []
+        })).unwrap();
+        store.insert(&flow).unwrap();
+        drop(store);
+        let page = offline_command(dir.path(), r#"{"method":"recent","urlContains":"offline-ios"}"#).unwrap();
+        assert_eq!(page["requests"][0]["id"], "offline-ios-flow");
+        let detail = offline_command(dir.path(), r#"{"method":"metadata","id":"offline-ios-flow"}"#).unwrap();
+        let chunk = offline_command(dir.path(), &serde_json::json!({
+            "method": "body_preview", "id": "offline-ios-flow", "variant": "request",
+            "revision": detail["bodyRevision"], "offset": 0
+        }).to_string()).unwrap();
+        assert_eq!(chunk["bodyBase64"], "eHl6");
+        assert!(offline_command(dir.path(), r#"{"method":"configure_blocking"}"#).is_err());
+    }
 
     fn tunnel_to(
         bridge_address: std::net::SocketAddr,

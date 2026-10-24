@@ -1503,30 +1503,61 @@ final class TunnelController: ObservableObject {
     private func send(_ command: [String: Any], onFailure: (() -> Void)? = nil,
                       accept: (() -> Bool)? = nil,
                       completion: @escaping (Any?) -> Void) {
-        guard let session = manager?.connection as? NETunnelProviderSession,
-              let data = try? JSONSerialization.data(withJSONObject: command) else {
-            message = "请先启动 VPN"
+        guard let data = try? JSONSerialization.data(withJSONObject: command) else {
+            message = "请求命令无法编码"
+            onFailure?()
+            return
+        }
+        let deliver: (Data?) -> Void = { [weak self] response in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard accept?() ?? true else { return }
+                guard let response,
+                      let object = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any] else {
+                    self.message = "抓包内核没有返回结果"
+                    onFailure?()
+                    return
+                }
+                if object["ok"] as? Bool == true { completion(object["value"]) }
+                else {
+                    self.message = object["error"] as? String ?? "请求失败"
+                    onFailure?()
+                }
+            }
+        }
+        if !connected {
+            guard let method = command["method"] as? String,
+                  ["recent", "metadata", "body_preview"].contains(method) else {
+                message = "请先启动 VPN"
+                onFailure?()
+                return
+            }
+            guard let shared = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: "group.dev.httpcapture.mobile.ios") else {
+                message = "App Group 未启用，无法读取离线抓包记录"
+                onFailure?()
+                return
+            }
+            let directory = shared.appendingPathComponent("HTTP Capture", isDirectory: true).path
+            DispatchQueue.global(qos: .userInitiated).async {
+                let response = directory.withCString { path in
+                    String(decoding: data, as: UTF8.self).withCString { request in
+                        guard let pointer = hc_ios_offline_command(path, request) else { return nil as Data? }
+                        defer { hc_ios_free_string(pointer) }
+                        return Data(String(cString: pointer).utf8)
+                    }
+                }
+                deliver(response)
+            }
+            return
+        }
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            message = "VPN 会话尚未就绪"
             onFailure?()
             return
         }
         do {
-            try session.sendProviderMessage(data) { [weak self] response in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    guard accept?() ?? true else { return }
-                    guard let response,
-                          let object = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any] else {
-                        self.message = "VPN 扩展没有返回结果"
-                        onFailure?()
-                        return
-                    }
-                    if object["ok"] as? Bool == true { completion(object["value"]) }
-                    else {
-                        self.message = object["error"] as? String ?? "VPN 请求失败"
-                        onFailure?()
-                    }
-                }
-            }
+            try session.sendProviderMessage(data) { response in deliver(response) }
         } catch {
             message = error.localizedDescription
             onFailure?()
@@ -1600,6 +1631,8 @@ final class TunnelController: ObservableObject {
             requestPageCursors = [nil]
             requestPageLoading = false
             message = "VPN 未启动"
+            clearDetail()
+            refreshRequests()
         }
     }
 }
