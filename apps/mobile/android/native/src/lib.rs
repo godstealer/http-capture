@@ -59,6 +59,7 @@ struct MobileCapture {
 
 static CAPTURE: OnceLock<Mutex<Option<MobileCapture>>> = OnceLock::new();
 static OFFLINE_STORE: OnceLock<Mutex<Option<(PathBuf, Arc<capture_core::store::Store>)>>> = OnceLock::new();
+static OFFLINE_CERTIFICATES: OnceLock<Mutex<Option<(PathBuf, Arc<capture_core::certificates::Certificates>)>>> = OnceLock::new();
 
 fn capture() -> &'static Mutex<Option<MobileCapture>> {
     CAPTURE.get_or_init(|| Mutex::new(None))
@@ -109,7 +110,9 @@ fn stop() -> Result<(), String> {
             .executor
             .block_on(capture.runtime.shutdown_network());
         capture.executor.shutdown_background();
+        let certificate_cleanup = clear_offline_certificates();
         outcome?;
+        certificate_cleanup?;
         #[cfg(target_os = "android")]
         tunnel_result?;
     }
@@ -262,6 +265,24 @@ fn session_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, Str
     } else {
         offline_store(data_dir)
     }
+}
+
+fn offline_certificates(data_dir: &Path) -> Result<Arc<capture_core::certificates::Certificates>, String> {
+    let mut offline = OFFLINE_CERTIFICATES.get_or_init(|| Mutex::new(None))
+        .lock().map_err(|_| "Offline certificates are unavailable")?;
+    if let Some((opened_path, certificates)) = offline.as_ref() {
+        if opened_path == data_dir { return Ok(certificates.clone()); }
+    }
+    let certificates = capture_core::certificates::Certificates::open(data_dir)
+        .map_err(|error| format!("{error:#}"))?;
+    *offline = Some((data_dir.to_path_buf(), certificates.clone()));
+    Ok(certificates)
+}
+
+fn clear_offline_certificates() -> Result<(), String> {
+    *OFFLINE_CERTIFICATES.get_or_init(|| Mutex::new(None))
+        .lock().map_err(|_| "Offline certificates are unavailable")? = None;
+    Ok(())
 }
 
 fn offline_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, String> {
@@ -481,34 +502,64 @@ fn save_request(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String>
     Ok(json!({"id": id, "revision": revision}))
 }
 
-fn certificate() -> Result<String, String> {
+fn certificate(data_dir: &Path) -> Result<String, String> {
     let current = capture()
         .lock()
         .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    std::fs::read_to_string(&capture.runtime.engine.ca.cert_path).map_err(|error| error.to_string())
+    let cert_path = if let Some(capture) = current.as_ref() {
+        capture.runtime.engine.ca.cert_path.clone()
+    } else {
+        Engine::open(data_dir).map_err(|error| format!("{error:#}"))?.ca.cert_path.clone()
+    };
+    std::fs::read_to_string(cert_path).map_err(|error| error.to_string())
 }
 
-fn certificates() -> Result<serde_json::Value, String> {
+fn certificates(data_dir: &Path) -> Result<serde_json::Value, String> {
     let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    serde_json::to_value(capture.runtime.engine.certificates.snapshot().map_err(|error| format!("{error:#}"))?)
+    let certificates = if let Some(capture) = current.as_ref() {
+        capture.runtime.engine.certificates.clone()
+    } else {
+        offline_certificates(data_dir)?
+    };
+    serde_json::to_value(certificates.snapshot().map_err(|error| format!("{error:#}"))?)
         .map_err(|error| error.to_string())
 }
 
-fn import_certificate(raw: &str) -> Result<serde_json::Value, String> {
+fn import_certificate(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
     let input: capture_core::certificates::Import = serde_json::from_str(raw).map_err(|error| error.to_string())?;
     let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    serde_json::to_value(capture.runtime.engine.certificates.import(input).map_err(|error| format!("{error:#}"))?)
+    let certificates = if let Some(capture) = current.as_ref() {
+        capture.runtime.engine.certificates.clone()
+    } else {
+        offline_certificates(data_dir)?
+    };
+    certificates.snapshot().map_err(|error| format!("{error:#}"))?;
+    let mut snapshot = certificates.import(input).map_err(|error| format!("{error:#}"))?;
+    if current.is_none() {
+        clear_offline_certificates()?;
+        snapshot = offline_certificates(data_dir)?.snapshot()
+            .map_err(|error| format!("{error:#}"))?;
+    }
+    serde_json::to_value(snapshot)
         .map_err(|error| error.to_string())
 }
 
-fn change_certificate(raw: &str) -> Result<serde_json::Value, String> {
+fn change_certificate(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
     let input: capture_core::certificates::Change = serde_json::from_str(raw).map_err(|error| error.to_string())?;
     let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    serde_json::to_value(capture.runtime.engine.certificates.change(input).map_err(|error| format!("{error:#}"))?)
+    let certificates = if let Some(capture) = current.as_ref() {
+        capture.runtime.engine.certificates.clone()
+    } else {
+        offline_certificates(data_dir)?
+    };
+    certificates.snapshot().map_err(|error| format!("{error:#}"))?;
+    let mut snapshot = certificates.change(input).map_err(|error| format!("{error:#}"))?;
+    if current.is_none() {
+        clear_offline_certificates()?;
+        snapshot = offline_certificates(data_dir)?.snapshot()
+            .map_err(|error| format!("{error:#}"))?;
+    }
+    serde_json::to_value(snapshot)
         .map_err(|error| error.to_string())
 }
 
@@ -785,37 +836,48 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_saveRequest(
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_certificate(
-    env: JNIEnv<'_>,
+    mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
 ) -> jstring {
-    jni_reply(env, certificate().map(serde_json::Value::String))
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        certificate(Path::new(&data_dir)).map(serde_json::Value::String)
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_certificates(
-    env: JNIEnv<'_>, _class: JClass<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>,
 ) -> jstring {
-    jni_reply(env, certificates())
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        certificates(Path::new(&data_dir))
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_importCertificate(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, raw: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
-        import_certificate(&raw)
+        import_certificate(Path::new(&data_dir), &raw)
     })();
     jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_changeCertificate(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, raw: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
-        change_certificate(&raw)
+        change_certificate(Path::new(&data_dir), &raw)
     })();
     jni_reply(env, result)
 }
@@ -1027,6 +1089,36 @@ mod tests {
         start(dir.path(), port).unwrap();
         assert_eq!(blocking(dir.path()).unwrap()["rules"][0]["id"], "offline-block");
         stop().unwrap();
+    }
+
+    #[test]
+    fn certificate_preparation_works_before_capture_starts() {
+        let _guard = SERIAL.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ca = certificate(dir.path()).unwrap();
+        assert!(ca.contains("BEGIN CERTIFICATE"));
+        assert!(!ca.contains("PRIVATE KEY"));
+        let before = certificates(dir.path()).unwrap();
+        let imported = import_certificate(dir.path(), &serde_json::json!({
+            "name": "offline trust", "kind": "trust", "host": "offline.example",
+            "port": 443, "certificateBase64": base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD, ca.as_bytes()),
+            "expectedVersion": before["version"]
+        }).to_string()).unwrap();
+        let id = imported["entries"][0]["id"].as_str().unwrap().to_owned();
+        let enabled = change_certificate(dir.path(), &serde_json::json!({
+            "action": "enable", "id": id, "enabled": true,
+            "expectedVersion": imported["version"]
+        }).to_string()).unwrap();
+        assert_eq!(enabled["entries"][0]["enabled"], true);
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap().local_addr().unwrap().port();
+        start(dir.path(), port).unwrap();
+        assert_eq!(certificate(dir.path()).unwrap(), ca);
+        assert_eq!(certificates(dir.path()).unwrap()["entries"][0]["id"], id);
+        stop().unwrap();
+        assert_eq!(certificate(dir.path()).unwrap(), ca);
+        assert_eq!(certificates(dir.path()).unwrap()["entries"][0]["enabled"], true);
     }
 
     #[test]

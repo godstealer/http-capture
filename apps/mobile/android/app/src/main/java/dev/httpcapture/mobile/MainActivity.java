@@ -184,7 +184,7 @@ public final class MainActivity extends Activity {
         manualRequest = button(layout, "新建请求", view -> openManualRequest());
         savedRequestsButton = button(layout, "已保存请求", view -> showSavedRequests());
         stop.setEnabled(false);
-        exportCa.setEnabled(false);
+        exportCa.setEnabled(true);
         exportSessionButton.setEnabled(true);
         blockingRules.setEnabled(true);
         responseRewriteRules.setEnabled(true);
@@ -562,7 +562,7 @@ public final class MainActivity extends Activity {
             updatePagingControls();
             start.setEnabled(false);
             setAppSelectionEnabled(false);
-            exportCa.setEnabled(false);
+            exportCa.setEnabled(true);
             exportSessionButton.setEnabled(true);
             blockingRules.setEnabled(true);
             responseRewriteRules.setEnabled(true);
@@ -580,7 +580,7 @@ public final class MainActivity extends Activity {
                 status.setText(reply.optBoolean("ok") ? "代理已停止" : "停止失败：" + reply.optString("error"));
                 start.setEnabled(true);
                 setAppSelectionEnabled(true);
-                exportCa.setEnabled(false);
+                exportCa.setEnabled(true);
                 exportSessionButton.setEnabled(true);
                 blockingRules.setEnabled(true);
                 responseRewriteRules.setEnabled(true);
@@ -600,7 +600,7 @@ public final class MainActivity extends Activity {
         start.setEnabled(true);
         setAppSelectionEnabled(true);
         stop.setEnabled(false);
-        exportCa.setEnabled(false);
+        exportCa.setEnabled(true);
         exportSessionButton.setEnabled(true);
         blockingRules.setEnabled(true);
         responseRewriteRules.setEnabled(true);
@@ -637,7 +637,7 @@ public final class MainActivity extends Activity {
                         start.setEnabled(false);
                         setAppSelectionEnabled(false);
                         stop.setEnabled(false);
-                        exportCa.setEnabled(false);
+                        exportCa.setEnabled(true);
                         exportSessionButton.setEnabled(true);
                         blockingRules.setEnabled(true);
                         responseRewriteRules.setEnabled(true);
@@ -2425,7 +2425,7 @@ public final class MainActivity extends Activity {
 
     private void saveCertificate() {
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.certificate());
+            JSONObject reply = parseReply(NativeCapture.certificate(getFilesDir().getAbsolutePath()));
             if (!reply.optBoolean("ok")) {
                 main.post(() -> status.setText("读取 CA 失败：" + reply.optString("error")));
                 return;
@@ -2484,7 +2484,7 @@ public final class MainActivity extends Activity {
 
     private void showTrustedCertificates() {
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.certificates());
+            JSONObject reply = parseReply(NativeCapture.certificates(getFilesDir().getAbsolutePath()));
             if (!reply.optBoolean("ok")) {
                 main.post(() -> status.setText("读取上游 CA 失败：" + reply.optString("error")));
                 return;
@@ -2538,7 +2538,8 @@ public final class MainActivity extends Activity {
             try {
                 JSONObject input = new JSONObject().put("action", action).put("id", id)
                     .put("enabled", enabled).put("expectedVersion", version);
-                JSONObject reply = parseReply(NativeCapture.changeCertificate(input.toString()));
+                JSONObject reply = parseReply(NativeCapture.changeCertificate(
+                    getFilesDir().getAbsolutePath(), input.toString()));
                 main.post(() -> {
                     if (reply.optBoolean("ok")) {
                         status.setText("上游 CA 已更新；新连接将使用此设置");
@@ -2596,14 +2597,15 @@ public final class MainActivity extends Activity {
                     if (output.size() + count > 1024 * 1024) throw new IllegalArgumentException("证书文件不能超过 1 MiB");
                     output.write(buffer, 0, count);
                 }
-                JSONObject current = parseReply(NativeCapture.certificates());
+                JSONObject current = parseReply(NativeCapture.certificates(getFilesDir().getAbsolutePath()));
                 if (!current.optBoolean("ok")) throw new IllegalStateException(current.optString("error"));
                 JSONObject snapshot = current.getJSONObject("value");
                 JSONObject request = new JSONObject().put("name", name).put("kind", "trust")
                     .put("host", host).put("port", port)
                     .put("certificateBase64", Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP))
                     .put("expectedVersion", snapshot.getString("version"));
-                JSONObject reply = parseReply(NativeCapture.importCertificate(request.toString()));
+                JSONObject reply = parseReply(NativeCapture.importCertificate(
+                    getFilesDir().getAbsolutePath(), request.toString()));
                 main.post(() -> {
                     status.setText(reply.optBoolean("ok")
                         ? "上游 CA 已导入；请在列表中启用" : "导入上游 CA 失败：" + reply.optString("error"));

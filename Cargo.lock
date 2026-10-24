@@ -2600,6 +2600,7 @@ dependencies = [
 name = "http-capture-android"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "capture-core",
  "jni 0.21.1",
  "rquickjs",

@@ -15,10 +15,10 @@ public final class NativeCapture {
     public static native String savedRequest(String dataDir, String id);
     public static native String deleteSavedRequest(String dataDir, String id);
     public static native String saveRequest(String dataDir, String requestJson);
-    public static native String certificate();
-    public static native String certificates();
-    public static native String importCertificate(String importJson);
-    public static native String changeCertificate(String changeJson);
+    public static native String certificate(String dataDir);
+    public static native String certificates(String dataDir);
+    public static native String importCertificate(String dataDir, String importJson);
+    public static native String changeCertificate(String dataDir, String changeJson);
     public static native String bodyPreview(String dataDir, String id, String variant, String revision, long offset);
     public static native String blocking(String dataDir);
     public static native String responseRewrite(String dataDir);

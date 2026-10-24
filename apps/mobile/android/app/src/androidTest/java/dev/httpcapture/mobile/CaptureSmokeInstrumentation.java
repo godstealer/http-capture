@@ -243,6 +243,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     "dev.httpcapture.probe.ProbeReceiver"));
             getTargetContext().sendBroadcast(udpProbe);
             runVpnTlsSmoke();
+            String runningCa = new JSONObject(NativeCapture.certificate(
+                getTargetContext().getFilesDir().getAbsolutePath())).getString("value");
             stopVpnFromNotification();
             verifySessionExport(capturedID);
             JSONArray offlineRows = expectOk(recent("", "vpn-smoke")).getJSONArray("requests");
@@ -255,6 +257,11 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 throw new AssertionError("Captured flow is not readable after VPN stops");
             runSavedRequestSmoke();
             runOfflineRulesSmoke();
+            String offlineCa = new JSONObject(NativeCapture.certificate(
+                getTargetContext().getFilesDir().getAbsolutePath())).getString("value");
+            if (!runningCa.equals(offlineCa))
+                throw new AssertionError("Stopped capture exported a different CA");
+            runCertificateManagementSmoke(offlineCa);
         } finally {
             if (CaptureVpnService.isManaged()) {
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
@@ -389,7 +396,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             Intent probe = new Intent("dev.httpcapture.probe.RUN_TLS");
             probe.setComponent(new ComponentName("dev.httpcapture.probe",
                     "dev.httpcapture.probe.ProbeReceiver"));
-            probe.putExtra("caPem", new JSONObject(NativeCapture.certificate()).getString("value"));
+            probe.putExtra("caPem", new JSONObject(NativeCapture.certificate(
+                getTargetContext().getFilesDir().getAbsolutePath())).getString("value"));
             getTargetContext().sendBroadcast(probe);
             long deadline = System.currentTimeMillis() + 30_000;
             String lastState = "TLS 请求尚未出现";
@@ -452,7 +460,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             reservation.close();
             expectOk(NativeCapture.start(getTargetContext().getFilesDir().getAbsolutePath(), proxyPort));
             try {
-                String certificate = new JSONObject(NativeCapture.certificate()).getString("value");
+                String certificate = new JSONObject(NativeCapture.certificate(
+                    getTargetContext().getFilesDir().getAbsolutePath())).getString("value");
                 if (!certificate.contains("BEGIN CERTIFICATE") || certificate.contains("PRIVATE KEY")) {
                     throw new AssertionError("CA export must contain only a public certificate");
                 }
@@ -740,13 +749,14 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
     }
 
     private void runCertificateManagementSmoke(String certificate) throws Exception {
-        JSONObject before = expectOk(NativeCapture.certificates());
+        JSONObject before = expectOk(NativeCapture.certificates(getTargetContext().getFilesDir().getAbsolutePath()));
         JSONObject request = new JSONObject().put("name", "Android smoke CA")
                 .put("kind", "trust").put("host", "localhost").put("port", 443)
                 .put("certificateBase64", Base64.encodeToString(
                         certificate.getBytes(StandardCharsets.US_ASCII), Base64.NO_WRAP))
                 .put("expectedVersion", before.getString("version"));
-        JSONObject imported = expectOk(NativeCapture.importCertificate(request.toString()));
+        JSONObject imported = expectOk(NativeCapture.importCertificate(
+            getTargetContext().getFilesDir().getAbsolutePath(), request.toString()));
         String id = null;
         for (int index = 0; index < imported.getJSONArray("entries").length(); index++) {
             JSONObject entry = imported.getJSONArray("entries").getJSONObject(index);
@@ -756,7 +766,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         try {
             JSONObject change = new JSONObject().put("action", "enable").put("id", id)
                     .put("enabled", true).put("expectedVersion", imported.getString("version"));
-            JSONObject enabled = expectOk(NativeCapture.changeCertificate(change.toString()));
+            JSONObject enabled = expectOk(NativeCapture.changeCertificate(
+                getTargetContext().getFilesDir().getAbsolutePath(), change.toString()));
             boolean foundEnabled = false;
             for (int index = 0; index < enabled.getJSONArray("entries").length(); index++) {
                 JSONObject entry = enabled.getJSONArray("entries").getJSONObject(index);
@@ -764,10 +775,11 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             }
             if (!foundEnabled) throw new AssertionError("trust CA was not enabled");
         } finally {
-            JSONObject current = expectOk(NativeCapture.certificates());
+            JSONObject current = expectOk(NativeCapture.certificates(getTargetContext().getFilesDir().getAbsolutePath()));
             JSONObject delete = new JSONObject().put("action", "delete").put("id", id)
                     .put("expectedVersion", current.getString("version"));
-            expectOk(NativeCapture.changeCertificate(delete.toString()));
+            expectOk(NativeCapture.changeCertificate(
+                getTargetContext().getFilesDir().getAbsolutePath(), delete.toString()));
         }
     }
 
