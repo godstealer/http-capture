@@ -2,6 +2,8 @@
 
 状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过设备验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路，iOS Simulator 目标已在 Xcode 编译，iPhone arm64 目标已完成无签名编译，签名及设备验收尚未完成。当前没有可交付的正式移动安装包。
 
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，120,728,929 字节，SHA-256 `96c7cf34aadd2bb5ff31fead259b6b1e5f1c1b7055cdf91d4882f86085ebcb67`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+
 2026-10-24 首次远端构建：同一提交的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40053342564)前端、Linux、macOS 和 Windows 全部通过；[Android 构建](https://github.com/godstealer/http-capture/actions/runs/40053342578)在 SDK 安装阶段因 action 默认请求已移除的 `tools` 包而失败，未编译 APK；[iOS 构建](https://github.com/godstealer/http-capture/actions/runs/40053342628)通过 Swift 测试、Xcode 工程生成和无签名模拟器 App/Packet Tunnel 编译，随后因 `lipo` 校验命令参数顺序错误而中止，尚未编译 iPhone 目标或上传附件。两处工作流脚本随后一并修复并完成重跑。
 
 第二批提交 `d9fca00` 的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40055538553)四个平台全部通过；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40055538618)成功编译双架构 APK 并上传 `http-capture-android-debug` 附件；[iOS mobile build](https://github.com/godstealer/http-capture/actions/runs/40055538644)成功编译并上传 `http-capture-ios-simulator` 附件，随后无签名 iPhone arm64 宿主与 Packet Tunnel 编译及架构校验也通过。构建结果不能替代 Android/iPhone 真机 VPN、HTTPS 证书信任、网络切换和界面操作验收；iOS 设备安装仍需签名与 Packet Tunnel 权限。
