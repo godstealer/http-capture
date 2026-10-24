@@ -94,13 +94,15 @@ public final class CaptureVpnService extends VpnService {
             if (packages == null) packages = new String[0];
             Arrays.sort(packages);
             JSONArray names = new JSONArray();
-            for (String packageName : packages) names.put(packageName);
+            for (int index = 0; index < Math.min(packages.length, 16); index++)
+                names.put(packages[index].substring(0, Math.min(packages[index].length(), 256)));
             JSONObject result = new JSONObject().put("uid", uid).put("packages", names);
             if (packages.length == 1) {
                 try {
                     CharSequence label = service.getPackageManager().getApplicationLabel(
                         service.getPackageManager().getApplicationInfo(packages[0], 0));
-                    result.put("label", label.toString());
+                    String text = label.toString();
+                    result.put("label", text.substring(0, Math.min(text.length(), 128)));
                 } catch (android.content.pm.PackageManager.NameNotFoundException ignored) { }
             }
             return result.toString();

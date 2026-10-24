@@ -737,10 +737,11 @@ public final class MainActivity extends Activity {
                 String label = application.optString("label");
                 JSONArray packages = application.optJSONArray("packages");
                 if (!label.isEmpty()) text.append(" · ").append(label);
-                else if (packages != null && packages.length() == 1)
-                    text.append(" · ").append(packages.optString(0));
-                else text.append(" · UID ").append(application.optInt("uid"));
-            }
+                if (packages != null && packages.length() == 1)
+                    text.append(label.isEmpty() ? " · " : " (").append(packages.optString(0))
+                        .append(label.isEmpty() ? "" : ")");
+                text.append(" · UID ").append(application.optInt("uid"));
+            } else if ("tun".equals(origin.optString("entry"))) text.append(" · 应用未识别");
         }
         String error = flow.optString("error");
         if (!error.isEmpty() && !"null".equals(error)) text.append("\n错误：").append(error);
