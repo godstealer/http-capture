@@ -4,6 +4,7 @@ struct ManualRequestDraft: Identifiable {
     let id = UUID()
     var savedID: String? = nil
     var savedName: String? = nil
+    var savedCollectionID: String? = nil
     let method: String
     let url: String
     let headers: String
@@ -13,9 +14,10 @@ struct ManualRequestDraft: Identifiable {
 
     init(method: String, url: String, headers: String, body: String,
          bodyMode: ManualBodyMode, engine: ManualSendEngine,
-         savedID: String? = nil, savedName: String? = nil) {
+         savedID: String? = nil, savedName: String? = nil, savedCollectionID: String? = nil) {
         self.savedID = savedID
         self.savedName = savedName
+        self.savedCollectionID = savedCollectionID
         self.method = method
         self.url = url
         self.headers = headers

@@ -161,11 +161,15 @@ final class TunnelController: ObservableObject {
     @Published private(set) var manualResultID: String?
     @Published private(set) var manualSaveCounter: UInt64 = 0
     @Published private(set) var savedRequests: [SavedRequestSummary] = []
+    @Published private(set) var savedCollections: [SavedCollectionSummary] = []
     @Published private(set) var savedRequestTotal = 0
     @Published private(set) var savedRequestQuery = ""
+    @Published private(set) var savedCollectionID = ""
     @Published private(set) var savedRequestOffset = 0
     @Published private(set) var savedRequestNextOffset: Int?
     @Published private(set) var savedRequestLoading = false
+    @Published private(set) var savedCollectionLoading = false
+    @Published private(set) var savedCollectionSaving = false
     @Published private(set) var savedOpenLoading = false
     @Published private(set) var savedDeleteBusy = false
     @Published private(set) var savedRequestError: String?
@@ -192,20 +196,26 @@ final class TunnelController: ObservableObject {
     private var manualSaving = false
     private var savedOpenGeneration: UInt64 = 0
     private var savedListGeneration: UInt64 = 0
+    private var savedCollectionGeneration: UInt64 = 0
     private var pendingSavedCopy: SavedRequestCopy?
     var manualActivityText: String { manualSaving ? "正在保存请求…" : "正在发送请求…" }
 
     private func resetSavedRequestUI() {
         savedOpenGeneration &+= 1
         savedListGeneration &+= 1
+        savedCollectionGeneration &+= 1
         pendingSavedCopy = nil
         savedOpenLoading = false
         savedRequestLoading = false
         savedDeleteBusy = false
         savedRequestError = nil
         savedRequests = []
+        savedCollections = []
         savedRequestTotal = 0
         savedRequestQuery = ""
+        savedCollectionID = ""
+        savedCollectionLoading = false
+        savedCollectionSaving = false
         savedRequestOffset = 0
         savedRequestNextOffset = nil
         savedDraft = nil
@@ -743,19 +753,72 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    func loadSavedRequests(offset: Int = 0, query: String? = nil) {
+    func loadSavedCollections() {
+        guard connected, !savedCollectionLoading, !savedCollectionSaving else { return }
+        savedCollectionGeneration &+= 1
+        let generation = savedCollectionGeneration
+        savedCollectionLoading = true
+        send(["method": "list_saved_collections"],
+             onFailure: { [weak self] in
+                 self?.savedCollectionLoading = false
+                 self?.savedRequestError = self?.message
+             }, accept: { [weak self] in self?.savedCollectionGeneration == generation }) { [weak self] value in
+            guard let self else { return }
+            self.savedCollectionLoading = false
+            guard let object = value as? [String: Any],
+                  let rows = object["collections"] as? [[String: Any]] else {
+                self.savedRequestError = "请求库没有返回集合列表"
+                return
+            }
+            self.savedCollections = rows.compactMap(SavedCollectionSummary.init)
+        }
+    }
+
+    func changeSavedCollection(action: String, id: String, name: String? = nil) {
+        guard connected, !savedCollectionSaving, !savedCollectionLoading,
+              !savedRequestLoading, !savedDeleteBusy,
+              ["rename", "delete"].contains(action) else { return }
+        var request: [String: Any] = ["method": "change_saved_collection", "action": action, "id": id]
+        if action == "rename" {
+            let value = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value.utf8.count <= 512 else {
+                savedRequestError = "集合名称须为 1–512 字节"
+                return
+            }
+            request["name"] = value
+        }
+        savedCollectionGeneration &+= 1
+        let generation = savedCollectionGeneration
+        savedCollectionSaving = true
+        savedRequestError = nil
+        send(request, onFailure: { [weak self] in
+            self?.savedCollectionSaving = false
+            self?.savedRequestError = self?.message
+        }, accept: { [weak self] in self?.savedCollectionGeneration == generation }) { [weak self] _ in
+            guard let self else { return }
+            self.savedCollectionSaving = false
+            if action == "delete" { self.savedCollectionID = "" }
+            self.loadSavedCollections()
+            self.loadSavedRequests()
+        }
+    }
+
+    func loadSavedRequests(offset: Int = 0, query: String? = nil, collectionID: String? = nil) {
         guard connected, !savedRequestLoading, !savedDeleteBusy, offset >= 0 else { return }
         let search = (query ?? savedRequestQuery).trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedCollection = collectionID ?? savedCollectionID
         guard search.utf8.count <= 256 else {
             savedRequestError = "搜索词最多 256 字节"
             return
         }
         savedRequestQuery = search
+        savedCollectionID = selectedCollection
         savedListGeneration &+= 1
         let generation = savedListGeneration
         savedRequestLoading = true
         savedRequestError = nil
-        send(["method": "list_saved_requests", "offset": offset, "query": search],
+        send(["method": "list_saved_requests", "offset": offset, "query": search,
+              "collectionId": selectedCollection],
              onFailure: { [weak self] in
                  guard let self else { return }
                  self.savedRequestLoading = false
@@ -792,6 +855,7 @@ final class TunnelController: ObservableObject {
             guard let self else { return }
             self.savedDeleteBusy = false
             self.message = "已删除保存的请求"
+            self.loadSavedCollections()
             self.loadSavedRequests(offset: nextOffset)
         }
     }
@@ -949,8 +1013,19 @@ final class TunnelController: ObservableObject {
     }
 
     func saveManualRequest(id: String?, name: String, method: String, url: String,
-                           engine: ManualSendEngine, headers: String, body: PreparedRequestBody) {
+                           engine: ManualSendEngine, headers: String, body: PreparedRequestBody,
+                           collectionID: String? = nil, newCollectionName: String? = nil) {
         guard connected, !sendingManualRequest else { return }
+        let selectedCollection = collectionID?.isEmpty == false ? collectionID : nil
+        let createdCollection = newCollectionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard selectedCollection == nil || createdCollection == nil else {
+            message = "请选择已有集合或新建集合"
+            return
+        }
+        if let createdCollection, createdCollection.isEmpty || createdCollection.utf8.count > 512 {
+            message = "集合名称须为 1–512 字节"
+            return
+        }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.utf8.count <= 512 else {
             message = "请求名称须为 1–512 字节"
@@ -998,6 +1073,8 @@ final class TunnelController: ObservableObject {
             draft["bodyBase64"] = body.bytes.base64EncodedString()
             var direct: [String: Any] = ["method": "save_request", "name": name, "request": draft]
             if let id { direct["id"] = id }
+            if let selectedCollection { direct["collectionId"] = selectedCollection }
+            if let createdCollection { direct["newCollectionName"] = createdCollection }
             if let data = try? JSONSerialization.data(withJSONObject: direct), data.count <= 128 * 1024 {
                 send(direct, onFailure: { [weak self] in self?.failManualSave() },
                      accept: { [weak self] in self?.manualSendGeneration == generation }) {
@@ -1010,6 +1087,8 @@ final class TunnelController: ObservableObject {
         var begin: [String: Any] = ["method": "begin_saved_request_upload", "name": name,
                                     "request": draft, "totalBytes": body.bytes.count]
         if let id { begin["id"] = id }
+        if let selectedCollection { begin["collectionId"] = selectedCollection }
+        if let createdCollection { begin["newCollectionName"] = createdCollection }
         guard let data = try? JSONSerialization.data(withJSONObject: begin), data.count <= 128 * 1024 else {
             failManualSave()
             message = "请求头超过 VPN 扩展消息上限 128 KiB"
@@ -1121,6 +1200,7 @@ final class TunnelController: ObservableObject {
             }
             message = "请求已保存"
             manualSaveCounter &+= 1
+            loadSavedCollections()
             loadSavedRequests()
             return
         }

@@ -35,7 +35,7 @@ struct RequestUpload {
 
 enum UploadAction {
     Replay,
-    Save { id: Option<String>, name: String },
+    Save { id: Option<String>, name: String, collection_id: Option<String>, new_collection_name: Option<String> },
 }
 
 struct SavedRead {
@@ -268,7 +268,8 @@ fn replay_request(draft: RequestDraft) -> Result<serde_json::Value, String> {
     }))
 }
 
-fn save_request(id: Option<&str>, name: &str, draft: RequestDraft) -> Result<serde_json::Value, String> {
+fn save_request(id: Option<&str>, name: &str, draft: RequestDraft,
+                collection_id: Option<&str>, new_collection_name: Option<&str>) -> Result<serde_json::Value, String> {
     let name = name.trim();
     if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
     if draft.body_base64.len() > MAX_UPLOAD_BODY.div_ceil(3) * 4 {
@@ -279,6 +280,26 @@ fn save_request(id: Option<&str>, name: &str, draft: RequestDraft) -> Result<ser
     let capture = guard.as_ref().ok_or("Capture is not running")?;
     let store = &capture.runtime.engine.store;
     let mut library = store.library().map_err(|error| error.to_string())?;
+    if collection_id.is_some() && new_collection_name.is_some() {
+        return Err("Choose an existing collection or create a new one".into());
+    }
+    let selected_collection = if let Some(new_name) = new_collection_name {
+        let new_name = new_name.trim();
+        if new_name.is_empty() || new_name.len() > 512 {
+            return Err("Collection name must be 1–512 bytes".into());
+        }
+        if library.collections.iter().any(|collection| collection.name.eq_ignore_ascii_case(new_name)) {
+            return Err("Collection name already exists".into());
+        }
+        let id = Uuid::new_v4().to_string();
+        library.collections.push(Collection { id: id.clone(), name: new_name.into() });
+        Some(id)
+    } else if let Some(id) = collection_id {
+        if !library.collections.iter().any(|collection| collection.id == id) {
+            return Err("Selected collection no longer exists".into());
+        }
+        Some(id.to_owned())
+    } else { None };
     let id = if let Some(id) = id {
         let request = library.requests.iter_mut().find(|request| request.id == id)
             .ok_or("Saved request not found")?;
@@ -287,9 +308,11 @@ fn save_request(id: Option<&str>, name: &str, draft: RequestDraft) -> Result<ser
         }
         request.name = name.into();
         request.draft = draft;
+        if let Some(collection_id) = selected_collection { request.collection_id = collection_id; }
         id.to_owned()
     } else {
-        let collection_id = if let Some(collection) = library.collections.iter()
+        let collection_id = if let Some(id) = selected_collection { id }
+        else if let Some(collection) = library.collections.iter()
             .find(|collection| collection.name == "我的请求") {
             collection.id.clone()
         } else {
@@ -306,16 +329,60 @@ fn save_request(id: Option<&str>, name: &str, draft: RequestDraft) -> Result<ser
     Ok(serde_json::json!({"id": id, "revision": revision}))
 }
 
-fn list_saved_requests(offset: usize, query: &str) -> Result<serde_json::Value, String> {
+fn list_saved_collections() -> Result<serde_json::Value, String> {
+    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_ref().ok_or("Capture is not running")?;
+    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({"collections": library.collections.iter().map(|collection| {
+        let count = library.requests.iter().filter(|request| request.collection_id == collection.id).count();
+        serde_json::json!({"id": collection.id, "name": collection.name, "count": count})
+    }).collect::<Vec<_>>() }))
+}
+
+fn change_saved_collection(action: &str, id: &str, name: Option<&str>) -> Result<serde_json::Value, String> {
+    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_ref().ok_or("Capture is not running")?;
+    let store = &capture.runtime.engine.store;
+    let mut library = store.library().map_err(|error| error.to_string())?;
+    let index = library.collections.iter().position(|collection| collection.id == id)
+        .ok_or("Collection not found")?;
+    match action {
+        "rename" => {
+            let name = name.ok_or("Missing collection name")?.trim();
+            if name.is_empty() || name.len() > 512 {
+                return Err("Collection name must be 1–512 bytes".into());
+            }
+            if library.collections.iter().enumerate().any(|(other, collection)|
+                other != index && collection.name.eq_ignore_ascii_case(name)) {
+                return Err("Collection name already exists".into());
+            }
+            library.collections[index].name = name.into();
+        }
+        "delete" => {
+            if library.requests.iter().any(|request| request.collection_id == id) {
+                return Err("Move or delete requests before deleting this collection".into());
+            }
+            library.collections.remove(index);
+        }
+        _ => return Err("Unsupported collection action".into()),
+    }
+    let revision = store.save_library(library).map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({"id": id, "revision": revision}))
+}
+
+fn list_saved_requests(offset: usize, query: &str, collection_id: &str) -> Result<serde_json::Value, String> {
     let query = query.trim().to_lowercase();
     if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
     let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_ref().ok_or("Capture is not running")?;
     let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
-    let matches = |request: &&SavedRequest| query.is_empty()
-        || request.name.to_lowercase().contains(&query)
-        || request.draft.method.to_lowercase().contains(&query)
-        || request.draft.url.to_lowercase().contains(&query);
+    if !collection_id.is_empty() && !library.collections.iter().any(|collection| collection.id == collection_id) {
+        return Err("Selected collection no longer exists".into());
+    }
+    let matches = |request: &&SavedRequest| (collection_id.is_empty() || request.collection_id == collection_id)
+        && (query.is_empty() || request.name.to_lowercase().contains(&query)
+            || request.draft.method.to_lowercase().contains(&query)
+            || request.draft.url.to_lowercase().contains(&query));
     let total = library.requests.iter().filter(&matches).count();
     let requests: Vec<_> = library.requests.iter().rev().filter(matches).skip(offset).take(100).map(|request| {
         let collection_name = library.collections.iter()
@@ -410,13 +477,23 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
             .ok_or("Missing request draft")?).map_err(|error| error.to_string())?;
         let name = request.get("name").and_then(|value| value.as_str()).ok_or("Missing request name")?;
         let id = request.get("id").and_then(|value| value.as_str());
-        return save_request(id, name, draft);
+        let collection_id = request.get("collectionId").and_then(|value| value.as_str());
+        let new_collection_name = request.get("newCollectionName").and_then(|value| value.as_str());
+        return save_request(id, name, draft, collection_id, new_collection_name);
+    }
+    if method == "list_saved_collections" { return list_saved_collections(); }
+    if method == "change_saved_collection" {
+        let action = request.get("action").and_then(|value| value.as_str()).ok_or("Missing collection action")?;
+        let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing collection ID")?;
+        let name = request.get("name").and_then(|value| value.as_str());
+        return change_saved_collection(action, id, name);
     }
     if method == "list_saved_requests" {
         let offset = request.get("offset").and_then(|value| value.as_u64())
             .and_then(|value| usize::try_from(value).ok()).unwrap_or(0);
         let query = request.get("query").and_then(|value| value.as_str()).unwrap_or("");
-        return list_saved_requests(offset, query);
+        let collection_id = request.get("collectionId").and_then(|value| value.as_str()).unwrap_or("");
+        return list_saved_requests(offset, query, collection_id);
     }
     if method == "delete_saved_request" {
         let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing request ID")?;
@@ -446,7 +523,9 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
                 .ok_or("Missing request name")?.trim();
             if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
             UploadAction::Save { id: request.get("id").and_then(|value| value.as_str()).map(str::to_owned),
-                name: name.to_owned() }
+                name: name.to_owned(),
+                collection_id: request.get("collectionId").and_then(|value| value.as_str()).map(str::to_owned),
+                new_collection_name: request.get("newCollectionName").and_then(|value| value.as_str()).map(str::to_owned) }
         } else { UploadAction::Replay };
         let token = UPLOAD_IDS.fetch_add(1, Ordering::Relaxed);
         let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
@@ -498,7 +577,9 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
         if method == "cancel_request_upload" { return Ok(serde_json::Value::Null); }
         return match upload.action {
             UploadAction::Replay => replay_request(upload.draft),
-            UploadAction::Save { id, name } => save_request(id.as_deref(), &name, upload.draft),
+            UploadAction::Save { id, name, collection_id, new_collection_name } =>
+                save_request(id.as_deref(), &name, upload.draft,
+                    collection_id.as_deref(), new_collection_name.as_deref()),
         };
     }
     let guard = active()
@@ -1572,6 +1653,35 @@ mod tests {
             .to_string()).unwrap();
         assert!(command(&serde_json::json!({"method":"open_saved_request",
             "id":saved_id}).to_string()).is_err());
+        let collection_draft = serde_json::json!({"engine":"auto", "method":"GET",
+            "url":"https://example.com/ios-collection", "headers":[], "bodyBase64":""});
+        let collection_saved = command(&serde_json::json!({"method":"save_request",
+            "name":"collection request", "request":collection_draft,
+            "newCollectionName":"iOS collection smoke"}).to_string()).unwrap();
+        let collection_request_id = collection_saved["id"].as_str().unwrap();
+        let collections = command(r#"{"method":"list_saved_collections"}"#).unwrap();
+        let entries = collections["collections"].as_array().unwrap();
+        let collection_id = entries.iter().find(|entry| entry["name"] == "iOS collection smoke")
+            .unwrap()["id"].as_str().unwrap();
+        let default_id = entries.iter().find(|entry| entry["name"] == "我的请求")
+            .unwrap()["id"].as_str().unwrap();
+        let in_collection = command(&serde_json::json!({"method":"list_saved_requests",
+            "offset":0,"collectionId":collection_id}).to_string()).unwrap();
+        assert_eq!(in_collection["total"], 1);
+        assert_eq!(in_collection["requests"][0]["id"], collection_request_id);
+        assert!(command(&serde_json::json!({"method":"change_saved_collection",
+            "action":"delete","id":collection_id}).to_string()).is_err());
+        command(&serde_json::json!({"method":"save_request","id":collection_request_id,
+            "name":"collection request","request":collection_draft,
+            "collectionId":default_id}).to_string()).unwrap();
+        command(&serde_json::json!({"method":"change_saved_collection",
+            "action":"rename","id":collection_id,"name":"iOS collection renamed"}).to_string()).unwrap();
+        command(&serde_json::json!({"method":"change_saved_collection",
+            "action":"delete","id":collection_id}).to_string()).unwrap();
+        assert!(command(&serde_json::json!({"method":"list_saved_requests",
+            "collectionId":collection_id}).to_string()).is_err());
+        command(&serde_json::json!({"method":"delete_saved_request","id":collection_request_id})
+            .to_string()).unwrap();
         let cached = command(&serde_json::json!({"method":"save_request",
             "name":"cached body", "request":{"engine":"auto", "method":"POST",
             "url":"https://example.com/ios-cached", "headers":[], "bodyBase64":"AQ=="}})

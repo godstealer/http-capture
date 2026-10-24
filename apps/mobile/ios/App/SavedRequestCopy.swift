@@ -1,5 +1,19 @@
 import Foundation
 
+struct SavedCollectionSummary: Identifiable {
+    let id: String
+    let name: String
+    let count: Int
+
+    init?(_ value: [String: Any]) {
+        guard let id = value["id"] as? String,
+              let name = value["name"] as? String else { return nil }
+        self.id = id
+        self.name = name
+        count = (value["count"] as? NSNumber)?.intValue ?? 0
+    }
+}
+
 struct SavedRequestSummary: Identifiable {
     let id: String
     let name: String
@@ -20,6 +34,7 @@ struct SavedRequestSummary: Identifiable {
 struct SavedRequestCopy {
     let savedID: String
     let savedName: String
+    let savedCollectionID: String
     let method: String
     let url: String
     let headers: String
@@ -33,6 +48,7 @@ struct SavedRequestCopy {
               let draft = request["draft"] as? [String: Any],
               let id = request["id"] as? String,
               let name = request["name"] as? String,
+              let collectionID = request["collectionId"] as? String,
               let method = draft["method"] as? String,
               let url = draft["url"] as? String,
               let engine = ManualSendEngine(rawValue: draft["engine"] as? String ?? "auto"),
@@ -102,6 +118,7 @@ struct SavedRequestCopy {
         }
         savedID = id
         savedName = name
+        savedCollectionID = collectionID
         self.method = method
         self.url = url
         self.headers = headerText
@@ -137,11 +154,13 @@ struct SavedRequestCopy {
            let text = ResponseBodyCodec.readableText(bytes) {
             return ManualRequestDraft(method: method, url: url, headers: headers,
                                       body: text, bodyMode: .text, engine: engine,
-                                      savedID: savedID, savedName: savedName)
+                                      savedID: savedID, savedName: savedName,
+                                      savedCollectionID: savedCollectionID)
         }
         return ManualRequestDraft(method: method, url: url, headers: headers,
                                   body: bytes.base64EncodedString(), bodyMode: .base64,
-                                  engine: engine, savedID: savedID, savedName: savedName)
+                                  engine: engine, savedID: savedID, savedName: savedName,
+                                  savedCollectionID: savedCollectionID)
     }
 
     enum CopyError: LocalizedError {

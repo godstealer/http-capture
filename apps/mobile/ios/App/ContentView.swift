@@ -375,12 +375,34 @@ private struct SavedRequestsView: View {
     @EnvironmentObject private var tunnel: TunnelController
     @Environment(\.dismiss) private var dismiss
     @State private var searchInput = ""
+    @State private var collectionNameInput = ""
+    @State private var showingCollectionManager = false
     @State private var deletingRequest: SavedRequestSummary?
     @State private var showingDeleteConfirmation = false
+
+    private var currentCollection: SavedCollectionSummary? {
+        tunnel.savedCollections.first { $0.id == tunnel.savedCollectionID }
+    }
 
     var body: some View {
         NavigationStack {
             List {
+                Picker("集合", selection: Binding(get: { tunnel.savedCollectionID },
+                                              set: { tunnel.loadSavedRequests(collectionID: $0) })) {
+                    Text("全部集合").tag("")
+                    ForEach(tunnel.savedCollections) { collection in
+                        Text("\(collection.name) (\(collection.count))").tag(collection.id)
+                    }
+                }
+                .disabled(tunnel.savedRequestLoading || tunnel.savedCollectionLoading
+                          || tunnel.savedCollectionSaving)
+                if let collection = currentCollection {
+                    Button("管理当前集合") {
+                        collectionNameInput = collection.name
+                        showingCollectionManager = true
+                    }
+                    .disabled(tunnel.savedCollectionSaving || tunnel.savedRequestLoading)
+                }
                 HStack {
                     TextField("搜索名称、方法或 URL", text: $searchInput)
                         .textInputAutocapitalization(.never)
@@ -390,7 +412,7 @@ private struct SavedRequestsView: View {
                         .disabled(tunnel.savedRequestLoading || tunnel.savedDeleteBusy)
                 }
                 if tunnel.savedRequests.isEmpty && !tunnel.savedRequestLoading {
-                    Text(tunnel.savedRequestQuery.isEmpty
+                    Text(tunnel.savedRequestQuery.isEmpty && tunnel.savedCollectionID.isEmpty
                          ? "还没有保存的请求。新建请求后点“保存请求”即可。" : "没有匹配的请求。")
                         .foregroundStyle(.secondary)
                 }
@@ -430,6 +452,8 @@ private struct SavedRequestsView: View {
                 }
                 .buttonStyle(.borderless)
                 if tunnel.savedRequestLoading { ProgressView("正在读取请求库…") }
+                if tunnel.savedCollectionLoading { ProgressView("正在读取集合…") }
+                if tunnel.savedCollectionSaving { ProgressView("正在保存集合…") }
                 if tunnel.savedOpenLoading { ProgressView("正在读取完整请求正文…") }
                 if tunnel.savedDeleteBusy { ProgressView("正在删除请求…") }
                 if let error = tunnel.savedRequestError {
@@ -440,7 +464,29 @@ private struct SavedRequestsView: View {
             .toolbar { Button("关闭") { dismiss() } }
             .onAppear {
                 searchInput = tunnel.savedRequestQuery
+                tunnel.loadSavedCollections()
                 tunnel.loadSavedRequests()
+            }
+            .alert("管理集合", isPresented: $showingCollectionManager) {
+                TextField("集合名称", text: $collectionNameInput)
+                Button("重命名") {
+                    if let collection = currentCollection {
+                        tunnel.changeSavedCollection(action: "rename", id: collection.id,
+                                                     name: collectionNameInput)
+                    }
+                }
+                if let collection = currentCollection, collection.count == 0 {
+                    Button("删除空集合", role: .destructive) {
+                        tunnel.changeSavedCollection(action: "delete", id: collection.id)
+                    }
+                }
+                Button("取消", role: .cancel) { }
+            } message: {
+                if let collection = currentCollection, collection.count > 0 {
+                    Text("集合内有 \(collection.count) 条请求，请先移动或删除。")
+                } else {
+                    Text("空集合可以删除。")
+                }
             }
             .confirmationDialog("删除已保存请求？", isPresented: $showingDeleteConfirmation,
                                 titleVisibility: .visible) {
@@ -462,6 +508,8 @@ private struct ManualRequestView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var method = "GET"
     @State private var requestName = ""
+    @State private var selectedCollectionID = ""
+    @State private var newCollectionName = ""
     @State private var url = ""
     @State private var headers = ""
     @State private var requestBody = ""
@@ -479,6 +527,7 @@ private struct ManualRequestView: View {
     init(draft: ManualRequestDraft = .empty) {
         savedID = draft.savedID
         _requestName = State(initialValue: draft.savedName ?? "")
+        _selectedCollectionID = State(initialValue: draft.savedCollectionID ?? "")
         _method = State(initialValue: draft.method)
         _url = State(initialValue: draft.url)
         _headers = State(initialValue: draft.headers)
@@ -557,6 +606,17 @@ private struct ManualRequestView: View {
                 }
                 Section("保存请求") {
                     TextField("请求名称（留空自动生成）", text: $requestName)
+                    Picker("保存到集合", selection: $selectedCollectionID) {
+                        Text("我的请求（自动创建）").tag("")
+                        ForEach(tunnel.savedCollections) { collection in
+                            Text(collection.name).tag(collection.id)
+                        }
+                        Text("新建集合…").tag("__new__")
+                    }
+                    if selectedCollectionID == "__new__" {
+                        TextField("新集合名称", text: $newCollectionName)
+                    }
+                    if tunnel.savedCollectionLoading { ProgressView("正在读取集合…") }
                     Button(savedID == nil ? "保存请求" : "保存修改") {
                         do {
                             let prepared = try RequestBodyCodec.compose(
@@ -566,10 +626,19 @@ private struct ManualRequestView: View {
                             let generated = method.trimmingCharacters(in: .whitespacesAndNewlines)
                                 .uppercased() + " " + url.trimmingCharacters(in: .whitespacesAndNewlines)
                             let name = entered.isEmpty ? String(generated.prefix(100)) : entered
+                            if selectedCollectionID == "__new__" &&
+                                newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                inputError = "请输入新集合名称"
+                                return
+                            }
                             inputError = nil
                             tunnel.saveManualRequest(id: savedID, name: name, method: method,
                                                      url: url, engine: engine, headers: headers,
-                                                     body: prepared)
+                                                     body: prepared,
+                                                     collectionID: selectedCollectionID == "" || selectedCollectionID == "__new__"
+                                                         ? nil : selectedCollectionID,
+                                                     newCollectionName: selectedCollectionID == "__new__"
+                                                         ? newCollectionName : nil)
                         } catch {
                             inputError = error.localizedDescription
                         }
@@ -588,6 +657,7 @@ private struct ManualRequestView: View {
                 Text(tunnel.message).font(.footnote).foregroundStyle(.secondary)
             }
             .navigationTitle(savedID == nil ? "新建请求" : "编辑已保存请求")
+            .onAppear { tunnel.loadSavedCollections() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(tunnel.canCancelManualUpload ? "取消并关闭" :

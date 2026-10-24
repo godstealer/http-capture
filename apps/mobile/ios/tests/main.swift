@@ -198,7 +198,7 @@ do {
     }
     let savedBody = Data(repeating: 255, count: 12 * 1024 + 1)
     let savedValue: [String: Any] = [
-        "request": ["id": "saved-1", "name": "保存的请求", "draft": [
+        "request": ["id": "saved-1", "name": "保存的请求", "collectionId": "collection-1", "draft": [
             "method": "POST", "url": "https://example.test/saved", "engine": "h2",
             "headers": [["name": "X-Order", "value": "first"],
                         ["name": "x-order", "value": "second"],
