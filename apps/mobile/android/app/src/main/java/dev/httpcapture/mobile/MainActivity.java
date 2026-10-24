@@ -844,6 +844,12 @@ public final class MainActivity extends Activity {
             showReplayError("这条记录缺少请求信息，请重新打开详情");
             return;
         }
+        String method = request.optString("method").trim();
+        String url = request.optString("url").trim();
+        if (method.isEmpty() || url.isEmpty()) {
+            showReplayError("这条记录缺少请求方法或 URL，无法无损复制");
+            return;
+        }
         if (!java.util.Arrays.asList(SEND_ENGINES).contains(request.optString("engine", "auto"))) {
             showReplayError("原请求的发送引擎未内置于移动版，无法无损复制；可手动新建请求");
             return;
@@ -855,21 +861,26 @@ public final class MainActivity extends Activity {
         }
         StringBuilder headerText = new StringBuilder();
         JSONArray headerRows = request.optJSONArray("headers");
-        if (headerRows != null) {
-            for (int i = 0; i < headerRows.length(); i++) {
-                JSONObject row = headerRows.optJSONObject(i);
-                if (row == null) continue;
-                String name = row.optString("name");
-                if (name.startsWith(":")) continue;
-                String value = row.optString("value");
-                if (!name.equals(name.trim()) || !value.equals(value.trim())
-                        || !RequestHeaderCodec.isHeaderLine(name + ": " + value)) {
-                    showReplayError("请求头包含移动编辑器无法无损表示的字符");
-                    return;
-                }
-                if (row.optBoolean("disabled")) headerText.append("# ");
-                headerText.append(name).append(": ").append(value).append('\n');
+        if (headerRows == null) {
+            showReplayError("这条记录的请求头不完整，请重新打开详情");
+            return;
+        }
+        for (int i = 0; i < headerRows.length(); i++) {
+            JSONObject row = headerRows.optJSONObject(i);
+            if (row == null) {
+                showReplayError("第 " + (i + 1) + " 个请求头记录不完整");
+                return;
             }
+            String name = row.optString("name");
+            if (name.startsWith(":")) continue;
+            String value = row.optString("value");
+            if (!name.equals(name.trim()) || !value.equals(value.trim())
+                    || !RequestHeaderCodec.isHeaderLine(name + ": " + value)) {
+                showReplayError("请求头包含移动编辑器无法无损表示的字符");
+                return;
+            }
+            if (row.optBoolean("disabled")) headerText.append("# ");
+            headerText.append(name).append(": ").append(value).append('\n');
         }
         if (headerText.toString().getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
             showReplayError("请求头超过 16 KiB，当前移动编辑器尚不能安全编辑后重发");
@@ -899,8 +910,8 @@ public final class MainActivity extends Activity {
                 RecordedRequestBody editable = RecordedRequestBody.from(bytes.toByteArray());
                 main.post(() -> {
                     ManualRequestDraft draft = new ManualRequestDraft();
-                    draft.method = request.optString("method", "GET");
-                    draft.url = request.optString("url");
+                    draft.method = method;
+                    draft.url = url;
                     draft.headers = headerText.toString();
                     draft.body = editable.value;
                     draft.bodyMode = editable.mode;
