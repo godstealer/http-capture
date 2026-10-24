@@ -11,6 +11,7 @@ mod body_spool;
 mod body_base64;
 mod capture_tls;
 mod traffic_origin;
+pub use traffic_origin::TunOriginRegistry;
 mod traffic_process;
 pub mod browser_profiles;
 pub mod tls_config;

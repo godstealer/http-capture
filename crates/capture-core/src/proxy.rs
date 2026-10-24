@@ -7,6 +7,7 @@ use tokio_rustls::LazyConfigAcceptor;
 
 pub struct ProxyHandle {
     pub address: SocketAddr,
+    pub origin_registry: Option<Arc<crate::TunOriginRegistry>>,
     stop: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
 }
@@ -82,8 +83,10 @@ async fn start_mode(engine: Arc<Engine>, requested: SocketAddr, transparent: boo
     ensure!(!requested.ip().is_multicast(), "监听地址不能是组播地址");
     let listener = TcpListener::bind(requested).await.with_context(||format!("无法监听 {requested}：端口可能被占用，或 IP 不属于本机"))?;
     let address = listener.local_addr()?;
+    let origin_registry = transparent.then(|| Arc::new(crate::traffic_origin::TunOriginRegistry::default()));
     if !transparent { *engine.upstream.listener.write().unwrap() = Some(address); }
     let (stop, mut receiver) = oneshot::channel();
+    let registry_for_task = origin_registry.clone();
     let task = tokio::spawn(async move {
         let mut connections = JoinSet::new();
         loop {
@@ -94,10 +97,15 @@ async fn start_mode(engine: Arc<Engine>, requested: SocketAddr, transparent: boo
                     match result {
                         Ok((stream, peer)) => {
                             let engine = engine.clone();
+                            let registry = registry_for_task.clone();
                             let local = stream.local_addr().unwrap_or(address);
                             connections.spawn(async move {
                                 let work = async {
-                                    let origin = crate::traffic_origin::tcp(peer, local, transparent).await;
+                                    let origin = if let Some(registry) = registry {
+                                        registry.take(peer).await.unwrap_or_else(crate::traffic_origin::tun)
+                                    } else {
+                                        crate::traffic_origin::tcp(peer, local, false).await
+                                    };
                                     crate::traffic_origin::scope(Some(origin), handle(stream, engine, address, transparent)).await
                                 };
                                 match tokio::time::timeout(Duration::from_secs(360), work).await {
@@ -117,7 +125,7 @@ async fn start_mode(engine: Arc<Engine>, requested: SocketAddr, transparent: boo
         let mut listener = engine.upstream.listener.write().unwrap();
         if *listener == Some(address) { *listener = None; }
     });
-    Ok(ProxyHandle { address, stop: Some(stop), task })
+    Ok(ProxyHandle { address, origin_registry, stop: Some(stop), task })
 }
 
 async fn error_response<S: AsyncWrite + Unpin>(stream: &mut S, code: u16, text: &str) -> Result<()> {

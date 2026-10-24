@@ -10,6 +10,8 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.ProxyInfo;
 import android.net.VpnService;
+import android.os.Process;
+import android.system.OsConstants;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -17,8 +19,12 @@ import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -35,6 +41,7 @@ public final class CaptureVpnService extends VpnService {
     private static volatile boolean managed;
     private static volatile boolean stopPending;
     private static volatile String message = "VPN 未启动";
+    private static volatile CaptureVpnService currentService;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -70,6 +77,37 @@ public final class CaptureVpnService extends VpnService {
     public static boolean isStopping() { return stopPending; }
     public static String message() { return message; }
     public static void requestStop() { stopPending = true; }
+
+    /** Called only for a TUN TCP tuple while this VPN owns the system tunnel. */
+    public static String lookupConnectionOwner(String sourceAddress, int sourcePort,
+                                                String destinationAddress, int destinationPort) {
+        CaptureVpnService service = currentService;
+        if (Build.VERSION.SDK_INT < 29 || service == null || !managed || service.destroyed) return "";
+        try {
+            ConnectivityManager manager = service.getSystemService(ConnectivityManager.class);
+            if (manager == null) return "";
+            int uid = manager.getConnectionOwnerUid(OsConstants.IPPROTO_TCP,
+                new InetSocketAddress(InetAddress.getByName(sourceAddress), sourcePort),
+                new InetSocketAddress(InetAddress.getByName(destinationAddress), destinationPort));
+            if (uid == Process.INVALID_UID || uid < 0) return "";
+            String[] packages = service.getPackageManager().getPackagesForUid(uid);
+            if (packages == null) packages = new String[0];
+            Arrays.sort(packages);
+            JSONArray names = new JSONArray();
+            for (String packageName : packages) names.put(packageName);
+            JSONObject result = new JSONObject().put("uid", uid).put("packages", names);
+            if (packages.length == 1) {
+                try {
+                    CharSequence label = service.getPackageManager().getApplicationLabel(
+                        service.getPackageManager().getApplicationInfo(packages[0], 0));
+                    result.put("label", label.toString());
+                } catch (android.content.pm.PackageManager.NameNotFoundException ignored) { }
+            }
+            return result.toString();
+        } catch (Exception error) {
+            return "";
+        }
+    }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || ACTION_STOP.equals(intent.getAction())) {
@@ -129,6 +167,7 @@ public final class CaptureVpnService extends VpnService {
             }
             tunnel = builder.establish();
             if (tunnel == null) throw new IllegalStateException("系统未建立 VPN；请重新授权");
+            currentService = this;
             JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
             if (!started.optBoolean("ok")) throw new IllegalStateException(started.optString("error"));
             if (destroyed) throw new IllegalStateException("VPN 服务已停止");
@@ -236,6 +275,7 @@ public final class CaptureVpnService extends VpnService {
         if (shutdownStarted) return;
         shutdownStarted = true;
         destroyed = true;
+        if (currentService == this) currentService = null;
         active = false;
         requestStop();
         main.removeCallbacks(monitor);

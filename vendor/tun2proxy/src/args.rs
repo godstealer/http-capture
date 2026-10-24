@@ -7,6 +7,26 @@ use std::ffi::OsString;
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct TcpProxyObserver(Arc<dyn Fn(SocketAddr, SocketAddr, SocketAddr) + Send + Sync>);
+
+impl std::fmt::Debug for TcpProxyObserver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TcpProxyObserver")
+    }
+}
+
+impl TcpProxyObserver {
+    pub fn new(callback: impl Fn(SocketAddr, SocketAddr, SocketAddr) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(callback))
+    }
+
+    pub(crate) fn notify(&self, source: SocketAddr, destination: SocketAddr, proxy_peer: SocketAddr) {
+        (self.0)(source, destination, proxy_peer);
+    }
+}
 
 #[macro_export]
 macro_rules! version_info {
@@ -29,6 +49,10 @@ fn about_info() -> &'static str {
 #[derive(Debug, Clone, clap::Parser, serde::Serialize, serde::Deserialize)]
 #[command(author, version = version_info!(), about = about_info(), long_about = None)]
 pub struct Args {
+    /// Optional in-process observer for matching a TUN flow to its proxy socket.
+    #[arg(skip)]
+    #[serde(skip)]
+    pub tcp_proxy_observer: Option<TcpProxyObserver>,
     /// Proxy URL in the form proto://[username[:password]@]host:port,
     /// where proto is one of socks4, socks5, http.
     /// Username and password are encoded in percent encoding. For example:
@@ -197,6 +221,7 @@ impl Default for Args {
         #[cfg(not(target_os = "linux"))]
         let setup = true;
         Args {
+            tcp_proxy_observer: None,
             proxy: ArgProxy::default(),
             direct_udp_for_http: false,
             udp_443_redirect: None,

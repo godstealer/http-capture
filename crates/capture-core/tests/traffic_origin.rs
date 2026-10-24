@@ -228,3 +228,37 @@ async fn tun_bridge_does_not_misidentify_the_helper_as_the_original_process() {
         bridge.stop().await; server.await.unwrap();
     }).await.unwrap();
 }
+
+#[tokio::test]
+async fn tun_bridge_records_the_registered_android_application() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let dir = tempfile::tempdir().unwrap(); let engine = Engine::open(dir.path()).unwrap();
+        let source = TcpListener::bind("127.0.0.1:0").await.unwrap(); let address = source.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (io, _) = source.accept().await.unwrap(); let mut io = BufReader::new(io);
+            read_head(&mut io).await.unwrap();
+            io.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        let bridge = proxy::start_tun_bridge(engine.clone()).await.unwrap();
+        let registry = bridge.origin_registry.as_ref().unwrap();
+        registry.enable();
+        let socket = TcpStream::connect(bridge.address).await.unwrap();
+        registry.register(socket.local_addr().unwrap(), capture_core::model::TrafficOrigin {
+            entry: "tun".into(), client_address: Some("10.111.0.2:51234".into()),
+            process: None, process_status: "identified".into(),
+            application: Some(capture_core::model::ApplicationInfo {
+                uid: 10123, packages: vec!["example.android".into()], label: Some("Example".into()),
+            }),
+        });
+        let mut client = BufReader::new(socket);
+        client.write_all(format!("CONNECT {address} HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes()).await.unwrap();
+        assert!(read_head(&mut client).await.unwrap().starts_with(b"HTTP/1.1 200"));
+        client.write_all(format!("GET / HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes()).await.unwrap();
+        let mut response = Vec::new(); client.read_to_end(&mut response).await.unwrap();
+        let flow = completed(&engine, 1).await.pop().unwrap();
+        let origin = flow.traffic_origin.unwrap();
+        assert_eq!(origin.client_address.as_deref(), Some("10.111.0.2:51234"));
+        assert_eq!(origin.application.unwrap().packages, vec!["example.android"]);
+        bridge.stop().await; server.await.unwrap();
+    }).await.unwrap();
+}

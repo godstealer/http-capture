@@ -732,6 +732,15 @@ public final class MainActivity extends Activity {
             text.append("\n来源：").append(origin.optString("entry", "未知"));
             JSONObject process = origin.optJSONObject("process");
             if (process != null) text.append(" · ").append(process.optString("name"));
+            JSONObject application = origin.optJSONObject("application");
+            if (application != null) {
+                String label = application.optString("label");
+                JSONArray packages = application.optJSONArray("packages");
+                if (!label.isEmpty()) text.append(" · ").append(label);
+                else if (packages != null && packages.length() == 1)
+                    text.append(" · ").append(packages.optString(0));
+                else text.append(" · UID ").append(application.optInt("uid"));
+            }
         }
         String error = flow.optString("error");
         if (!error.isEmpty() && !"null".equals(error)) text.append("\n错误：").append(error);

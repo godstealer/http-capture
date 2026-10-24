@@ -111,6 +111,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             getTargetContext().sendBroadcast(probe);
             long trafficDeadline = System.currentTimeMillis() + 20_000;
             boolean captured = false;
+            String capturedID = null;
             String lastState = "请求尚未出现";
             while (System.currentTimeMillis() < trafficDeadline) {
                 JSONObject page = expectOk(NativeCapture.recent("", "vpn-smoke"));
@@ -124,6 +125,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     // sent the request to the origin. Do not stop the VPN yet.
                     if (!summary.isNull("status")) {
                         captured = true;
+                        capturedID = summary.optString("id");
                         break;
                     }
                 }
@@ -131,6 +133,12 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 Thread.sleep(200);
             }
             if (!captured) throw new AssertionError("VPN raw TCP request did not finish: " + lastState);
+            JSONObject flow = expectOk(NativeCapture.metadata(capturedID));
+            JSONObject origin = flow.optJSONObject("trafficOrigin");
+            JSONObject application = origin == null ? null : origin.optJSONObject("application");
+            if (application == null || application.optInt("uid", -1) < 0) {
+                throw new AssertionError("VPN source app UID was not identified: " + origin);
+            }
             runVpnTlsSmoke();
         } finally {
             Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);

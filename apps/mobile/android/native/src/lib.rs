@@ -3,9 +3,10 @@
 use capture_core::store::McpRequestFilter;
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use jni::{
-    objects::{JClass, JString},
+    objects::{GlobalRef, JClass, JString, JValue},
     sys::{jint, jlong, jstring},
     JNIEnv,
+    JavaVM,
 };
 use std::{
     path::Path,
@@ -13,7 +14,28 @@ use std::{
 };
 
 #[cfg(target_os = "android")]
-use tun2proxy::{ArgDns, ArgProxy, Args, CancellationToken};
+use tun2proxy::{ArgDns, ArgProxy, Args, CancellationToken, TcpProxyObserver};
+
+#[cfg(target_os = "android")]
+fn lookup_application(vm: &JavaVM, service_class: &GlobalRef,
+    source: std::net::SocketAddr, destination: std::net::SocketAddr)
+    -> Option<capture_core::model::ApplicationInfo> {
+    let mut env = vm.attach_current_thread().ok()?;
+    let source_ip = env.new_string(source.ip().to_string()).ok()?;
+    let destination_ip = env.new_string(destination.ip().to_string()).ok()?;
+    let result = env.call_static_method(
+        service_class, "lookupConnectionOwner",
+        "(Ljava/lang/String;ILjava/lang/String;I)Ljava/lang/String;",
+        &[
+            JValue::Object(source_ip.as_ref()), JValue::Int(source.port().into()),
+            JValue::Object(destination_ip.as_ref()), JValue::Int(destination.port().into()),
+        ],
+    ).ok()?.l().ok()?;
+    if result.is_null() { return None; }
+    let response = JString::from(result);
+    let json: String = env.get_string(&response).ok()?.into();
+    serde_json::from_str(&json).ok()
+}
 
 #[cfg(target_os = "android")]
 struct MobileTunnel {
@@ -90,7 +112,7 @@ fn stop() -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-fn start_tunnel(fd: i32, capture_quic: bool) -> Result<(), String> {
+fn start_tunnel(fd: i32, capture_quic: bool, vm: JavaVM, service_class: GlobalRef) -> Result<(), String> {
     if fd < 0 {
         return Err("Invalid VPN file descriptor".into());
     }
@@ -111,6 +133,8 @@ fn start_tunnel(fd: i32, capture_quic: bool) -> Result<(), String> {
         ))
         .map_err(|error| format!("{error:#}"))?;
     let proxy = format!("http://{}", bridge.address);
+    let origin_registry = bridge.origin_registry.as_ref().expect("TUN bridge has origin registry").clone();
+    origin_registry.enable();
     let mut args = Args::default();
     args.proxy = match ArgProxy::try_from(proxy.as_str()) {
         Ok(proxy) => proxy,
@@ -120,6 +144,14 @@ fn start_tunnel(fd: i32, capture_quic: bool) -> Result<(), String> {
         }
     };
     args.direct_udp_for_http = true;
+    args.tcp_proxy_observer = Some(TcpProxyObserver::new(move |source, destination, proxy_peer| {
+        let application = lookup_application(&vm, &service_class, source, destination);
+        let process_status = if application.is_some() { "identified" } else { "tun-unavailable" };
+        origin_registry.register(proxy_peer, capture_core::model::TrafficOrigin {
+            entry: "tun".into(), client_address: Some(source.to_string()),
+            process: None, application, process_status: process_status.into(),
+        });
+    }));
     args.ipv6_enabled = true;
     args.virtual_dns_pool_v6 = Some(
         "fd00:198:19::/96"
@@ -608,12 +640,19 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_sendRequest(
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_startTunnel(
-    env: JNIEnv<'_>,
+    mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     fd: jint,
     capture_quic: jni::sys::jboolean,
 ) -> jstring {
-    jni_reply(env, start_tunnel(fd, capture_quic != 0).map(|()| serde_json::Value::Null))
+    let result = (|| {
+        let vm = env.get_java_vm().map_err(|error| error.to_string())?;
+        let class = env.find_class("dev/httpcapture/mobile/CaptureVpnService")
+            .map_err(|error| error.to_string())?;
+        let service_class = env.new_global_ref(class).map_err(|error| error.to_string())?;
+        start_tunnel(fd, capture_quic != 0, vm, service_class)
+    })();
+    jni_reply(env, result.map(|()| serde_json::Value::Null))
 }
 
 #[cfg(target_os = "android")]

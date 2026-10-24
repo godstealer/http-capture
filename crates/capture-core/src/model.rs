@@ -11,6 +11,14 @@ pub struct ProcessInfo {
     pub path: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationInfo {
+    pub uid: u32,
+    pub packages: Vec<String>,
+    pub label: Option<String>,
+}
+
 /// Immediate capture ingress, observed locally; never inferred from HTTP headers.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +26,8 @@ pub struct TrafficOrigin {
     pub entry: String,
     pub client_address: Option<String>,
     pub process: Option<ProcessInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application: Option<ApplicationInfo>,
     pub process_status: String,
 }
 

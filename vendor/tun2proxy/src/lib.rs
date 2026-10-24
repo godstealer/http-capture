@@ -33,7 +33,7 @@ use udp_stream::UdpStream;
 use udpgw::{UDPGW_KEEPALIVE_TIME, UDPGW_MAX_CONNECTIONS, UdpGwClientStream, UdpGwResponse};
 
 pub use {
-    args::{ArgDns, ArgProxy, ArgVerbosity, Args, ProxyType},
+    args::{ArgDns, ArgProxy, ArgVerbosity, Args, ProxyType, TcpProxyObserver},
     error::{BoxError, Error, Result},
     traffic_status::{TrafficStatus, tun2proxy_set_traffic_status_callback},
 };
@@ -351,8 +351,9 @@ where
                     }
                 };
                 let socket_queue = socket_queue.clone();
+                let observer = args.tcp_proxy_observer.clone();
                 sessions.spawn(async move {
-                    if let Err(err) = handle_tcp_session(tcp, proxy_handler, socket_queue).await {
+                    if let Err(err) = handle_tcp_session(tcp, proxy_handler, socket_queue, observer).await {
                         log::error!("{info} error \"{err}\"");
                     }
                     let active = task_count.fetch_sub(1, Relaxed).saturating_sub(1);
@@ -610,6 +611,7 @@ async fn handle_tcp_session(
     mut tcp_stack: IpStackTcpStream,
     proxy_handler: Arc<Mutex<dyn ProxyHandler>>,
     socket_queue: Option<Arc<SocketQueue>>,
+    observer: Option<TcpProxyObserver>,
 ) -> crate::Result<()> {
     let (session_info, server_addr) = {
         let handler = proxy_handler.lock().await;
@@ -618,6 +620,9 @@ async fn handle_tcp_session(
     };
 
     let mut server = create_tcp_stream(&socket_queue, server_addr).await?;
+    if let (Some(observer), Ok(proxy_peer)) = (observer, server.local_addr()) {
+        observer.notify(session_info.src, session_info.dst, proxy_peer);
+    }
 
     log::info!("Beginning {session_info}");
 
