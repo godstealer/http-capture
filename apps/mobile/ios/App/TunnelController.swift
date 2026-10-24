@@ -147,6 +147,11 @@ final class TunnelController: ObservableObject {
     @Published private(set) var certificateURL: URL?
     @Published private(set) var sessionExportURL: URL?
     @Published private(set) var sessionExporting = false
+    @Published private(set) var sessionExportProgress = 0
+    private var sessionExportGeneration: UInt64 = 0
+    private var sessionExportFile: FileHandle?
+    private var sessionExportToken: UInt64?
+    private var sessionExportTempURL: URL?
     @Published private(set) var trustedCertificates: [TrustedCertificate] = []
     @Published private(set) var trustedCertificatesBusy = false
     private var trustedCertificatesVersion = ""
@@ -1268,19 +1273,31 @@ final class TunnelController: ObservableObject {
 
     func exportSession() {
         guard connected, !sessionExporting else { return }
+        if let old = sessionExportURL { try? FileManager.default.removeItem(at: old) }
         sessionExportURL = nil
         sessionExporting = true
+        sessionExportProgress = 0
+        sessionExportGeneration &+= 1
+        let generation = sessionExportGeneration
         message = "正在导出抓包记录…"
         send(["method": "begin_session_export"], onFailure: { [weak self] in
-            self?.sessionExporting = false
+            guard let self, self.sessionExportGeneration == generation else { return }
+            self.sessionExporting = false
         }) { [weak self] value in
             guard let self else { return }
             guard let info = value as? [String: Any],
                   let token = (info["token"] as? NSNumber)?.uint64Value,
                   let total = (info["totalBytes"] as? NSNumber)?.uint64Value,
+                  total > 0,
                   let count = info["count"] as? Int else {
-                self.sessionExporting = false
-                self.message = "VPN 扩展没有返回导出信息"
+                if self.sessionExportGeneration == generation {
+                    self.sessionExporting = false
+                    self.message = "VPN 扩展没有返回导出信息"
+                }
+                return
+            }
+            guard self.sessionExportGeneration == generation else {
+                self.finishSessionExport(token: token)
                 return
             }
             let url = FileManager.default.temporaryDirectory
@@ -1289,19 +1306,39 @@ final class TunnelController: ObservableObject {
                   let file = try? FileHandle(forWritingTo: url) else {
                 self.sessionExporting = false
                 self.message = "无法创建临时导出文件"
-                self.send(["method": "finish_session_export", "token": token]) { _ in }
+                try? FileManager.default.removeItem(at: url)
+                self.finishSessionExport(token: token)
                 return
             }
+            self.sessionExportToken = token
+            self.sessionExportFile = file
+            self.sessionExportTempURL = url
             self.readSessionExport(token: token, total: total, offset: 0,
-                                   count: count, file: file, url: url)
+                                   count: count, file: file, url: url, generation: generation)
         }
     }
 
+    func cancelSessionExport() {
+        guard sessionExporting else { return }
+        if let token = sessionExportToken,
+           let file = sessionExportFile,
+           let url = sessionExportTempURL {
+            endSessionExport(token: token, file: file, url: url, success: false)
+        } else {
+            sessionExportGeneration &+= 1
+            sessionExporting = false
+        }
+        message = "已取消导出抓包记录"
+    }
+
     private func readSessionExport(token: UInt64, total: UInt64, offset: UInt64,
-                                   count: Int, file: FileHandle, url: URL) {
+                                   count: Int, file: FileHandle, url: URL, generation: UInt64) {
         send(["method": "read_session_export", "token": token, "offset": offset],
-             onFailure: { [weak self] in self?.endSessionExport(token: token, file: file, url: url, success: false) }) { [weak self] value in
-            guard let self else { return }
+             onFailure: { [weak self] in
+                 guard let self, self.sessionExportGeneration == generation else { return }
+                 self.endSessionExport(token: token, file: file, url: url, success: false)
+             }, accept: { [weak self] in self?.sessionExportGeneration == generation }) { [weak self] value in
+            guard let self, self.sessionExportGeneration == generation else { return }
             guard let chunk = value as? [String: Any],
                   let returnedOffset = (chunk["offset"] as? NSNumber)?.uint64Value,
                   returnedOffset == offset,
@@ -1322,12 +1359,13 @@ final class TunnelController: ObservableObject {
                 return
             }
             let next = offset + UInt64(bytes.count)
+            self.sessionExportProgress = Int(Double(next) / Double(total) * 100)
             if next == total {
                 self.endSessionExport(token: token, file: file, url: url, success: true)
                 self.message = "已导出 \(count) 条抓包记录"
             } else if next > offset {
                 self.readSessionExport(token: token, total: total, offset: next,
-                                       count: count, file: file, url: url)
+                                       count: count, file: file, url: url, generation: generation)
             } else {
                 self.message = "导出数据未前进"
                 self.endSessionExport(token: token, file: file, url: url, success: false)
@@ -1336,11 +1374,22 @@ final class TunnelController: ObservableObject {
     }
 
     private func endSessionExport(token: UInt64, file: FileHandle, url: URL, success: Bool) {
+        sessionExportGeneration &+= 1
         try? file.close()
         if success { sessionExportURL = url }
         else { try? FileManager.default.removeItem(at: url) }
+        sessionExportToken = nil
+        sessionExportFile = nil
+        sessionExportTempURL = nil
         sessionExporting = false
-        send(["method": "finish_session_export", "token": token]) { _ in }
+        finishSessionExport(token: token)
+    }
+
+    private func finishSessionExport(token: UInt64) {
+        guard let session = manager?.connection as? NETunnelProviderSession,
+              let data = try? JSONSerialization.data(withJSONObject:
+                  ["method": "finish_session_export", "token": token]) else { return }
+        try? session.sendProviderMessage(data) { _ in }
     }
 
     func refreshTrustedCertificates() {

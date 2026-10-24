@@ -65,6 +65,14 @@ struct ContentView: View {
                     Button(tunnel.sessionExporting ? "正在导出…" : "导出抓包记录 JSON") {
                         tunnel.exportSession()
                     }.disabled(!tunnel.connected || tunnel.sessionExporting)
+                    if tunnel.sessionExporting {
+                        HStack {
+                            ProgressView(value: Double(tunnel.sessionExportProgress), total: 100)
+                            Text("\(tunnel.sessionExportProgress)%")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            Button("取消") { tunnel.cancelSessionExport() }
+                        }
+                    }
                     if let url = tunnel.sessionExportURL {
                         ShareLink("分享或保存抓包记录", item: url)
                     }
