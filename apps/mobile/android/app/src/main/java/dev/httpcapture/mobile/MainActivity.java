@@ -1084,7 +1084,7 @@ public final class MainActivity extends Activity {
                 main.post(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     AlertDialog.Builder list = new AlertDialog.Builder(this)
-                        .setTitle("已保存请求 · " + total + " 条")
+                        .setTitle("已保存请求 · " + total + " 条（长按删除）")
                         .setNegativeButton("关闭", null);
                     if (labels.length == 0) list.setMessage("还没有保存的请求。新建请求后点“保存请求”即可。");
                     else list.setItems(labels, (dialog, which) -> openSavedRequest(ids[which]));
@@ -1092,7 +1092,15 @@ public final class MainActivity extends Activity {
                         (dialog, which) -> showSavedRequests(Math.max(0, offset - 100)));
                     if (next >= 0) list.setPositiveButton("下一页",
                         (dialog, which) -> showSavedRequests(next));
-                    list.show();
+                    AlertDialog dialog = list.create();
+                    dialog.show();
+                    if (labels.length > 0) dialog.getListView().setOnItemLongClickListener(
+                        (parent, view, position, itemId) -> {
+                            dialog.dismiss();
+                            confirmDeleteSavedRequest(ids[position], labels[position],
+                                offset >= total - 1 ? Math.max(0, offset - 100) : offset);
+                            return true;
+                        });
                 });
             } catch (Exception error) {
                 main.post(() -> showSavedRequestError(error.getMessage()));
@@ -1113,6 +1121,24 @@ public final class MainActivity extends Activity {
                 main.post(() -> showSavedRequestError(error.getMessage()));
             }
         });
+    }
+
+    private void confirmDeleteSavedRequest(String id, String label, int returnOffset) {
+        new AlertDialog.Builder(this).setTitle("删除已保存请求？")
+            .setMessage(label + "\n\n删除后无法从请求库恢复。")
+            .setNegativeButton("取消", (dialog, which) -> showSavedRequests(returnOffset))
+            .setPositiveButton("删除", (dialog, which) -> worker.execute(() -> {
+                try {
+                    JSONObject reply = parseReply(NativeCapture.deleteSavedRequest(id));
+                    if (!reply.optBoolean("ok"))
+                        throw new IllegalStateException(reply.optString("error"));
+                    main.post(() -> {
+                        if (!isFinishing() && !isDestroyed()) showSavedRequests(returnOffset);
+                    });
+                } catch (Exception error) {
+                    main.post(() -> showSavedRequestError(error.getMessage()));
+                }
+            })).show();
     }
 
     private static ManualRequestDraft manualDraftFromSaved(JSONObject saved) throws Exception {
@@ -1191,7 +1217,7 @@ public final class MainActivity extends Activity {
 
     private void showSavedRequestError(String reason) {
         if (isFinishing() || isDestroyed()) return;
-        new AlertDialog.Builder(this).setTitle("保存的请求无法打开")
+        new AlertDialog.Builder(this).setTitle("请求库操作失败")
             .setMessage(reason).setPositiveButton("关闭", null).show();
     }
 

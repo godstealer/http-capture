@@ -166,6 +166,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var savedRequestNextOffset: Int?
     @Published private(set) var savedRequestLoading = false
     @Published private(set) var savedOpenLoading = false
+    @Published private(set) var savedDeleteBusy = false
     @Published private(set) var savedRequestError: String?
     @Published var savedDraft: ManualRequestDraft?
     @Published var port = UserDefaults.standard.object(forKey: "capture_port") as? Int ?? 8899 {
@@ -199,6 +200,7 @@ final class TunnelController: ObservableObject {
         pendingSavedCopy = nil
         savedOpenLoading = false
         savedRequestLoading = false
+        savedDeleteBusy = false
         savedRequestError = nil
         savedRequests = []
         savedRequestTotal = 0
@@ -740,7 +742,7 @@ final class TunnelController: ObservableObject {
     }
 
     func loadSavedRequests(offset: Int = 0) {
-        guard connected, !savedRequestLoading, offset >= 0 else { return }
+        guard connected, !savedRequestLoading, !savedDeleteBusy, offset >= 0 else { return }
         savedListGeneration &+= 1
         let generation = savedListGeneration
         savedRequestLoading = true
@@ -762,6 +764,27 @@ final class TunnelController: ObservableObject {
             self.savedRequestTotal = (page["total"] as? NSNumber)?.intValue ?? 0
             self.savedRequestOffset = offset
             self.savedRequestNextOffset = (page["nextOffset"] as? NSNumber)?.intValue
+        }
+    }
+
+    func deleteSavedRequest(_ id: String) {
+        guard connected, !savedDeleteBusy, !savedRequestLoading, !savedOpenLoading else { return }
+        savedListGeneration &+= 1
+        let generation = savedListGeneration
+        savedDeleteBusy = true
+        savedRequestError = nil
+        let nextOffset = savedRequestOffset >= savedRequestTotal - 1
+            ? max(0, savedRequestOffset - 100) : savedRequestOffset
+        send(["method": "delete_saved_request", "id": id],
+             onFailure: { [weak self] in
+                 guard let self else { return }
+                 self.savedDeleteBusy = false
+                 self.savedRequestError = self.message
+             }, accept: { [weak self] in self?.savedListGeneration == generation }) { [weak self] _ in
+            guard let self else { return }
+            self.savedDeleteBusy = false
+            self.message = "已删除保存的请求"
+            self.loadSavedRequests(offset: nextOffset)
         }
     }
 

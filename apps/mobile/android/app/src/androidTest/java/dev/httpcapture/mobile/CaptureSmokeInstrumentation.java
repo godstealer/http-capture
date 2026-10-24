@@ -455,6 +455,10 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         } catch (IllegalArgumentException expected) {
             // Keeping the original request untouched is safer than silently trimming its value.
         }
+        expectOk(NativeCapture.deleteSavedRequest(id));
+        JSONObject missing = new JSONObject(NativeCapture.savedRequest(id));
+        if (missing.optBoolean("ok"))
+            throw new AssertionError("Deleted request is still present in the library");
     }
 
     private void runBinaryResponseRewriteSmoke(int proxyPort) throws Exception {

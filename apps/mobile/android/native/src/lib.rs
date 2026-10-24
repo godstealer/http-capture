@@ -337,6 +337,18 @@ fn saved_request(id: &str) -> Result<serde_json::Value, String> {
     serde_json::to_value(request).map_err(|error| error.to_string())
 }
 
+fn delete_saved_request(id: &str) -> Result<serde_json::Value, String> {
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    let store = &capture.runtime.engine.store;
+    let mut library = store.library().map_err(|error| error.to_string())?;
+    let index = library.requests.iter().position(|request| request.id == id)
+        .ok_or("Saved request not found")?;
+    library.requests.remove(index);
+    let revision = store.save_library(library).map_err(|error| error.to_string())?;
+    Ok(json!({"id": id, "revision": revision}))
+}
+
 fn save_request(raw: &str) -> Result<serde_json::Value, String> {
     if raw.len() > 2 * 1024 * 1024 { return Err("Saved request exceeds 2 MiB".into()); }
     let input: SaveMobileRequest = serde_json::from_str(raw).map_err(|error| error.to_string())?;
@@ -598,6 +610,17 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedRequest(
     let result = (|| {
         let id: String = env.get_string(&id).map_err(|error| error.to_string())?.into();
         saved_request(&id)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_deleteSavedRequest(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, id: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let id: String = env.get_string(&id).map_err(|error| error.to_string())?.into();
+        delete_saved_request(&id)
     })();
     jni_reply(env, result)
 }

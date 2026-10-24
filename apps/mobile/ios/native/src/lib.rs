@@ -39,6 +39,7 @@ enum UploadAction {
 }
 
 struct SavedRead {
+    id: String,
     token: u64,
     body_base64: String,
 }
@@ -324,6 +325,21 @@ fn list_saved_requests(offset: usize) -> Result<serde_json::Value, String> {
         (offset + requests.len() < total).then_some(offset + requests.len()),"requests":requests}))
 }
 
+fn delete_saved_request(id: &str) -> Result<serde_json::Value, String> {
+    let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_mut().ok_or("Capture is not running")?;
+    let store = &capture.runtime.engine.store;
+    let mut library = store.library().map_err(|error| error.to_string())?;
+    let index = library.requests.iter().position(|request| request.id == id)
+        .ok_or("Saved request not found")?;
+    library.requests.remove(index);
+    let revision = store.save_library(library).map_err(|error| error.to_string())?;
+    if capture.saved_read.as_ref().is_some_and(|read| read.id == id) {
+        capture.saved_read = None;
+    }
+    Ok(serde_json::json!({"id":id,"revision":revision}))
+}
+
 fn open_saved_request(id: &str) -> Result<serde_json::Value, String> {
     let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_mut().ok_or("Capture is not running")?;
@@ -338,7 +354,8 @@ fn open_saved_request(id: &str) -> Result<serde_json::Value, String> {
     let mut value = serde_json::to_value(request).map_err(|error| error.to_string())?;
     value["draft"]["bodyBase64"] = serde_json::json!("");
     let token = UPLOAD_IDS.fetch_add(1, Ordering::Relaxed);
-    capture.saved_read = Some(SavedRead { token, body_base64: request.draft.body_base64.as_str().to_owned() });
+    capture.saved_read = Some(SavedRead { id: id.to_owned(), token,
+        body_base64: request.draft.body_base64.as_str().to_owned() });
     let result = serde_json::json!({"request":value,"totalBytes":body.len(),"readToken":token});
     if serde_json::to_vec(&result).map_err(|error| error.to_string())?.len() > 96 * 1024 {
         capture.saved_read = None;
@@ -348,8 +365,8 @@ fn open_saved_request(id: &str) -> Result<serde_json::Value, String> {
 }
 
 fn saved_request_body(token: u64, offset: usize) -> Result<serde_json::Value, String> {
-    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = guard.as_ref().ok_or("Capture is not running")?;
+    let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_mut().ok_or("Capture is not running")?;
     let read = capture.saved_read.as_ref().ok_or("No saved request is open")?;
     if read.token != token { return Err("Saved request read token has expired".into()); }
     let encoded = read.body_base64.as_str();
@@ -359,8 +376,10 @@ fn saved_request_body(token: u64, offset: usize) -> Result<serde_json::Value, St
     let end = (offset + CHUNK).min(total);
     let begin_char = offset / 3 * 4;
     let end_char = if end == total { encoded.len() } else { end / 3 * 4 };
+    let part = encoded[begin_char..end_char].to_owned();
+    if end == total { capture.saved_read = None; }
     Ok(serde_json::json!({"offset":offset,"totalBytes":total,
-        "bodyBase64":&encoded[begin_char..end_char],
+        "bodyBase64":part,
         "nextOffset":(end < total).then_some(end)}))
 }
 
@@ -391,6 +410,10 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
         let offset = request.get("offset").and_then(|value| value.as_u64())
             .and_then(|value| usize::try_from(value).ok()).unwrap_or(0);
         return list_saved_requests(offset);
+    }
+    if method == "delete_saved_request" {
+        let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing request ID")?;
+        return delete_saved_request(id);
     }
     if method == "open_saved_request" {
         let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing request ID")?;
@@ -1533,6 +1556,22 @@ mod tests {
         assert_eq!(command(&serde_json::json!({"method":"open_saved_request",
             "id":saved_id}).to_string()).unwrap()["request"]["draft"]["url"],
             "https://example.com/ios-saved-updated");
+        command(&serde_json::json!({"method":"delete_saved_request","id":saved_id})
+            .to_string()).unwrap();
+        assert!(command(&serde_json::json!({"method":"open_saved_request",
+            "id":saved_id}).to_string()).is_err());
+        let cached = command(&serde_json::json!({"method":"save_request",
+            "name":"cached body", "request":{"engine":"auto", "method":"POST",
+            "url":"https://example.com/ios-cached", "headers":[], "bodyBase64":"AQ=="}})
+            .to_string()).unwrap();
+        let cached_id = cached["id"].as_str().unwrap();
+        let opened_cached = command(&serde_json::json!({"method":"open_saved_request",
+            "id":cached_id}).to_string()).unwrap();
+        let cached_token = opened_cached["readToken"].as_u64().unwrap();
+        command(&serde_json::json!({"method":"delete_saved_request","id":cached_id})
+            .to_string()).unwrap();
+        assert!(command(&serde_json::json!({"method":"saved_request_body",
+            "readToken":cached_token,"offset":0}).to_string()).is_err());
 
         // A manual replay may still be waiting on an upstream server when
         // Network Extension asks the tunnel to stop. Teardown must release

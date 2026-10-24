@@ -10,6 +10,7 @@ public final class NativeCapture {
     public static native String metadata(String id);
     public static native String savedRequests(int offset);
     public static native String savedRequest(String id);
+    public static native String deleteSavedRequest(String id);
     public static native String saveRequest(String requestJson);
     public static native String certificate();
     public static native String certificates();

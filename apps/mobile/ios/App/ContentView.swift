@@ -374,6 +374,8 @@ private struct ResponseRewriteRulesView: View {
 private struct SavedRequestsView: View {
     @EnvironmentObject private var tunnel: TunnelController
     @Environment(\.dismiss) private var dismiss
+    @State private var deletingRequest: SavedRequestSummary?
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -393,7 +395,14 @@ private struct SavedRequestsView: View {
                             }
                         }
                     }
-                    .disabled(tunnel.savedOpenLoading)
+                    .disabled(tunnel.savedOpenLoading || tunnel.savedDeleteBusy)
+                    .swipeActions {
+                        Button("删除", role: .destructive) {
+                            deletingRequest = request
+                            showingDeleteConfirmation = true
+                        }
+                        .disabled(tunnel.savedDeleteBusy || tunnel.savedRequestLoading)
+                    }
                 }
                 HStack {
                     Button("上一页") {
@@ -412,6 +421,7 @@ private struct SavedRequestsView: View {
                 .buttonStyle(.borderless)
                 if tunnel.savedRequestLoading { ProgressView("正在读取请求库…") }
                 if tunnel.savedOpenLoading { ProgressView("正在读取完整请求正文…") }
+                if tunnel.savedDeleteBusy { ProgressView("正在删除请求…") }
                 if let error = tunnel.savedRequestError {
                     Text(error).foregroundStyle(.red)
                 }
@@ -419,6 +429,14 @@ private struct SavedRequestsView: View {
             .navigationTitle("已保存请求")
             .toolbar { Button("关闭") { dismiss() } }
             .onAppear { tunnel.loadSavedRequests() }
+            .confirmationDialog("删除已保存请求？", isPresented: $showingDeleteConfirmation,
+                                titleVisibility: .visible) {
+                Button("删除请求", role: .destructive) {
+                    if let id = deletingRequest?.id { tunnel.deleteSavedRequest(id) }
+                }
+            } message: {
+                Text(deletingRequest?.name ?? "")
+            }
             .sheet(item: $tunnel.savedDraft) { draft in
                 ManualRequestView(draft: draft).environmentObject(tunnel)
             }

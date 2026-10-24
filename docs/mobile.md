@@ -18,6 +18,8 @@ Android 新增模拟器冒烟测试：在 API 33 x86_64 模拟器安装构建的
 
 Android 打开已保存请求时，会将每个请求头转成编辑器文本并重新解析，确认名称、值、顺序和停用状态未改变；带首尾空格等无法无损表示的字段直接拒绝编辑。请求头超过 16 KiB、非默认脚本模块也会拒绝，避免覆盖保存时丢失配置。此保护及模拟器回归源码的离线测试 APK 编译已通过，模拟器实际运行尚待集中 CI。
 
+请求库列表增加长按删除：用户确认后只移除所选请求，并重新打开有效页。Android 双架构原生库已离线重编，新 JNI 符号在 arm64-v8a 与 x86_64 中均可见；调试 APK 和测试 APK 已重新组装。模拟器实际删除回归和触屏操作尚待运行。
+
 Android VPN 的 TCP 来源识别已接入：`tun2proxy` 在连接本机透明代理时记录原始 TUN 源/目标地址与回环连接端口；VPN 服务在 Android 10（API 29）及以上用 `ConnectivityManager.getConnectionOwnerUid` 查询原始连接的 UID，再尝试取得包名和应用名。共享内核按回环端口一次性关联抓包记录，无法匹配或系统拒绝查询时保持未知，不把转发器误标成来源应用。Android 11 起包可见性可能使应用名不可用，此时仍可显示 UID；Android 9 及以下暂不支持 UID 查询。核心集成测试已验证来源写入、端口隔离和旧记录兼容；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40088853655) 通过双架构 APK 构建与模拟器独立 App 的 UID 存在性断言（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`）。已进一步加入“记录的 UID 等于测试 App 自报 UID”的断言，Java 编译通过，待下批 CI；真机应用名显示仍待验证。实现依据为 Android 官方的 [getConnectionOwnerUid](https://developer.android.com/reference/android/net/ConnectivityManager#getConnectionOwnerUid(int,%20java.net.InetSocketAddress,%20java.net.InetSocketAddress)) 文档。iOS 当前 Packet Tunnel 只有原始 IP 包，不能沿用 Android UID 查询；Apple 的 [NEFlowMetaData](https://developer.apple.com/documentation/networkextension/neflowmetadata) 仅在按 App 配置的 VPN 中包含来源信息，现有全局 Packet Tunnel 先保持 TUN 来源未知。
 
 - `apps/mobile/android/native` 是独立 Rust `cdylib`，通过 JNI 打开 `capture-core`、启动手机本机回环 HTTP(S) 代理、读取不含正文的流量元数据以及导出 CA **公钥证书**。CA 私钥仍留在应用私有数据目录。
@@ -71,6 +73,8 @@ Android 手动请求头编辑器现保留复制来源中普通请求头的停用
 ## iOS 当前代码与构建入口
 
 2026-10-25：iOS 手动请求新增“保存请求”和“已保存请求”。请求库列表分页读取，打开后可修改、覆盖保存或发送；请求头原始顺序、重复项、停用状态和最多 1 MiB 的二进制正文会保留。超过扩展单条消息上限的正文分段上传或读取。含 gRPC、HTTP/2 伪头、上游代理、脚本或自定义 TLS 配置的库中请求会拒绝在简化编辑器中打开，以免覆盖保存时丢失配置。Rust 桥接及测试源码已通过 Android 交叉目标离线类型检查；Swift/Xcode 编译、模拟器及 iPhone 操作尚未验证。本批改动仅在本地，未推送或发布。
+
+iOS 请求库列表增加左滑删除和确认；扩展删除记录后会使该请求未完成的正文读取令牌失效，正文读到末段也会释放缓存。Swift 转换回归已接入 iOS 构建工作流，覆盖分段二进制正文和无损请求头校验；当前只有 Rust 桥接源码离线交叉类型检查通过，Swift/Xcode 与设备运行尚待白天 CI 和设备验收。
 
 - `apps/mobile/ios/native` 是 Rust `staticlib`，提供 C ABI：在 Packet Tunnel 扩展中启动同一个 `capture-core` 回环代理，将 `NEPacketTunnelFlow` 的 IP 包通过有界队列送入 `tun2proxy::run`，并将生成的包写回扩展。它支持虚拟 DNS、IPv4/IPv6、非 DNS UDP 直连及每页最多 50 条的请求摘要、请求元数据、按偏移每段 16 KiB 的正文读取、CA 公钥证书读取。C ABI 不允许宿主 App 再打开第二份代理/数据库，宿主通过 `sendProviderMessage` 与扩展通信。
 - `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现，这些界面已通过 iOS Simulator 目标编译，尚未经过真机验证。
