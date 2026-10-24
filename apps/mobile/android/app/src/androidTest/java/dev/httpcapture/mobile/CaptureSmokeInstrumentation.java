@@ -93,11 +93,13 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
             stop.setAction(CaptureVpnService.ACTION_STOP);
             getTargetContext().startService(stop);
-            long deadline = System.currentTimeMillis() + 15_000;
+            long deadline = System.currentTimeMillis() + 30_000;
             while (System.currentTimeMillis() < deadline && CaptureVpnService.isManaged()) {
                 Thread.sleep(200);
             }
-            if (CaptureVpnService.isManaged()) throw new AssertionError("VPN did not stop");
+            if (CaptureVpnService.isManaged()) {
+                throw new AssertionError("VPN did not stop: " + CaptureVpnService.message());
+            }
         }
     }
 

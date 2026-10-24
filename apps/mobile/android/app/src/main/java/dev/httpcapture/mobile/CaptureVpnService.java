@@ -62,6 +62,7 @@ public final class CaptureVpnService extends VpnService {
     private Network underlyingNetwork;
     private volatile int networkGeneration;
     private volatile boolean destroyed;
+    private boolean shutdownStarted;
     private boolean captureQuic;
 
     public static boolean isActive() { return active; }
@@ -72,12 +73,14 @@ public final class CaptureVpnService extends VpnService {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || ACTION_STOP.equals(intent.getAction())) {
-            requestStop();
+            beginShutdown();
             stopSelf();
             return START_NOT_STICKY;
         }
         if (!ACTION_START.equals(intent.getAction())) return START_NOT_STICKY;
         if (managed || stopPending) return START_NOT_STICKY;
+        shutdownStarted = false;
+        destroyed = false;
         int port = intent.getIntExtra(EXTRA_PORT, 0);
         captureQuic = intent.getBooleanExtra(EXTRA_CAPTURE_QUIC, false);
         String[] allowedPackages = intent.getStringArrayExtra(EXTRA_ALLOWED_PACKAGES);
@@ -219,11 +222,19 @@ public final class CaptureVpnService extends VpnService {
 
     @Override public void onRevoke() {
         message = "VPN 权限已撤销";
-        requestStop();
+        beginShutdown();
         stopSelf();
     }
 
     @Override public void onDestroy() {
+        beginShutdown();
+        worker.shutdown();
+        super.onDestroy();
+    }
+
+    private void beginShutdown() {
+        if (shutdownStarted) return;
+        shutdownStarted = true;
         destroyed = true;
         active = false;
         requestStop();
@@ -235,11 +246,13 @@ public final class CaptureVpnService extends VpnService {
         }
         worker.execute(() -> {
             try {
+                if (!message.startsWith("VPN 权限已撤销")) message = "正在停止 VPN 隧道…";
                 NativeCapture.stopTunnel();
                 if (tunnel != null) {
                     try { tunnel.close(); } catch (IOException ignored) { }
                     tunnel = null;
                 }
+                if (!message.startsWith("VPN 权限已撤销")) message = "正在停止抓包引擎…";
                 NativeCapture.stop();
                 if (!message.startsWith("VPN 启动失败") && !message.startsWith("VPN 转发已退出")
                         && !message.startsWith("VPN 状态读取失败")
@@ -248,9 +261,8 @@ public final class CaptureVpnService extends VpnService {
             } finally {
                 managed = false;
                 stopPending = false;
+                stopForeground(STOP_FOREGROUND_REMOVE);
             }
         });
-        worker.shutdown();
-        super.onDestroy();
     }
 }
