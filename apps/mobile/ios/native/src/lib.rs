@@ -370,6 +370,23 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
         "certificate" => std::fs::read_to_string(&capture.runtime.engine.ca.cert_path)
             .map(serde_json::Value::String)
             .map_err(|e| e.to_string()),
+        "certificates" => serde_json::to_value(capture.runtime.engine.certificates
+            .snapshot().map_err(|e| format!("{e:#}"))?)
+            .map_err(|e| e.to_string()),
+        "import_certificate" => {
+            let input: capture_core::certificates::Import = serde_json::from_value(
+                request.get("input").cloned().ok_or("Missing certificate input")?)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(capture.runtime.engine.certificates.import(input)
+                .map_err(|e| format!("{e:#}"))?).map_err(|e| e.to_string())
+        }
+        "change_certificate" => {
+            let input: capture_core::certificates::Change = serde_json::from_value(
+                request.get("input").cloned().ok_or("Missing certificate change")?)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(capture.runtime.engine.certificates.change(input)
+                .map_err(|e| format!("{e:#}"))?).map_err(|e| e.to_string())
+        }
         "body_preview" => {
             let id = request
                 .get("id")
@@ -912,6 +929,26 @@ mod tests {
         let result = start(directory.path(), port, false, packet, 0).unwrap();
         assert!(result.is_object());
         assert!(command(r#"{"method":"status"}"#).is_ok());
+        let certificates = command(r#"{"method":"certificates"}"#).unwrap();
+        let public_ca = command(r#"{"method":"certificate"}"#).unwrap();
+        let imported = command(&serde_json::json!({"method":"import_certificate","input":{
+            "name":"iOS smoke CA","kind":"trust","host":"localhost","port":443,
+            "certificateBase64":STANDARD.encode(public_ca.as_str().unwrap()),
+            "expectedVersion":certificates["version"]
+        }}).to_string()).unwrap();
+        let trusted = imported["entries"].as_array().unwrap().iter()
+            .find(|entry| entry["name"] == "iOS smoke CA").unwrap();
+        assert_eq!(trusted["enabled"], false);
+        let id = trusted["id"].as_str().unwrap().to_owned();
+        let enabled = command(&serde_json::json!({"method":"change_certificate","input":{
+            "action":"enable","id":id,"enabled":true,
+            "expectedVersion":imported["version"]
+        }}).to_string()).unwrap();
+        assert!(enabled["entries"].as_array().unwrap().iter()
+            .any(|entry| entry["id"] == id && entry["enabled"] == true));
+        command(&serde_json::json!({"method":"change_certificate","input":{
+            "action":"delete","id":id,"expectedVersion":enabled["version"]
+        }}).to_string()).unwrap();
         assert_eq!(
             command(r#"{"method":"blocking"}"#).unwrap()["enabled"],
             false

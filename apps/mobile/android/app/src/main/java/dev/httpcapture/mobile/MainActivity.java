@@ -90,6 +90,7 @@ public final class MainActivity extends Activity {
     private static final int SAVE_CA_REQUEST = 1201;
     private static final int VPN_REQUEST = 1202;
     private static final int PICK_REQUEST_FILE = 1203;
+    private static final int PICK_TRUST_CA = 1204;
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
@@ -165,6 +166,7 @@ public final class MainActivity extends Activity {
         start = button(layout, "启动 VPN 抓包", view -> startCapture());
         stop = button(layout, "停止", view -> stopCapture());
         exportCa = button(layout, "保存 CA 公钥证书", view -> saveCertificate());
+        button(layout, "上游 CA 证书", view -> showTrustedCertificates());
         blockingRules = button(layout, "阻止规则", view -> loadBlocking());
         responseRewriteRules = button(layout, "响应修改规则", view -> loadResponseRewrite());
         manualRequest = button(layout, "新建请求", view -> openManualRequest());
@@ -1808,6 +1810,140 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void showTrustedCertificates() {
+        worker.execute(() -> {
+            JSONObject reply = parseReply(NativeCapture.certificates());
+            if (!reply.optBoolean("ok")) {
+                main.post(() -> status.setText("读取上游 CA 失败：" + reply.optString("error")));
+                return;
+            }
+            JSONObject snapshot = reply.optJSONObject("value");
+            if (snapshot == null) return;
+            JSONArray entries = snapshot.optJSONArray("entries");
+            List<JSONObject> trusted = new ArrayList<>();
+            if (entries != null) for (int i = 0; i < entries.length(); i++) {
+                JSONObject entry = entries.optJSONObject(i);
+                if (entry != null && "trust".equals(entry.optString("kind"))) trusted.add(entry);
+            }
+            main.post(() -> {
+                String[] labels = new String[trusted.size() + 1];
+                labels[0] = "＋ 导入上游 CA 证书";
+                for (int i = 0; i < trusted.size(); i++) {
+                    JSONObject entry = trusted.get(i);
+                    String host = entry.optString("host");
+                    labels[i + 1] = (entry.optBoolean("enabled") ? "✓ " : "○ ")
+                        + entry.optString("name") + " · " + (host.isEmpty() ? "所有 HTTPS 目标" : host + ":" + entry.optInt("port"));
+                }
+                new AlertDialog.Builder(this).setTitle("上游 CA 证书")
+                    .setMessage("用于信任目标服务器的私有 CA，与导出供手机安装的抓包 CA 不同。")
+                    .setItems(labels, (dialog, index) -> {
+                        if (index == 0) {
+                            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                            pick.addCategory(Intent.CATEGORY_OPENABLE);
+                            pick.setType("*/*");
+                            startActivityForResult(pick, PICK_TRUST_CA);
+                        } else showTrustedCertificateActions(trusted.get(index - 1), snapshot.optString("version"));
+                    }).setNegativeButton("关闭", null).show();
+            });
+        });
+    }
+
+    private void showTrustedCertificateActions(JSONObject entry, String version) {
+        boolean enabled = entry.optBoolean("enabled");
+        new AlertDialog.Builder(this).setTitle(entry.optString("name"))
+            .setItems(new String[] {enabled ? "停用" : "启用", "删除"}, (dialog, index) -> {
+                if (index == 1) {
+                    new AlertDialog.Builder(this).setTitle("删除上游 CA？")
+                        .setMessage(entry.optString("name"))
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("删除", (confirm, which) -> changeTrustedCertificate("delete", entry.optString("id"), false, version))
+                        .show();
+                } else changeTrustedCertificate("enable", entry.optString("id"), !enabled, version);
+            }).setNegativeButton("取消", null).show();
+    }
+
+    private void changeTrustedCertificate(String action, String id, boolean enabled, String version) {
+        worker.execute(() -> {
+            try {
+                JSONObject input = new JSONObject().put("action", action).put("id", id)
+                    .put("enabled", enabled).put("expectedVersion", version);
+                JSONObject reply = parseReply(NativeCapture.changeCertificate(input.toString()));
+                main.post(() -> {
+                    if (reply.optBoolean("ok")) {
+                        status.setText("上游 CA 已更新；新连接将使用此设置");
+                        showTrustedCertificates();
+                    } else status.setText("更新上游 CA 失败：" + reply.optString("error"));
+                });
+            } catch (JSONException error) {
+                main.post(() -> status.setText("更新上游 CA 失败：" + error.getMessage()));
+            }
+        });
+    }
+
+    private void chooseTrustedCertificateTarget(Uri uri) {
+        EditText name = new EditText(this);
+        name.setHint("名称");
+        String fileName = requestFileName(uri);
+        name.setText(fileName == null ? "上游 CA" : fileName);
+        EditText host = new EditText(this);
+        host.setHint("目标域名（留空表示所有 HTTPS 目标）");
+        host.setSingleLine(true);
+        EditText targetPort = new EditText(this);
+        targetPort.setHint("目标端口（默认 443）");
+        targetPort.setInputType(InputType.TYPE_CLASS_NUMBER);
+        targetPort.setText("443");
+        LinearLayout fields = new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
+        fields.setPadding(32, 8, 32, 0);
+        fields.addView(name);
+        fields.addView(host);
+        fields.addView(targetPort);
+        new AlertDialog.Builder(this).setTitle("导入上游 CA")
+            .setView(fields).setNegativeButton("取消", null)
+            .setPositiveButton("导入", (dialog, which) -> {
+                int portNumber;
+                try { portNumber = Integer.parseInt(targetPort.getText().toString()); }
+                catch (NumberFormatException error) { status.setText("目标端口必须为 1–65535"); return; }
+                if (portNumber < 1 || portNumber > 65535) {
+                    status.setText("目标端口必须为 1–65535"); return;
+                }
+                importTrustedCertificate(uri, name.getText().toString().trim(),
+                    host.getText().toString().trim(), portNumber);
+            })
+            .show();
+    }
+
+    private void importTrustedCertificate(Uri uri, String name, String host, int port) {
+        if (name.isEmpty()) { status.setText("请填写证书名称"); return; }
+        worker.execute(() -> {
+            try (InputStream input = getContentResolver().openInputStream(uri);
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                if (input == null) throw new IllegalStateException("无法打开证书文件");
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    if (output.size() + count > 1024 * 1024) throw new IllegalArgumentException("证书文件不能超过 1 MiB");
+                    output.write(buffer, 0, count);
+                }
+                JSONObject current = parseReply(NativeCapture.certificates());
+                if (!current.optBoolean("ok")) throw new IllegalStateException(current.optString("error"));
+                JSONObject snapshot = current.getJSONObject("value");
+                JSONObject request = new JSONObject().put("name", name).put("kind", "trust")
+                    .put("host", host).put("port", port)
+                    .put("certificateBase64", Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP))
+                    .put("expectedVersion", snapshot.getString("version"));
+                JSONObject reply = parseReply(NativeCapture.importCertificate(request.toString()));
+                main.post(() -> {
+                    status.setText(reply.optBoolean("ok")
+                        ? "上游 CA 已导入；请在列表中启用" : "导入上游 CA 失败：" + reply.optString("error"));
+                    if (reply.optBoolean("ok")) showTrustedCertificates();
+                });
+            } catch (Exception error) {
+                main.post(() -> status.setText("导入上游 CA 失败：" + error.getMessage()));
+            }
+        });
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == VPN_REQUEST) {
@@ -1829,6 +1965,11 @@ public final class MainActivity extends Activity {
                 draft.fileName = requestFileName(draft.fileUri);
             }
             openManualRequest(draft);
+            return;
+        }
+        if (requestCode == PICK_TRUST_CA) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                chooseTrustedCertificateTarget(data.getData());
             return;
         }
         if (requestCode != SAVE_CA_REQUEST || resultCode != RESULT_OK || data == null || data.getData() == null || certificatePem == null) return;

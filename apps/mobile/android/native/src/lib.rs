@@ -271,6 +271,29 @@ fn certificate() -> Result<String, String> {
     std::fs::read_to_string(&capture.runtime.engine.ca.cert_path).map_err(|error| error.to_string())
 }
 
+fn certificates() -> Result<serde_json::Value, String> {
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    serde_json::to_value(capture.runtime.engine.certificates.snapshot().map_err(|error| format!("{error:#}"))?)
+        .map_err(|error| error.to_string())
+}
+
+fn import_certificate(raw: &str) -> Result<serde_json::Value, String> {
+    let input: capture_core::certificates::Import = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    serde_json::to_value(capture.runtime.engine.certificates.import(input).map_err(|error| format!("{error:#}"))?)
+        .map_err(|error| error.to_string())
+}
+
+fn change_certificate(raw: &str) -> Result<serde_json::Value, String> {
+    let input: capture_core::certificates::Change = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    serde_json::to_value(capture.runtime.engine.certificates.change(input).map_err(|error| format!("{error:#}"))?)
+        .map_err(|error| error.to_string())
+}
+
 fn body_preview(
     id: &str,
     variant: &str,
@@ -454,6 +477,35 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_certificate(
     _class: JClass<'_>,
 ) -> jstring {
     jni_reply(env, certificate().map(serde_json::Value::String))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_certificates(
+    env: JNIEnv<'_>, _class: JClass<'_>,
+) -> jstring {
+    jni_reply(env, certificates())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_importCertificate(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
+        import_certificate(&raw)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_changeCertificate(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
+        change_certificate(&raw)
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]

@@ -6,6 +6,7 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Bundle;
+import android.util.Base64;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.json.JSONArray;
@@ -230,6 +231,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 if (!certificate.contains("BEGIN CERTIFICATE") || certificate.contains("PRIVATE KEY")) {
                     throw new AssertionError("CA export must contain only a public certificate");
                 }
+                runCertificateManagementSmoke(certificate);
 
                 AtomicReference<Throwable> originError = new AtomicReference<>();
                 Thread server = new Thread(() -> {
@@ -295,6 +297,38 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             } finally {
                 expectOk(NativeCapture.stop());
             }
+        }
+    }
+
+    private void runCertificateManagementSmoke(String certificate) throws Exception {
+        JSONObject before = expectOk(NativeCapture.certificates());
+        JSONObject request = new JSONObject().put("name", "Android smoke CA")
+                .put("kind", "trust").put("host", "localhost").put("port", 443)
+                .put("certificateBase64", Base64.encodeToString(
+                        certificate.getBytes(StandardCharsets.US_ASCII), Base64.NO_WRAP))
+                .put("expectedVersion", before.getString("version"));
+        JSONObject imported = expectOk(NativeCapture.importCertificate(request.toString()));
+        String id = null;
+        for (int index = 0; index < imported.getJSONArray("entries").length(); index++) {
+            JSONObject entry = imported.getJSONArray("entries").getJSONObject(index);
+            if ("Android smoke CA".equals(entry.optString("name"))) id = entry.getString("id");
+        }
+        if (id == null) throw new AssertionError("imported trust CA is missing");
+        try {
+            JSONObject change = new JSONObject().put("action", "enable").put("id", id)
+                    .put("enabled", true).put("expectedVersion", imported.getString("version"));
+            JSONObject enabled = expectOk(NativeCapture.changeCertificate(change.toString()));
+            boolean foundEnabled = false;
+            for (int index = 0; index < enabled.getJSONArray("entries").length(); index++) {
+                JSONObject entry = enabled.getJSONArray("entries").getJSONObject(index);
+                if (id.equals(entry.optString("id"))) foundEnabled = entry.getBoolean("enabled");
+            }
+            if (!foundEnabled) throw new AssertionError("trust CA was not enabled");
+        } finally {
+            JSONObject current = expectOk(NativeCapture.certificates());
+            JSONObject delete = new JSONObject().put("action", "delete").put("id", id)
+                    .put("expectedVersion", current.getString("version"));
+            expectOk(NativeCapture.changeCertificate(delete.toString()));
         }
     }
 

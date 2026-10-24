@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var showingManualRequest = false
     @State private var showingRules = false
     @State private var showingResponseRules = false
+    @State private var showingTrustedCertificates = false
     @State private var portInput = ""
 
     private var validPort: Int? {
@@ -54,6 +55,8 @@ struct ContentView: View {
                     if let url = tunnel.certificateURL {
                         ShareLink("分享或保存证书", item: url)
                     }
+                    Button("上游 CA 证书") { showingTrustedCertificates = true }
+                        .disabled(!tunnel.connected)
                     Text("HTTPS 解密需要在设备设置中安装并信任该 CA；证书固定的应用可能拒绝解密。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -164,6 +167,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingManualRequest) {
                 ManualRequestView().environmentObject(tunnel)
+            }
+            .sheet(isPresented: $showingTrustedCertificates) {
+                TrustedCertificatesView().environmentObject(tunnel)
             }
             .sheet(isPresented: $showingRules) {
                 BlockingRulesView().environmentObject(tunnel)

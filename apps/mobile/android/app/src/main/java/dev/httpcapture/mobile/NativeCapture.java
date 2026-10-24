@@ -9,6 +9,9 @@ public final class NativeCapture {
     public static native String recent(String cursor, String urlContains);
     public static native String metadata(String id);
     public static native String certificate();
+    public static native String certificates();
+    public static native String importCertificate(String importJson);
+    public static native String changeCertificate(String changeJson);
     public static native String bodyPreview(String id, String variant, String revision, long offset);
     public static native String blocking();
     public static native String responseRewrite();

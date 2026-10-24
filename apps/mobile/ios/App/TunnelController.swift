@@ -17,6 +17,23 @@ struct CapturedRequest: Identifiable {
     }
 }
 
+struct TrustedCertificate: Identifiable {
+    let id: String
+    let name: String
+    let host: String
+    let port: Int
+    let enabled: Bool
+
+    init?(_ value: [String: Any]) {
+        guard value["kind"] as? String == "trust", let id = value["id"] as? String else { return nil }
+        self.id = id
+        name = value["name"] as? String ?? "CA"
+        host = value["host"] as? String ?? ""
+        port = value["port"] as? Int ?? 443
+        enabled = value["enabled"] as? Bool ?? false
+    }
+}
+
 struct BlockingRule: Identifiable {
     var id: String
     var enabled: Bool
@@ -123,6 +140,9 @@ final class TunnelController: ObservableObject {
     @Published private(set) var replayError: String?
     @Published var replayDraft: ManualRequestDraft?
     @Published private(set) var certificateURL: URL?
+    @Published private(set) var trustedCertificates: [TrustedCertificate] = []
+    @Published private(set) var trustedCertificatesBusy = false
+    private var trustedCertificatesVersion = ""
     @Published private(set) var blockingEnabled = false
     @Published private(set) var blockingScope = "capture"
     @Published private(set) var blockingRules: [BlockingRule] = []
@@ -775,6 +795,58 @@ final class TunnelController: ObservableObject {
             } catch {
                 self.message = error.localizedDescription
             }
+        }
+    }
+
+    func refreshTrustedCertificates() {
+        send(["method": "certificates"]) { [weak self] value in
+            guard let self, let snapshot = value as? [String: Any] else { return }
+            self.trustedCertificatesVersion = snapshot["version"] as? String ?? ""
+            self.trustedCertificates = (snapshot["entries"] as? [[String: Any]] ?? [])
+                .compactMap(TrustedCertificate.init)
+        }
+    }
+
+    func reportTrustedCertificateError(_ error: String) { message = error }
+
+    func importTrustedCertificate(data: Data, name: String, host: String, port: Int) {
+        guard !trustedCertificatesBusy else { return }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              (1...65535).contains(port), !trustedCertificatesVersion.isEmpty else {
+            message = "请填写证书名称和有效端口，并刷新证书列表"
+            return
+        }
+        guard data.count <= 64 * 1024 else {
+            message = "iOS 证书文件暂限 64 KiB；请使用单张 CA 的 PEM 或 DER 文件"
+            return
+        }
+        trustedCertificatesBusy = true
+        let input: [String: Any] = ["name": name, "kind": "trust", "host": host,
+                                    "port": port, "certificateBase64": data.base64EncodedString(),
+                                    "expectedVersion": trustedCertificatesVersion]
+        send(["method": "import_certificate", "input": input], onFailure: { [weak self] in
+            self?.trustedCertificatesBusy = false
+            self?.refreshTrustedCertificates()
+        }) { [weak self] _ in
+            self?.trustedCertificatesBusy = false
+            self?.message = "上游 CA 已导入，请在列表中启用"
+            self?.refreshTrustedCertificates()
+        }
+    }
+
+    func changeTrustedCertificate(_ certificate: TrustedCertificate, delete: Bool = false) {
+        guard !trustedCertificatesBusy, !trustedCertificatesVersion.isEmpty else { return }
+        trustedCertificatesBusy = true
+        let input: [String: Any] = ["action": delete ? "delete" : "enable",
+                                    "id": certificate.id, "enabled": !certificate.enabled,
+                                    "expectedVersion": trustedCertificatesVersion]
+        send(["method": "change_certificate", "input": input], onFailure: { [weak self] in
+            self?.trustedCertificatesBusy = false
+            self?.refreshTrustedCertificates()
+        }) { [weak self] _ in
+            self?.trustedCertificatesBusy = false
+            self?.message = "上游 CA 已更新；新连接将使用此设置"
+            self?.refreshTrustedCertificates()
         }
     }
 
