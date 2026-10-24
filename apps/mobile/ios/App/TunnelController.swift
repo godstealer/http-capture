@@ -109,6 +109,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var message = "VPN 未启动"
     @Published private(set) var requests: [CapturedRequest] = []
     @Published private(set) var selectedDetail = ""
+    @Published private(set) var detailRaw = false
     @Published private(set) var detailOpen = false
     @Published private(set) var selectedFlow: [String: Any]?
     @Published private(set) var bodyVariant: String?
@@ -141,6 +142,7 @@ final class TunnelController: ObservableObject {
     private var bodyOffsetHistory: [Int] = []
     private var responseConfig: [String: Any] = [:]
     private var responseVersion = ""
+    private var rawDetail = ""
     private var statusObserver: NSObjectProtocol?
 
     init() { loadProfile() }
@@ -257,8 +259,26 @@ final class TunnelController: ObservableObject {
             self.bodyOffsetHistory = []
             self.bodyNextOffset = nil
             self.bodyLoading = false
-            self.selectedDetail = String(decoding: data, as: UTF8.self)
+            self.rawDetail = String(decoding: data, as: UTF8.self)
+            self.detailRaw = false
+            self.selectedDetail = FlowDetailFormatter.format(flow)
         }
+    }
+
+    func toggleDetailFormat() {
+        guard let flow = selectedFlow, bodyVariant == nil else { return }
+        detailRaw.toggle()
+        selectedDetail = detailRaw ? rawDetail : FlowDetailFormatter.format(flow)
+    }
+
+    func showMetadataSummary() {
+        guard let flow = selectedFlow else { return }
+        detailGeneration &+= 1
+        bodyVariant = nil
+        bodyOffsetHistory = []
+        bodyNextOffset = nil
+        bodyLoading = false
+        selectedDetail = detailRaw ? rawDetail : FlowDetailFormatter.format(flow)
     }
 
     var hasRequestBody: Bool { (selectedFlow?["bodyReferences"] as? [String: Any])?["request"] != nil }
@@ -359,6 +379,8 @@ final class TunnelController: ObservableObject {
         detailGeneration &+= 1
         replayGeneration &+= 1
         selectedDetail = ""
+        rawDetail = ""
+        detailRaw = false
         detailOpen = false
         selectedFlow = nil
         bodyVariant = nil

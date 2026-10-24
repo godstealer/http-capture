@@ -55,6 +55,12 @@ do {
         ]],
         "bodyReferences": ["request": ["byteLength": 3]]
     ]
+    let detail = FlowDetailFormatter.format(flow)
+    expect(detail.contains("POST https://example.test/upload"), "请求摘要没有显示方法与 URL")
+    expect(detail.range(of: "X-Test: one\nX-Test: two") != nil,
+           "请求头顺序或重复项在详情中丢失")
+    expect(detail.contains("[停用] X-Ignored: off"), "停用请求头未标明")
+    expect(detail.contains("请求：3 字节"), "详情没有显示正文大小")
     var copy = try RecordedRequestCopy(flow: flow)
     expect(copy.headers == "X-Test: one\nX-Test: two", "请求头顺序或重复项丢失")
     let firstComplete = try copy.append(["offset": 0, "totalBytes": 3,

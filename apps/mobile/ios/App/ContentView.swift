@@ -91,6 +91,13 @@ struct ContentView: View {
                     .toolbar { Button("关闭") { tunnel.clearDetail() } }
                     .safeAreaInset(edge: .bottom) {
                         VStack(spacing: 8) {
+                            if tunnel.bodyVariant == nil {
+                                Button(tunnel.detailRaw ? "查看摘要与请求头" : "查看原始详情") {
+                                    tunnel.toggleDetailFormat()
+                                }
+                            } else {
+                                Button("返回请求详情") { tunnel.showMetadataSummary() }
+                            }
                             Button("复制到新请求") { tunnel.copySelectedRequest() }
                                 .disabled(tunnel.replayLoading)
                             if tunnel.replayLoading { ProgressView("正在读取完整请求正文…") }
