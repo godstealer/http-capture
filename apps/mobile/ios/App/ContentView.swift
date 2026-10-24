@@ -6,6 +6,12 @@ struct ContentView: View {
     @State private var showingManualRequest = false
     @State private var showingRules = false
     @State private var showingResponseRules = false
+    @State private var portInput = ""
+
+    private var validPort: Int? {
+        guard let port = Int(portInput), (1...65535).contains(port) else { return nil }
+        return port
+    }
 
     var body: some View {
         NavigationStack {
@@ -14,11 +20,23 @@ struct ContentView: View {
                     HStack {
                         Text("监听端口")
                         Spacer()
-                        TextField("端口", value: $tunnel.port, format: .number)
+                        TextField("端口", text: $portInput)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 100)
-                            .disabled(tunnel.connected)
+                            .disabled(tunnel.shouldOfferStop || tunnel.busy || tunnel.tunnelStopping)
+                            .onChange(of: portInput) { value in
+                                let digits = value.filter { $0 >= "0" && $0 <= "9" }
+                                if digits != value {
+                                    portInput = digits
+                                } else if let port = validPort {
+                                    tunnel.port = port
+                                }
+                            }
+                    }
+                    if validPort == nil {
+                        Text("端口必须为 1–65535")
+                            .font(.footnote).foregroundStyle(.red)
                     }
                     Toggle("尝试抓取 HTTP/3（UDP/443）", isOn: $tunnel.captureQuic)
                         .disabled(tunnel.shouldOfferStop || tunnel.busy || tunnel.tunnelStopping)
@@ -27,7 +45,7 @@ struct ContentView: View {
                     Text(tunnel.message).foregroundStyle(.secondary)
                     Button(tunnel.shouldOfferStop ? "停止抓包" : "启动抓包") {
                         if tunnel.shouldOfferStop { tunnel.stop() } else { tunnel.start() }
-                    }.disabled(tunnel.busy || tunnel.tunnelStopping)
+                    }.disabled(tunnel.busy || tunnel.tunnelStopping || (!tunnel.shouldOfferStop && validPort == nil))
                 }
                 Section("证书") {
                     Button("导出 CA 公钥证书") { tunnel.exportCertificate() }
@@ -80,6 +98,10 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("HTTP Capture")
+            .onAppear { portInput = String(tunnel.port) }
+            .onChange(of: tunnel.port) { port in
+                if validPort != port { portInput = String(port) }
+            }
             .sheet(isPresented: Binding(get: { tunnel.detailOpen },
                                         set: { if !$0 { tunnel.clearDetail() } })) {
                 NavigationStack {
