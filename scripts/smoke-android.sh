@@ -12,14 +12,24 @@ adb install -r "$test_app"
 adb install -r "$probe_app"
 
 origin_log="$(mktemp)"
+udp_log="$(mktemp)"
 python3 -m http.server 18080 --bind 127.0.0.1 >"$origin_log" 2>&1 &
 origin_pid=$!
-trap 'kill "$origin_pid" 2>/dev/null || true; rm -f "$origin_log"' EXIT
+python3 -u scripts/android-udp-echo.py >"$udp_log" 2>&1 &
+udp_pid=$!
+trap 'kill "$origin_pid" "$udp_pid" 2>/dev/null || true; rm -f "$origin_log" "$udp_log"' EXIT
 for _ in $(seq 1 20); do
   if curl --noproxy '*' -s -o /dev/null http://127.0.0.1:18080/; then break; fi
   sleep 1
 done
 kill -0 "$origin_pid"
+for _ in $(seq 1 20); do
+  if grep -Fq 'UDP echo ready' "$udp_log"; then break; fi
+  kill -0 "$udp_pid"
+  sleep 1
+done
+grep -Fq 'UDP echo ready' "$udp_log"
+adb logcat -c
 
 if ! output="$(timeout 150s adb shell am instrument -w \
   dev.httpcapture.mobile.test/dev.httpcapture.mobile.CaptureSmokeInstrumentation 2>&1)"; then
@@ -39,6 +49,24 @@ if ! grep -Fq 'GET /vpn-smoke' "$origin_log"; then
   exit 1
 fi
 echo 'VPN raw TCP request reached the origin and capture record'
+
+udp_ok=false
+for _ in $(seq 1 20); do
+  probe_log="$(adb logcat -d -s 'HttpCaptureProbe:I' '*:S')"
+  if grep -Fq 'VPN UDP marker received' "$udp_log" &&
+     grep -Fq 'raw VPN UDP echo succeeded' <<<"$probe_log"; then
+    udp_ok=true
+    break
+  fi
+  sleep 1
+done
+if [ "$udp_ok" != true ]; then
+  cat "$udp_log"
+  adb logcat -d -s 'HttpCaptureProbe:V' '*:S' || true
+  echo 'VPN raw UDP echo did not complete' >&2
+  exit 1
+fi
+echo 'VPN raw UDP reached the origin and returned unchanged'
 
 adb shell am start -W -n dev.httpcapture.mobile/.MainActivity
 sleep 3

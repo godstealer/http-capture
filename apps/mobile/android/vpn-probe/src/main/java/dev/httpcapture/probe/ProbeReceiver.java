@@ -8,8 +8,12 @@ import android.os.Process;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.security.KeyStore;
 import java.security.cert.CertificateFactory;
 
@@ -26,6 +30,8 @@ public final class ProbeReceiver extends BroadcastReceiver {
             try {
                 if ("dev.httpcapture.probe.RUN_TLS".equals(intent.getAction())) {
                     runTls(intent.getStringExtra("caPem"));
+                } else if ("dev.httpcapture.probe.RUN_UDP".equals(intent.getAction())) {
+                    runUdp();
                 } else {
                     runHttp();
                 }
@@ -47,6 +53,23 @@ public final class ProbeReceiver extends BroadcastReceiver {
             InputStream response = socket.getInputStream();
             if (response.read() != 'H') throw new IllegalStateException("origin did not respond with HTTP");
             Log.i("HttpCaptureProbe", "raw TCP request reached origin");
+        }
+    }
+
+    private static void runUdp() throws Exception {
+        byte[] marker = "vpn-udp-smoke-01".getBytes(StandardCharsets.US_ASCII);
+        try (DatagramSocket socket = new DatagramSocket()) {
+            socket.connect(InetAddress.getByName("10.0.2.2"), 18082);
+            socket.setSoTimeout(10_000);
+            socket.send(new DatagramPacket(marker, marker.length));
+            byte[] reply = new byte[64];
+            DatagramPacket packet = new DatagramPacket(reply, reply.length);
+            socket.receive(packet);
+            if (!Arrays.equals(marker, Arrays.copyOfRange(packet.getData(),
+                    packet.getOffset(), packet.getOffset() + packet.getLength()))) {
+                throw new IllegalStateException("VPN UDP echo changed payload");
+            }
+            Log.i("HttpCaptureProbe", "raw VPN UDP echo succeeded");
         }
     }
 

@@ -150,6 +150,10 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (probeUID < 0 || application.getInt("uid") != probeUID) {
                 throw new AssertionError("VPN source UID differs from probe UID: " + origin + " / " + probeUID);
             }
+            Intent udpProbe = new Intent("dev.httpcapture.probe.RUN_UDP");
+            udpProbe.setComponent(new ComponentName("dev.httpcapture.probe",
+                    "dev.httpcapture.probe.ProbeReceiver"));
+            getTargetContext().sendBroadcast(udpProbe);
             runVpnTlsSmoke();
         } finally {
             Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
