@@ -25,6 +25,8 @@ char *hc_ios_offline_export_session(const char *data_dir, const char *output_pat
 // Android. Import only while the tunnel is stopped; restart the app after commit.
 char *hc_ios_config_export(const char *data_dir, const char *output_path,
                            const char *options_json, const char *passphrase);
+char *hc_ios_config_recovery(const char *data_dir, const char *output_path,
+                             const char *passphrase);
 char *hc_ios_config_preview(const char *data_dir, const char *input_path,
                             const char *passphrase);
 char *hc_ios_config_import(const char *data_dir, const char *input_path,

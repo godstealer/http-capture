@@ -43,10 +43,12 @@ struct ConfigurationMigrationView: View {
                         .textContentType(.newPassword)
                     Button("生成配置文件") { exportConfiguration() }
                         .disabled(tunnel.configurationBusy || tunnel.configurationRequiresRestart)
+                    Button("生成导入前恢复点") { exportConfiguration(recovery: true) }
+                        .disabled(tunnel.configurationBusy || tunnel.configurationRequiresRestart)
                     if let exportURL {
                         ShareLink("分享或保存配置文件", item: exportURL)
                     }
-                    Text("默认排除敏感请求数据和代码；代理密码、CA 私钥、证书信任与流量记录不会导出。加密密码需为 12–1024 字节。")
+                    Text("恢复点保存最近一次导入前的本机配置，可能包含原请求数据、代码和代理用户名；建议加密并妥善保存。普通配置导出默认排除敏感请求数据和代码。代理密码、CA 私钥、证书信任与流量记录不会导出。加密密码需为 12–1024 字节。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("导入") {
@@ -127,7 +129,7 @@ struct ConfigurationMigrationView: View {
             ?? ["ok": false, "error": "原生内核返回无效 JSON"]
     }
 
-    private func exportConfiguration() {
+    private func exportConfiguration(recovery: Bool = false) {
         let password = exportPassword
         let passwordBytes = password.utf8.count
         guard passwordBytes == 0 || (12...1024).contains(passwordBytes) else {
@@ -147,16 +149,20 @@ struct ConfigurationMigrationView: View {
                               userInfo: [NSLocalizedDescriptionKey: "无法编码导出选项"])
             }
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "http-capture-config-\(UUID().uuidString)" + (password.isEmpty ? ".json" : ".hccfg"))
+                "http-capture-\(recovery ? "recovery" : "config")-\(UUID().uuidString)" +
+                (password.isEmpty ? ".json" : ".hccfg"))
             let previousURL = exportURL
             exportURL = nil
             if let previousURL { try? FileManager.default.removeItem(at: previousURL) }
-            message = "正在导出配置…"
+            message = recovery ? "正在导出恢复点…" : "正在导出配置…"
             DispatchQueue.global(qos: .userInitiated).async {
                 let response = directory.path.withCString { path in
                     url.path.withCString { output in
-                        optionsJSON.withCString { options in
-                            password.withCString { secret in
+                        password.withCString { secret in
+                            if recovery {
+                                return Self.nativeResult(hc_ios_config_recovery(path, output, secret))
+                            }
+                            return optionsJSON.withCString { options in
                                 Self.nativeResult(hc_ios_config_export(path, output, options, secret))
                             }
                         }
@@ -166,7 +172,9 @@ struct ConfigurationMigrationView: View {
                     tunnel.endConfigurationOperation()
                     if response["ok"] as? Bool == true {
                         exportURL = url
-                        message = "配置已生成。分享前请检查规则、名称和 URL；密码请另行保管。"
+                        message = recovery
+                            ? "恢复点已生成。需要恢复时导入此文件；密码请另行保管。"
+                            : "配置已生成。分享前请检查规则、名称和 URL；密码请另行保管。"
                     } else {
                         try? FileManager.default.removeItem(at: url)
                         message = response["error"] as? String ?? "配置导出失败"

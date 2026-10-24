@@ -96,6 +96,7 @@ public final class MainActivity extends Activity {
     private String certificatePem;
     private String pendingConfigurationExportOptions;
     private String pendingConfigurationExportPassphrase;
+    private String pendingConfigurationRecoveryPassphrase;
     private final Set<String> selectedApps = new HashSet<>();
     private static final int SAVE_CA_REQUEST = 1201;
     private static final int VPN_REQUEST = 1202;
@@ -105,6 +106,7 @@ public final class MainActivity extends Activity {
     private static final int SAVE_SESSION_REQUEST = 1206;
     private static final int SAVE_CONFIG_REQUEST = 1207;
     private static final int PICK_CONFIG_REQUEST = 1208;
+    private static final int SAVE_CONFIG_RECOVERY_REQUEST = 1209;
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
@@ -191,6 +193,7 @@ public final class MainActivity extends Activity {
         exportSessionButton = button(layout, "导出抓包记录 JSON", view -> chooseSessionExport());
         exportConfigButton = button(layout, "导出全局配置", view -> chooseConfigurationExport());
         button(layout, "导入全局配置", view -> chooseConfigurationImport());
+        button(layout, "导出导入前恢复点", view -> chooseConfigurationRecoveryExport());
         button(layout, "上游 CA 证书", view -> showTrustedCertificates());
         blockingRules = button(layout, "阻止规则", view -> loadBlocking());
         responseRewriteRules = button(layout, "响应修改规则", view -> loadResponseRewrite());
@@ -2538,12 +2541,35 @@ public final class MainActivity extends Activity {
     }
 
     private void launchConfigurationSavePicker(boolean encrypted) {
+        launchConfigurationSavePicker(encrypted, false);
+    }
+
+    private void launchConfigurationSavePicker(boolean encrypted, boolean recovery) {
         Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         save.addCategory(Intent.CATEGORY_OPENABLE);
         save.setType(encrypted ? "application/octet-stream" : "application/json");
-        save.putExtra(Intent.EXTRA_TITLE, "http-capture-config-" + System.currentTimeMillis()
+        save.putExtra(Intent.EXTRA_TITLE, "http-capture-" + (recovery ? "recovery-" : "config-") + System.currentTimeMillis()
             + (encrypted ? ".hccfg" : ".json"));
-        startActivityForResult(save, SAVE_CONFIG_REQUEST);
+        startActivityForResult(save, recovery ? SAVE_CONFIG_RECOVERY_REQUEST : SAVE_CONFIG_REQUEST);
+    }
+
+    private void chooseConfigurationRecoveryExport() {
+        EditText password = new EditText(this);
+        password.setHint("加密密码（推荐；留空导出普通 JSON）");
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        new AlertDialog.Builder(this).setTitle("导出导入前恢复点")
+            .setMessage("恢复点保存的是最近一次导入前的本机配置，可能包含原请求数据、代码和代理用户名。请设置密码并妥善保存；需要恢复时再从“导入全局配置”导入。")
+            .setView(password).setNegativeButton("取消", null)
+            .setPositiveButton("选择保存位置", (dialog, which) -> {
+                pendingConfigurationRecoveryPassphrase = password.getText().toString();
+                int bytes = pendingConfigurationRecoveryPassphrase.getBytes(StandardCharsets.UTF_8).length;
+                if (bytes > 0 && (bytes < 12 || bytes > 1024)) {
+                    pendingConfigurationRecoveryPassphrase = null;
+                    status.setText("加密密码需为 12–1024 字节；或留空导出普通 JSON");
+                    return;
+                }
+                launchConfigurationSavePicker(bytes > 0, true);
+            }).show();
     }
 
     private void exportConfigurationTo(Uri destination) {
@@ -2575,6 +2601,34 @@ public final class MainActivity extends Activity {
             } finally {
                 if (temporary.exists()) temporary.delete();
                 main.post(() -> exportConfigButton.setEnabled(true));
+            }
+        });
+    }
+
+    private void exportConfigurationRecoveryTo(Uri destination) {
+        String passphrase = pendingConfigurationRecoveryPassphrase;
+        pendingConfigurationRecoveryPassphrase = null;
+        if (passphrase == null) { status.setText("恢复点导出选项已失效，请重试"); return; }
+        status.setText("正在导出恢复点…");
+        worker.execute(() -> {
+            File temporary = new File(getCacheDir(), "recovery-" + UUID.randomUUID() + ".json");
+            try {
+                JSONObject reply = parseReply(NativeCapture.exportConfigurationRecovery(
+                    getFilesDir().getAbsolutePath(), temporary.getAbsolutePath(), passphrase));
+                if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                try (InputStream input = new FileInputStream(temporary);
+                     OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                    if (output == null) throw new IllegalStateException("无法打开目标文件");
+                    byte[] buffer = new byte[64 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                    output.flush();
+                }
+                main.post(() -> status.setText("导入前恢复点已导出；需要恢复时重新导入此文件"));
+            } catch (Exception error) {
+                main.post(() -> status.setText("恢复点导出失败：" + error.getMessage()));
+            } finally {
+                if (temporary.exists()) temporary.delete();
             }
         });
     }
@@ -2929,6 +2983,12 @@ public final class MainActivity extends Activity {
             if (resultCode == RESULT_OK && data != null && data.getData() != null)
                 exportConfigurationTo(data.getData());
             else { pendingConfigurationExportOptions = null; pendingConfigurationExportPassphrase = null; }
+            return;
+        }
+        if (requestCode == SAVE_CONFIG_RECOVERY_REQUEST) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                exportConfigurationRecoveryTo(data.getData());
+            else pendingConfigurationRecoveryPassphrase = null;
             return;
         }
         if (requestCode == PICK_CONFIG_REQUEST) {

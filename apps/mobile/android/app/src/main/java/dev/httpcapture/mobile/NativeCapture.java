@@ -9,6 +9,7 @@ public final class NativeCapture {
     public static native String recent(String dataDir, String cursor, String urlContains);
     public static native String exportSession(String dataDir, String path);
     public static native String exportConfiguration(String dataDir, String path, String optionsJson, String passphrase);
+    public static native String exportConfigurationRecovery(String dataDir, String path, String passphrase);
     public static native String previewConfiguration(String dataDir, String path, String passphrase);
     public static native String importConfiguration(String dataDir, String path, String sectionsJson, String expectedRevision, String passphrase);
     public static native String metadata(String dataDir, String id);

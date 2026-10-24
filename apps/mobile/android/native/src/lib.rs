@@ -376,6 +376,17 @@ fn export_configuration(data_dir: &Path, path: &Path, options_json: &str,
     serde_json::to_value(exported.summary).map_err(|error| error.to_string())
 }
 
+fn export_configuration_recovery(data_dir: &Path, path: &Path,
+    passphrase: &str) -> Result<serde_json::Value, String> {
+    let store = session_store(data_dir)?;
+    let exported = config_migration::recovery_protected(
+        &store, (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    config_migration::save_atomic(path, &exported.document)
+        .map_err(|error| format!("{error:#}"))?;
+    serde_json::to_value(exported.summary).map_err(|error| error.to_string())
+}
+
 fn read_configuration(path: &Path) -> Result<String, String> {
     let length = std::fs::metadata(path).map_err(|error| error.to_string())?.len();
     if length == 0 || length > config_migration::MAX_ENCRYPTED_DOCUMENT_BYTES as u64 {
@@ -847,6 +858,20 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_exportConfigura
 }
 
 #[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_exportConfigurationRecovery(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, path: JString<'_>,
+    passphrase: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        let path: String = env.get_string(&path).map_err(|error| error.to_string())?.into();
+        let passphrase: String = env.get_string(&passphrase).map_err(|error| error.to_string())?.into();
+        export_configuration_recovery(Path::new(&data_dir), Path::new(&path), &passphrase)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_previewConfiguration(
     mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, path: JString<'_>,
     passphrase: JString<'_>,
@@ -1195,6 +1220,14 @@ mod tests {
         let blocking: serde_json::Value = reopened.setting("blocking.v1").unwrap().unwrap();
         assert_eq!(blocking["rules"][0]["id"], "portable-block");
         assert_eq!(blocking["enabled"], false);
+        let recovery = target.path().join("recovery.hccfg");
+        export_configuration_recovery(target.path(), &recovery, "android-recovery-123").unwrap();
+        let restored = config_migration::decrypt_document(
+            &std::fs::read_to_string(recovery).unwrap(), "android-recovery-123",
+        ).unwrap();
+        let restored: serde_json::Value = serde_json::from_str(&restored).unwrap();
+        assert_eq!(restored["format"], "http-capture-config");
+        assert!(!restored.to_string().contains("portable-block"));
 
         let encrypted = source.path().join("config-encrypted.hccfg");
         export_configuration(source.path(), &encrypted, "{}", "android-secret").unwrap();

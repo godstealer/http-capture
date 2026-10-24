@@ -822,6 +822,17 @@ fn export_configuration(data_dir: &Path, output: &Path, options_json: &str,
     serde_json::to_value(exported.summary).map_err(|error| error.to_string())
 }
 
+fn export_configuration_recovery(data_dir: &Path, output: &Path, passphrase: &str)
+    -> Result<serde_json::Value, String> {
+    let store = configuration_store(data_dir)?;
+    let exported = config_migration::recovery_protected(
+        &store, (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    config_migration::save_atomic(output, &exported.document)
+        .map_err(|error| format!("{error:#}"))?;
+    serde_json::to_value(exported.summary).map_err(|error| error.to_string())
+}
+
 fn read_configuration(path: &Path) -> Result<String, String> {
     let length = std::fs::metadata(path).map_err(|error| error.to_string())?.len();
     if length == 0 || length > config_migration::MAX_ENCRYPTED_DOCUMENT_BYTES as u64 {
@@ -1142,6 +1153,18 @@ pub unsafe extern "C" fn hc_ios_config_export(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn hc_ios_config_recovery(
+    data_dir: *const c_char, output_path: *const c_char, passphrase: *const c_char,
+) -> *mut c_char {
+    reply((|| {
+        let data_dir = input_string(data_dir)?;
+        let output_path = input_string(output_path)?;
+        let passphrase = input_string(passphrase)?;
+        export_configuration_recovery(Path::new(data_dir), Path::new(output_path), passphrase)
+    })())
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn hc_ios_config_preview(
     data_dir: *const c_char, input_path: *const c_char, passphrase: *const c_char,
 ) -> *mut c_char {
@@ -1238,6 +1261,14 @@ mod tests {
         let blocking: serde_json::Value = reopened.setting("blocking.v1").unwrap().unwrap();
         assert_eq!(blocking["rules"][0]["id"], "ios-portable");
         assert_eq!(blocking["enabled"], false);
+        let recovery = target.path().join("recovery.hccfg");
+        export_configuration_recovery(target.path(), &recovery, "ios-recovery-123").unwrap();
+        let restored = config_migration::decrypt_document(
+            &std::fs::read_to_string(recovery).unwrap(), "ios-recovery-123",
+        ).unwrap();
+        let restored: serde_json::Value = serde_json::from_str(&restored).unwrap();
+        assert_eq!(restored["format"], "http-capture-config");
+        assert!(!restored.to_string().contains("ios-portable"));
     }
 
     #[test]
