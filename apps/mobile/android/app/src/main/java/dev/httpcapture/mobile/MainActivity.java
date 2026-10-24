@@ -884,13 +884,17 @@ public final class MainActivity extends Activity {
                         flow.optString("id"), "request", flow.optString("bodyRevision"), offset));
                     if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                     JSONObject chunk = reply.optJSONObject("value");
-                    if (chunk == null) throw new IllegalStateException("读取请求正文失败");
-                    byte[] part = Base64.decode(chunk.optString("bodyBase64"), Base64.DEFAULT);
-                    if (part.length == 0 || bytes.size() + part.length > bodyLength) {
-                        throw new IllegalStateException("请求正文分段不完整");
-                    }
-                    bytes.write(part, 0, part.length);
-                    offset += part.length;
+                    if (chunk == null || !chunk.has("nextOffset"))
+                        throw new IllegalStateException("读取请求正文失败");
+                    String encoded = chunk.getString("bodyBase64");
+                    if (encoded.length() > ((16 * 1024 + 2) / 3) * 4)
+                        throw new IllegalStateException("请求正文分段超过 16 KiB");
+                    byte[] part = java.util.Base64.getDecoder().decode(encoded);
+                    Long next = chunk.isNull("nextOffset") ? null : chunk.getLong("nextOffset");
+                    if (chunk.getLong("totalBytes") != bodyLength)
+                        throw new IllegalStateException("请求正文大小已变化，请重新打开详情");
+                    offset = RecordedRequestBody.appendChunk(bytes, chunk.getLong("offset"),
+                        bodyLength, part, next);
                 }
                 RecordedRequestBody editable = RecordedRequestBody.from(bytes.toByteArray());
                 main.post(() -> {
