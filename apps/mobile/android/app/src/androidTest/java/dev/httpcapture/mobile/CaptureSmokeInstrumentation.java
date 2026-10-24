@@ -43,11 +43,93 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         try {
             runSmoke();
             runVpnLifecycleSmoke();
+            runSelectedAppSmoke();
             result.putString("smokeStatus", "ok");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putString("smokeStatus", "failed: " + error);
             finish(Activity.RESULT_CANCELED, result);
+        }
+    }
+
+    private void runSelectedAppSmoke() throws Exception {
+        try (ServerSocket reservation = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            int port = reservation.getLocalPort();
+            reservation.close();
+            Intent start = new Intent(getTargetContext(), CaptureVpnService.class);
+            start.setAction(CaptureVpnService.ACTION_START);
+            start.putExtra(CaptureVpnService.EXTRA_PORT, port);
+            start.putExtra(CaptureVpnService.EXTRA_ALLOWED_PACKAGES,
+                    new String[] {"dev.httpcapture.probe"});
+            getTargetContext().startForegroundService(start);
+            try {
+                long deadline = System.currentTimeMillis() + 30_000;
+                while (System.currentTimeMillis() < deadline && !CaptureVpnService.isActive()) {
+                    if (!CaptureVpnService.isManaged() && CaptureVpnService.isStopping())
+                        throw new AssertionError(CaptureVpnService.message());
+                    Thread.sleep(200);
+                }
+                if (!CaptureVpnService.isActive())
+                    throw new AssertionError("Selected-app VPN did not establish: " + CaptureVpnService.message());
+
+                String selectedPath = "vpn-selected-smoke";
+                Set<String> previous = new HashSet<>();
+                JSONArray old = expectOk(NativeCapture.recent("", selectedPath)).getJSONArray("requests");
+                for (int index = 0; index < old.length(); index++)
+                    previous.add(old.getJSONObject(index).getString("id"));
+                Set<String> previousExcluded = new HashSet<>();
+                JSONArray oldExcluded = expectOk(NativeCapture.recent("", "vpn-excluded-smoke"))
+                        .getJSONArray("requests");
+                for (int index = 0; index < oldExcluded.length(); index++)
+                    previousExcluded.add(oldExcluded.getJSONObject(index).getString("id"));
+
+                // This socket belongs to HTTP Capture, which is absent from the VPN allowlist.
+                try (Socket excluded = new Socket("10.0.2.2", 18080)) {
+                    excluded.setSoTimeout(10_000);
+                    excluded.getOutputStream().write(("GET /vpn-excluded-smoke HTTP/1.1\r\n"
+                            + "Host: 10.0.2.2:18080\r\nConnection: close\r\n\r\n")
+                            .getBytes(StandardCharsets.US_ASCII));
+                    if (excluded.getInputStream().read() != 'H')
+                        throw new AssertionError("Excluded app request did not reach origin");
+                }
+                JSONArray excluded = expectOk(NativeCapture.recent("", "vpn-excluded-smoke"))
+                        .getJSONArray("requests");
+                for (int index = 0; index < excluded.length(); index++) {
+                    if (!previousExcluded.contains(excluded.getJSONObject(index).getString("id")))
+                        throw new AssertionError("Unselected app traffic entered the VPN capture");
+                }
+
+                Intent probe = new Intent("dev.httpcapture.probe.RUN");
+                probe.setComponent(new ComponentName("dev.httpcapture.probe",
+                        "dev.httpcapture.probe.ProbeReceiver"));
+                probe.putExtra("path", "/" + selectedPath);
+                getTargetContext().sendBroadcast(probe);
+                deadline = System.currentTimeMillis() + 20_000;
+                boolean captured = false;
+                while (System.currentTimeMillis() < deadline) {
+                    JSONArray rows = expectOk(NativeCapture.recent("", selectedPath))
+                            .getJSONArray("requests");
+                    for (int index = 0; index < rows.length(); index++) {
+                        JSONObject row = rows.getJSONObject(index);
+                        if (!previous.contains(row.getString("id")) && !row.isNull("status")) {
+                            captured = true;
+                            break;
+                        }
+                    }
+                    if (captured) break;
+                    Thread.sleep(200);
+                }
+                if (!captured) throw new AssertionError("Selected app request was not captured");
+            } finally {
+                Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
+                stop.setAction(CaptureVpnService.ACTION_STOP);
+                getTargetContext().startService(stop);
+                long deadline = System.currentTimeMillis() + 30_000;
+                while (System.currentTimeMillis() < deadline && CaptureVpnService.isManaged())
+                    Thread.sleep(200);
+                if (CaptureVpnService.isManaged())
+                    throw new AssertionError("Selected-app VPN did not stop: " + CaptureVpnService.message());
+            }
         }
     }
 

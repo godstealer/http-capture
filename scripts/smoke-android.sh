@@ -50,6 +50,14 @@ if ! grep -Fq 'GET /vpn-smoke' "$origin_log"; then
 fi
 echo 'VPN raw TCP request reached the origin and capture record'
 
+if ! grep -Fq 'GET /vpn-selected-smoke' "$origin_log" ||
+   ! grep -Fq 'GET /vpn-excluded-smoke' "$origin_log"; then
+  cat "$origin_log"
+  echo 'Selected-app VPN test traffic did not reach the origin' >&2
+  exit 1
+fi
+echo 'Selected app was captured and the excluded app reached the origin'
+
 udp_ok=false
 for _ in $(seq 1 20); do
   probe_log="$(adb logcat -d -s 'HttpCaptureProbe:I' '*:S')"
