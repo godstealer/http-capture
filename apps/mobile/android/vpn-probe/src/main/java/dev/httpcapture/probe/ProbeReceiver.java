@@ -11,7 +11,9 @@ import java.io.InputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.HttpURLConnection;
 import java.net.Socket;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.security.KeyStore;
@@ -32,6 +34,8 @@ public final class ProbeReceiver extends BroadcastReceiver {
                     runTls(intent.getStringExtra("caPem"));
                 } else if ("dev.httpcapture.probe.RUN_UDP".equals(intent.getAction())) {
                     runUdp();
+                } else if ("dev.httpcapture.probe.RUN_HTTP_STACK".equals(intent.getAction())) {
+                    runHttpStack(intent.getStringExtra("path"));
                 } else {
                     runHttp(intent.getStringExtra("path"));
                 }
@@ -54,6 +58,26 @@ public final class ProbeReceiver extends BroadcastReceiver {
             InputStream response = socket.getInputStream();
             if (response.read() != 'H') throw new IllegalStateException("origin did not respond with HTTP");
             Log.i("HttpCaptureProbe", "raw TCP request reached origin");
+        }
+    }
+
+    private static void runHttpStack(String path) throws Exception {
+        if (path == null) throw new IllegalArgumentException("missing HTTP path");
+        HttpURLConnection connection = (HttpURLConnection) new URL(
+                "http://10.0.2.2:18080" + path).openConnection();
+        connection.setConnectTimeout(10_000);
+        connection.setReadTimeout(10_000);
+        connection.setRequestProperty("X-VPN-Probe-UID", Integer.toString(Process.myUid()));
+        try {
+            if (connection.getResponseCode() != 200)
+                throw new IllegalStateException("HTTP stack request returned "
+                        + connection.getResponseCode());
+            try (InputStream body = connection.getInputStream()) {
+                if (body.read() < 0) throw new IllegalStateException("empty HTTP response");
+            }
+            Log.i("HttpCaptureProbe", "HTTP stack request succeeded: " + path);
+        } finally {
+            connection.disconnect();
         }
     }
 

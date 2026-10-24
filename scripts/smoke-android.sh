@@ -32,7 +32,7 @@ done
 grep -Fq 'UDP echo ready' "$udp_log"
 adb logcat -c
 
-if ! output="$(timeout 150s adb shell am instrument -w \
+if ! output="$(timeout 210s adb shell am instrument -w \
   dev.httpcapture.mobile.test/dev.httpcapture.mobile.CaptureSmokeInstrumentation 2>&1)"; then
   printf '%s\n' "$output"
   adb logcat -d -t 200 '*:E' || true
@@ -58,6 +58,22 @@ if ! grep -Fq 'GET /vpn-selected-smoke' "$origin_log" ||
   exit 1
 fi
 echo 'Selected app was captured and the excluded app reached the origin'
+
+for attempt in 0 1; do
+  if ! grep -Fq "GET /?vpn-restart-$attempt" "$origin_log"; then
+    cat "$origin_log"
+    echo "VPN HTTP stack request $attempt did not reach the origin" >&2
+    exit 1
+  fi
+done
+probe_log="$(adb logcat -d -s 'HttpCaptureProbe:I' '*:S')"
+if ! grep -Fq 'HTTP stack request succeeded: /?vpn-restart-0' <<<"$probe_log" ||
+   ! grep -Fq 'HTTP stack request succeeded: /?vpn-restart-1' <<<"$probe_log"; then
+  adb logcat -d -s 'HttpCaptureProbe:V' '*:S' || true
+  echo 'VPN HTTP stack requests did not complete in both proxy hint modes' >&2
+  exit 1
+fi
+echo 'VPN HTTP stack traffic reached the origin in both proxy hint modes'
 
 udp_ok=false
 for _ in $(seq 1 20); do

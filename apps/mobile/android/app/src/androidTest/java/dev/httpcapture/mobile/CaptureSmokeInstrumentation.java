@@ -100,6 +100,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 start.setAction(CaptureVpnService.ACTION_START);
                 start.putExtra(CaptureVpnService.EXTRA_PORT, port);
                 start.putExtra(CaptureVpnService.EXTRA_SYSTEM_PROXY_HINT, attempt == 0);
+                start.putExtra(CaptureVpnService.EXTRA_ALLOWED_PACKAGES,
+                        new String[] {"dev.httpcapture.probe"});
                 getTargetContext().startForegroundService(start);
                 long deadline = System.currentTimeMillis() + 30_000;
                 while (System.currentTimeMillis() < deadline && !CaptureVpnService.isActive()) {
@@ -111,6 +113,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 if (!CaptureVpnService.isActive())
                     throw new AssertionError("VPN restart timed out: " + CaptureVpnService.message());
                 expectOk(NativeCapture.tunnelStatus());
+                verifyHttpStackFlow(attempt);
 
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
                 stop.setAction(CaptureVpnService.ACTION_STOP);
@@ -135,6 +138,39 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     Thread.sleep(100);
             }
         }
+    }
+
+    private void verifyHttpStackFlow(int attempt) throws Exception {
+        String path = "vpn-restart-" + attempt;
+        Set<String> previous = new HashSet<>();
+        JSONArray existing = expectOk(recent("", path)).getJSONArray("requests");
+        for (int index = 0; index < existing.length(); index++)
+            previous.add(existing.getJSONObject(index).getString("id"));
+        Intent probe = new Intent("dev.httpcapture.probe.RUN_HTTP_STACK");
+        probe.setComponent(new ComponentName("dev.httpcapture.probe",
+                "dev.httpcapture.probe.ProbeReceiver"));
+        probe.putExtra("path", "/?" + path);
+        getTargetContext().sendBroadcast(probe);
+        long deadline = System.currentTimeMillis() + 20_000;
+        while (System.currentTimeMillis() < deadline) {
+            JSONArray rows = expectOk(recent("", path)).getJSONArray("requests");
+            for (int index = 0; index < rows.length(); index++) {
+                JSONObject row = rows.getJSONObject(index);
+                if (previous.contains(row.getString("id")) || row.isNull("status")) continue;
+                if (row.getInt("status") != 200)
+                    throw new AssertionError("HTTP stack flow returned " + row.getInt("status"));
+                if (attempt == 1) {
+                    JSONObject flow = expectOk(metadata(row.getString("id")));
+                    JSONObject origin = flow.optJSONObject("trafficOrigin");
+                    if (origin == null || !"tun".equals(origin.optString("entry")))
+                        throw new AssertionError("HTTP stack bypassed TUN without proxy hint: " + origin);
+                }
+                return;
+            }
+            Thread.sleep(200);
+        }
+        throw new AssertionError("HTTP stack flow was not captured with proxy hint "
+                + (attempt == 0 ? "enabled" : "disabled"));
     }
 
     private void runPortableConfigurationSmoke() throws Exception {

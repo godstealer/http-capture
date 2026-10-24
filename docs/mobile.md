@@ -213,6 +213,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 
 Android 模拟器冒烟现增加同一端口连续两次启动/停止 VPN，并在每次停止后检查回环代理端口已释放，覆盖快速重启时的资源清理。测试 APK 已在本地编译通过；当前 Windows 无可运行模拟器或连接设备，执行结果须等集中推送后的 Android CI。
 
+该回归进一步让独立测试 App 使用 Android 的 `HttpURLConnection`，分别在公布和不公布系统代理时访问本机测试上游；检查抓包响应、上游实际收到请求、测试 App 完成读取，并在关闭代理提示时核对流量来源为 TUN。设备测试尚待集中 CI 运行。
+
 Android 10 及以上可在启动前关闭“向应用公布本机 HTTP 代理”。开关默认保持开启以兼容原行为；关闭时 VPN 仍建立完整路由并由 TUN 转发流量，便于测试不使用系统代理提示的应用及 TUN 来源识别。系统代理只是一项建议，应用可以忽略；开关需要重启 VPN 才会生效。模拟器快速启停回归分别启动开启和关闭两种设置，实际流量与代理公布状态仍待设备验证。依据：[Android `VpnService.Builder.setHttpProxy`](https://developer.android.com/reference/android/net/VpnService.Builder#setHttpProxy(android.net.ProxyInfo))。
 
 iOS 也新增同名开关，默认保留原有 `NEProxySettings`；关闭时 Packet Tunnel 仍配置 IPv4/IPv6 默认路由和虚拟 DNS，并由 Rust TUN 桥转发。宿主将设置保存到 VPN 配置，扩展在下一次启动时读取；旧配置缺少该字段时继续启用系统代理提示。此 Swift 改动仍待 Mac 编译、模拟器和 iPhone 流量验收。
@@ -225,5 +227,7 @@ iOS 也新增同名开关，默认保留原有 `NEProxySettings`；关闭时 Pac
 4. 集中推送近期 iOS 改动后，先由 Mac CI 重编宿主与 Packet Tunnel、运行 Swift 和 Rust 测试并检查 App Group 配置；此前的通过记录不覆盖这批新代码。之后在已签名 iPhone 上验证 VPN 授权、IPv4/IPv6、DNS、普通 UDP、HTTPS 解密、离线历史/导出/请求库/规则/证书、停止与重启及扩展内存占用。高级重放编辑器与设备交互仍需继续完善。不能把 Android APK 测试视为 iOS 证据。
 
 移动版目前不纳入桌面版 Check、发布和更新频道。Android/iOS 签名、应用商店分发、证书信任限制和扩展权限需要单独处理。
+
+Android 当前 `compileSdk/targetSdk` 均为 33，适用于现阶段调试包。若要提交新的 Google Play 手机应用，2026 年的目标 API 要求为 36；升级至少需要支持 API 36 的 Android Gradle Plugin/Gradle、SDK，并为前台 VPN 服务声明适用类型与权限，再在新版系统上重测 VPN 授权、前台运行、证书和文件选择器。该分发升级尚未实施，也不能用现有 API 33 模拟器冒烟代替。依据：[Google Play 目标 API 要求](https://support.google.com/googleplay/android-developer/answer/11926878)、[Android 构建工具兼容表](https://developer.android.com/build/releases/about-agp)、[前台服务类型](https://developer.android.com/develop/background-work/services/fgs/service-types)。
 
 设备验收需检查：授予 VPN 后 HTTP/TLS 流量进入记录；普通 UDP 保持连通但不进入 HTTP 记录；停止服务和撤销 VPN 权限后端口与 TUN 句柄释放；切到后台后通知及抓包继续运行；导出的 CA 文件只含公开证书。HTTPS 解密还取决于目标 App 是否信任用户安装的 CA，证书固定的 App 需单独处理。
