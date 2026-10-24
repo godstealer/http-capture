@@ -3,11 +3,13 @@
 //! second copy of the capture database or the loopback proxy.
 use capture_core::store::McpRequestFilter;
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::io;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
@@ -17,6 +19,16 @@ type PacketCallback = unsafe extern "C" fn(*const u8, usize, *mut c_void);
 const MTU: u16 = 1500;
 const MAX_PACKET: usize = MTU as usize;
 const QUEUE_DEPTH: usize = 256;
+const MAX_UPLOAD_BODY: usize = 1024 * 1024;
+const MAX_UPLOAD_CHUNK: usize = 16 * 1024;
+static UPLOAD_IDS: AtomicU64 = AtomicU64::new(1);
+
+struct RequestUpload {
+    token: u64,
+    draft: RequestDraft,
+    expected: usize,
+    received: usize,
+}
 
 struct PacketDevice {
     incoming: mpsc::Receiver<Vec<u8>>,
@@ -86,6 +98,7 @@ struct Active {
     sender: mpsc::Sender<Vec<u8>>,
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<Result<usize, String>>,
+    upload: Option<RequestUpload>,
 }
 
 static ACTIVE: OnceLock<Mutex<Option<Active>>> = OnceLock::new();
@@ -150,6 +163,7 @@ fn start(
         sender,
         cancel,
         task,
+        upload: None,
     });
     serde_json::to_value(status).map_err(|e| e.to_string())
 }
@@ -183,6 +197,24 @@ fn stop() -> Result<serde_json::Value, String> {
     }
 }
 
+fn replay_request(draft: RequestDraft) -> Result<serde_json::Value, String> {
+    let (runtime, handle) = {
+        let guard = active()
+            .lock()
+            .map_err(|_| "Capture state is unavailable")?;
+        let capture = guard.as_ref().ok_or("Capture is not running")?;
+        (capture.runtime.clone(), capture.executor.handle().clone())
+    };
+    let flow = handle
+        .block_on(runtime.engine.replay(draft, None, None))
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(serde_json::json!({
+        "id": flow.id,
+        "status": flow.response.as_ref().map(|response| response.status),
+        "error": flow.error,
+    }))
+}
+
 fn command(request: &str) -> Result<serde_json::Value, String> {
     let request: serde_json::Value = serde_json::from_str(request).map_err(|e| e.to_string())?;
     let method = request
@@ -197,21 +229,60 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
                 .ok_or("Missing request draft")?,
         )
         .map_err(|e| e.to_string())?;
-        let (runtime, handle) = {
-            let guard = active()
-                .lock()
-                .map_err(|_| "Capture state is unavailable")?;
-            let capture = guard.as_ref().ok_or("Capture is not running")?;
-            (capture.runtime.clone(), capture.executor.handle().clone())
-        };
-        let flow = handle
-            .block_on(runtime.engine.replay(draft, None, None))
-            .map_err(|e| format!("{e:#}"))?;
-        return Ok(serde_json::json!({
-            "id": flow.id,
-            "status": flow.response.as_ref().map(|response| response.status),
-            "error": flow.error,
-        }));
+        return replay_request(draft);
+    }
+    if method == "begin_request_upload" {
+        let expected = request.get("totalBytes").and_then(|value| value.as_u64())
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or("Invalid upload size")?;
+        if expected > MAX_UPLOAD_BODY { return Err("Request body exceeds 1 MiB".into()); }
+        let draft: RequestDraft = serde_json::from_value(request.get("request").cloned()
+            .ok_or("Missing request draft")?).map_err(|e| e.to_string())?;
+        if !draft.body_base64.is_empty() { return Err("Upload draft must have an empty body".into()); }
+        let token = UPLOAD_IDS.fetch_add(1, Ordering::Relaxed);
+        let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+        let capture = guard.as_mut().ok_or("Capture is not running")?;
+        capture.upload = Some(RequestUpload { token, draft, expected, received: 0 });
+        return Ok(serde_json::json!({"token": token, "nextOffset": 0}));
+    }
+    if method == "append_request_upload" {
+        let token = request.get("token").and_then(|value| value.as_u64()).ok_or("Invalid upload token")?;
+        let offset = request.get("offset").and_then(|value| value.as_u64())
+            .and_then(|value| usize::try_from(value).ok()).ok_or("Invalid upload offset")?;
+        let encoded = request.get("bodyBase64").and_then(|value| value.as_str())
+            .ok_or("Missing upload body chunk")?;
+        if encoded.len() > MAX_UPLOAD_CHUNK.div_ceil(3) * 4 {
+            return Err("Upload chunk exceeds 16 KiB".into());
+        }
+        let bytes = STANDARD.decode(encoded).map_err(|e| e.to_string())?;
+        if bytes.is_empty() || bytes.len() > MAX_UPLOAD_CHUNK {
+            return Err("Upload chunk must contain 1 to 16384 bytes".into());
+        }
+        let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+        let capture = guard.as_mut().ok_or("Capture is not running")?;
+        let upload = capture.upload.as_mut().ok_or("No request upload is active")?;
+        if upload.token != token || upload.received != offset {
+            return Err("Upload token or offset does not match".into());
+        }
+        let next = upload.received.checked_add(bytes.len()).ok_or("Upload size overflow")?;
+        if next > upload.expected { return Err("Upload exceeds declared request body size".into()); }
+        upload.draft.body_base64.append_complete_base64(&bytes).map_err(|e| e.to_string())?;
+        upload.received = next;
+        return Ok(serde_json::json!({"nextOffset": next}));
+    }
+    if method == "cancel_request_upload" || method == "commit_request_upload" {
+        let token = request.get("token").and_then(|value| value.as_u64()).ok_or("Invalid upload token")?;
+        let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+        let capture = guard.as_mut().ok_or("Capture is not running")?;
+        let upload = capture.upload.as_ref().ok_or("No request upload is active")?;
+        if upload.token != token { return Err("Upload token does not match".into()); }
+        if method == "commit_request_upload" && upload.received != upload.expected {
+            return Err("Request body upload is incomplete".into());
+        }
+        let upload = capture.upload.take().unwrap();
+        drop(guard);
+        if method == "cancel_request_upload" { return Ok(serde_json::Value::Null); }
+        return replay_request(upload.draft);
     }
     let guard = active()
         .lock()
@@ -697,6 +768,66 @@ mod tests {
         tls_client.read_exact(&mut response).unwrap();
         assert_eq!(&response, b"RAW");
         tls_task.join().unwrap();
+
+        let upload_origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upload_port = upload_origin.local_addr().unwrap().port();
+        let payload: Vec<u8> = (0..160 * 1024).map(|offset| (offset % 251) as u8).collect();
+        let expected = payload.clone();
+        let upload_task = std::thread::spawn(move || {
+            let (stream, _) = upload_origin.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let mut head = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" { break; }
+                head.push_str(&line);
+            }
+            assert!(head.starts_with("POST /upload HTTP/1.1"));
+            assert!(head.to_ascii_lowercase().contains("content-length: 163840"));
+            let mut received = vec![0; expected.len()];
+            reader.read_exact(&mut received).unwrap();
+            assert_eq!(received, expected);
+            reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let upload_draft = serde_json::json!({
+            "engine":"native", "method":"POST",
+            "url":format!("http://127.0.0.1:{upload_port}/upload"),
+            "headers":[], "bodyBase64":""
+        });
+        assert!(command(&serde_json::json!({"method":"begin_request_upload",
+            "request":upload_draft,"totalBytes":MAX_UPLOAD_BODY+1}).to_string()).is_err());
+        let begun = command(&serde_json::json!({"method":"begin_request_upload",
+            "request":upload_draft,"totalBytes":payload.len()}).to_string()).unwrap();
+        let token = begun["token"].as_u64().unwrap();
+        assert!(command(&serde_json::json!({"method":"append_request_upload",
+            "token":token,"offset":1,"bodyBase64":"YQ=="}).to_string()).is_err());
+        assert!(command(&serde_json::json!({"method":"append_request_upload",
+            "token":token,"offset":0,"bodyBase64":"%%%"}).to_string()).is_err());
+        assert!(command(&serde_json::json!({"method":"append_request_upload",
+            "token":token+1,"offset":0,"bodyBase64":"YQ=="}).to_string()).is_err());
+        assert!(command(&serde_json::json!({"method":"commit_request_upload",
+            "token":token}).to_string()).is_err());
+        for (index, chunk) in payload.chunks(MAX_UPLOAD_CHUNK).enumerate() {
+            let next = command(&serde_json::json!({"method":"append_request_upload",
+                "token":token,"offset":index*MAX_UPLOAD_CHUNK,
+                "bodyBase64":STANDARD.encode(chunk)}).to_string()).unwrap();
+            assert_eq!(next["nextOffset"], (index+1)*MAX_UPLOAD_CHUNK);
+        }
+        assert!(command(&serde_json::json!({"method":"append_request_upload",
+            "token":token,"offset":0,"bodyBase64":"YQ=="}).to_string()).is_err());
+        let uploaded = command(&serde_json::json!({"method":"commit_request_upload",
+            "token":token}).to_string()).unwrap();
+        assert_eq!(uploaded["status"], 200, "{uploaded}");
+        upload_task.join().unwrap();
+        let cancelled = command(&serde_json::json!({"method":"begin_request_upload",
+            "request":upload_draft,"totalBytes":1}).to_string()).unwrap();
+        let cancelled_token = cancelled["token"].as_u64().unwrap();
+        command(&serde_json::json!({"method":"cancel_request_upload",
+            "token":cancelled_token}).to_string()).unwrap();
+        assert!(command(&serde_json::json!({"method":"commit_request_upload",
+            "token":cancelled_token}).to_string()).is_err());
         assert!(stop().is_ok());
         assert!(command(r#"{"method":"status"}"#).is_err());
         assert!(command(r#"{"method":"blocking"}"#).is_err());

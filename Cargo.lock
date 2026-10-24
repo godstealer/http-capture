@@ -2633,6 +2633,7 @@ dependencies = [
 name = "http-capture-ios"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "capture-core",
  "rquickjs",
  "rustls",

@@ -126,6 +126,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var responseScope = "capture"
     @Published private(set) var responseRules: [ResponseRule] = []
     @Published private(set) var responseSaving = false
+    @Published private(set) var sendingManualRequest = false
     @Published var port = 8899
     @Published var urlFilterInput = ""
 
@@ -551,6 +552,7 @@ final class TunnelController: ObservableObject {
     }
 
     func sendManualRequest(method: String, url: String, headers: String, body: PreparedRequestBody) {
+        guard !sendingManualRequest else { return }
         let method = method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !method.isEmpty, let parsed = URLComponents(string: url),
@@ -559,7 +561,7 @@ final class TunnelController: ObservableObject {
             return
         }
         guard body.bytes.count <= RequestBodyCodec.maxBodyBytes, headers.utf8.count <= 16 * 1024 else {
-            message = "正文最多 64 KiB，请求头最多 16 KiB"
+            message = "正文最多 1 MiB，请求头最多 16 KiB"
             return
         }
         var headerRows: [[String: Any]] = []
@@ -584,22 +586,77 @@ final class TunnelController: ObservableObject {
                 headerRows.append(["name": "Content-Type", "value": contentType])
             }
         }
-        let draft: [String: Any] = ["method": method, "url": url, "engine": "auto",
-                                    "headers": headerRows, "bodyBase64": body.bytes.base64EncodedString()]
-        let command: [String: Any] = ["method": "send_request", "request": draft]
-        guard let commandData = try? JSONSerialization.data(withJSONObject: command),
-              commandData.count <= 128 * 1024 else {
-            message = "请求超过 VPN 扩展消息上限 128 KiB，请缩小正文或请求头"
+        var draft: [String: Any] = ["method": method, "url": url, "engine": "auto",
+                                    "headers": headerRows, "bodyBase64": ""]
+        sendingManualRequest = true
+        message = "正在发送请求…"
+        if body.bytes.count <= 48 * 1024 {
+            draft["bodyBase64"] = body.bytes.base64EncodedString()
+            let direct: [String: Any] = ["method": "send_request", "request": draft]
+            if let data = try? JSONSerialization.data(withJSONObject: direct), data.count <= 128 * 1024 {
+                send(direct, onFailure: { [weak self] in self?.sendingManualRequest = false }) {
+                    [weak self] value in self?.finishManualRequest(value)
+                }
+                return
+            }
+            draft["bodyBase64"] = ""
+        }
+        let begin: [String: Any] = ["method": "begin_request_upload", "request": draft,
+                                     "totalBytes": body.bytes.count]
+        guard let data = try? JSONSerialization.data(withJSONObject: begin), data.count <= 128 * 1024 else {
+            sendingManualRequest = false
+            message = "请求头超过 VPN 扩展消息上限 128 KiB"
             return
         }
-        message = "正在发送请求…"
-        send(command) { [weak self] value in
-            guard let self, let result = value as? [String: Any] else { return }
-            if let error = result["error"] as? String { self.message = "请求失败：" + error }
-            else { self.message = "请求已发送，状态 \(result["status"] ?? "未知")" }
-            self.refreshRequests()
-            if let id = result["id"] as? String { self.showDetail(id: id) }
+        send(begin, onFailure: { [weak self] in self?.sendingManualRequest = false }) { [weak self] value in
+            guard let self else { return }
+            guard let reply = value as? [String: Any],
+                  let token = (reply["token"] as? NSNumber)?.uint64Value,
+                  (reply["nextOffset"] as? NSNumber)?.intValue == 0 else {
+                self.sendingManualRequest = false
+                self.message = "VPN 扩展没有创建请求上传会话"
+                return
+            }
+            self.appendManualBody(body.bytes, token: token, offset: 0)
         }
+    }
+
+    private func appendManualBody(_ body: Data, token: UInt64, offset: Int) {
+        guard sendingManualRequest else { return }
+        if offset == body.count {
+            send(["method": "commit_request_upload", "token": token],
+                 onFailure: { [weak self] in self?.sendingManualRequest = false }) {
+                [weak self] value in self?.finishManualRequest(value)
+            }
+            return
+        }
+        let end = min(offset + 16 * 1024, body.count)
+        let command: [String: Any] = ["method": "append_request_upload", "token": token,
+                                      "offset": offset,
+                                      "bodyBase64": body.subdata(in: offset..<end).base64EncodedString()]
+        send(command, onFailure: { [weak self] in self?.sendingManualRequest = false }) { [weak self] value in
+            guard let self else { return }
+            guard let result = value as? [String: Any],
+                  (result["nextOffset"] as? NSNumber)?.intValue == end else {
+                self.sendingManualRequest = false
+                self.message = "请求正文上传位置不一致，请重试"
+                self.send(["method": "cancel_request_upload", "token": token]) { _ in }
+                return
+            }
+            self.appendManualBody(body, token: token, offset: end)
+        }
+    }
+
+    private func finishManualRequest(_ value: Any?) {
+        sendingManualRequest = false
+        guard let result = value as? [String: Any] else {
+            message = "VPN 扩展没有返回发送结果"
+            return
+        }
+        if let error = result["error"] as? String { message = "请求失败：" + error }
+        else { message = "请求已发送，状态 \(result["status"] ?? "未知")" }
+        refreshRequests()
+        if let id = result["id"] as? String { showDetail(id: id) }
     }
 
     func exportCertificate() {

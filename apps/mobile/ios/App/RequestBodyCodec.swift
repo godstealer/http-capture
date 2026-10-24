@@ -18,14 +18,29 @@ struct PreparedRequestBody {
 }
 
 enum RequestBodyCodec {
-    // Base64 and JSON framing must also fit in a 128 KiB provider message.
-    static let maxBodyBytes = 64 * 1024
+    // Larger bodies are sent as bounded chunks through the Packet Tunnel.
+    static let maxBodyBytes = 1024 * 1024
+    static let maxTextBytes = 64 * 1024
+
+    static func readFile(_ handle: FileHandle) throws -> Data {
+        var bytes = Data()
+        while bytes.count <= maxBodyBytes {
+            let remaining = maxBodyBytes + 1 - bytes.count
+            let part = try handle.read(upToCount: min(8192, remaining)) ?? Data()
+            if part.isEmpty { break }
+            bytes.append(part)
+        }
+        guard bytes.count <= maxBodyBytes else {
+            throw BodyError.invalid("文件超过 1 MiB，当前移动编辑器暂不支持发送")
+        }
+        return bytes
+    }
 
     static func compose(mode: ManualBodyMode, text: String, file: Data?,
                         fileName: String?, mimeType: String?) throws -> PreparedRequestBody {
-        let maxInputBytes = mode == .base64 ? 96 * 1024 : maxBodyBytes
-        guard text.utf8.count <= maxInputBytes else {
-            throw BodyError.invalid(mode == .base64 ? "Base64 输入最多 96 KiB" : "文本输入最多 64 KiB")
+        let maxInputBytes = mode == .base64 ? maxBodyBytes * 3 / 2 : maxTextBytes
+        guard mode == .file || text.utf8.count <= maxInputBytes else {
+            throw BodyError.invalid(mode == .base64 ? "Base64 输入最多 1.5 MiB" : "文本输入最多 64 KiB")
         }
         let bytes: Data
         let contentType: String?
@@ -59,7 +74,7 @@ enum RequestBodyCodec {
             }
             if let file {
                 try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeToken(fileName ?? "attachment.bin"))\"\r\nContent-Type: \(safeMimeType(mimeType))\r\n\r\n", to: &body)
-                guard body.count + file.count <= maxBodyBytes else { throw BodyError.invalid("请求正文最多 64 KiB") }
+                guard body.count + file.count <= maxBodyBytes else { throw BodyError.invalid("请求正文最多 1 MiB") }
                 body.append(file)
                 try append("\r\n", to: &body)
             }
@@ -73,7 +88,7 @@ enum RequestBodyCodec {
             bytes = decoded
             contentType = nil
         }
-        guard bytes.count <= maxBodyBytes else { throw BodyError.invalid("请求正文最多 64 KiB") }
+        guard bytes.count <= maxBodyBytes else { throw BodyError.invalid("请求正文最多 1 MiB") }
         return PreparedRequestBody(bytes: bytes, contentType: contentType, replaceContentType: replace)
     }
 
@@ -113,7 +128,7 @@ enum RequestBodyCodec {
     }
 
     private static func append(_ value: String, to body: inout Data) throws {
-        guard body.count + value.utf8.count <= maxBodyBytes else { throw BodyError.invalid("请求正文最多 64 KiB") }
+        guard body.count + value.utf8.count <= maxBodyBytes else { throw BodyError.invalid("请求正文最多 1 MiB") }
         body.append(contentsOf: value.utf8)
     }
 

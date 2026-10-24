@@ -13,6 +13,7 @@ struct ManualRequestDraft: Identifiable {
 }
 
 struct RecordedRequestCopy {
+    private static let maxEditableCopyBytes = 64 * 1024
     let id: String
     let revision: String
     let byteLength: Int
@@ -32,7 +33,7 @@ struct RecordedRequestCopy {
               let length = (reference["byteLength"] as? NSNumber)?.intValue else {
             throw CopyError.invalid("这条记录缺少请求或正文信息，请重新打开详情")
         }
-        guard (0...RequestBodyCodec.maxBodyBytes).contains(length) else {
+        guard (0...Self.maxEditableCopyBytes).contains(length) else {
             throw CopyError.invalid("请求正文超过 64 KiB，当前 iOS 编辑器不能安全复制后重发")
         }
         self.id = id

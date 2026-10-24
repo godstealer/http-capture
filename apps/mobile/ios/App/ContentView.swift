@@ -336,9 +336,10 @@ private struct ManualRequestView: View {
                             }
                         }
                     }
-                    Text("正文最多 64 KiB，包含文件和 Multipart 边界。")
+                    Text("文件与最终正文最多 1 MiB（Multipart 包含边界），文本输入最多 64 KiB。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                if tunnel.sendingManualRequest { ProgressView("正在分段发送请求…") }
                 if let inputError { Text(inputError).foregroundStyle(.red) }
                 Text(tunnel.message).font(.footnote).foregroundStyle(.secondary)
             }
@@ -357,7 +358,7 @@ private struct ManualRequestView: View {
                         } catch {
                             inputError = error.localizedDescription
                         }
-                    }
+                    }.disabled(tunnel.sendingManualRequest)
                 }
             }
             .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.item]) { result in
@@ -367,11 +368,7 @@ private struct ManualRequestView: View {
                     defer { if access { file.stopAccessingSecurityScopedResource() } }
                     let handle = try FileHandle(forReadingFrom: file)
                     defer { try? handle.close() }
-                    let bytes = try handle.read(upToCount: RequestBodyCodec.maxBodyBytes + 1) ?? Data()
-                    guard bytes.count <= RequestBodyCodec.maxBodyBytes else {
-                        throw RequestBodyCodec.BodyError.invalid("文件超过 64 KiB，当前 iOS 扩展消息暂不支持更大文件")
-                    }
-                    fileData = bytes
+                    fileData = try RequestBodyCodec.readFile(handle)
                     fileName = file.lastPathComponent
                     fileMimeType = UTType(filenameExtension: file.pathExtension)?.preferredMIMEType
                     inputError = nil

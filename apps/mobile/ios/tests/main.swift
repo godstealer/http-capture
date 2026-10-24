@@ -40,7 +40,7 @@ do {
                                            fileName: nil, mimeType: nil)
     expect(raw.bytes == binary, "Base64 解码错误")
     do {
-        _ = try RequestBodyCodec.compose(mode: .file, text: "", file: Data(count: 64 * 1024 + 1),
+        _ = try RequestBodyCodec.compose(mode: .file, text: "", file: Data(count: 1024 * 1024 + 1),
                                          fileName: "large", mimeType: nil)
         preconditionFailure("超大文件应被拒绝")
     } catch RequestBodyCodec.BodyError.invalid(_) { }
@@ -69,7 +69,21 @@ do {
     let largestBinary = Data(repeating: 255, count: RequestBodyCodec.maxBodyBytes)
     let largestEncoded = try RequestBodyCodec.compose(mode: .base64,
         text: largestBinary.base64EncodedString(), file: nil, fileName: nil, mimeType: nil)
-    expect(largestEncoded.bytes == largestBinary, "64 KiB 二进制正文无法通过 Base64 编辑器重发")
+    expect(largestEncoded.bytes == largestBinary, "1 MiB 二进制正文无法通过 Base64 编辑器重发")
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: fileURL) }
+    try largestBinary.write(to: fileURL)
+    let fileHandle = try FileHandle(forReadingFrom: fileURL)
+    let loadedFile = try RequestBodyCodec.readFile(fileHandle)
+    expect(loadedFile == largestBinary, "文件读取丢失原始字节")
+    try fileHandle.close()
+    try Data(count: RequestBodyCodec.maxBodyBytes + 1).write(to: fileURL)
+    let oversizedHandle = try FileHandle(forReadingFrom: fileURL)
+    defer { try? oversizedHandle.close() }
+    do {
+        _ = try RequestBodyCodec.readFile(oversizedHandle)
+        preconditionFailure("超大文件应在读取时被拒绝")
+    } catch RequestBodyCodec.BodyError.invalid(_) { }
     do {
         var invalid = try RecordedRequestCopy(flow: flow)
         _ = try invalid.append(["offset": 1, "totalBytes": 3, "bodyBase64": "AP8=", "nextOffset": 3])

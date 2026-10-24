@@ -10,6 +10,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 capture-core = { path = "../../../../crates/capture-core" }
 serde_json.workspace = true
+base64 = "0.22"
 tokio.workspace = true
 tun2proxy = { version = "0.7.15", default-features = false }
 

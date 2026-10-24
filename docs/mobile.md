@@ -33,7 +33,7 @@ Android 的 `VpnService` 只负责获得虚拟网卡与用户授权；包转发�
 - `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现，这些界面尚未经过 Xcode 编译和真机验证。
 - `apps/mobile/ios/project.yml` 由 XcodeGen 生成宿主和 Packet Tunnel 扩展工程；扩展构建前 `build-native.sh` 根据 iPhoneOS/Simulator 与架构编译 Rust 静态库。Rust 本地测试已覆盖扩展启停、阻止规则，以及本机 HTTP 请求发送、记录详情、正文预览，2026-10-24 共 4 项通过；扩展消息限长 128 KiB。需要 macOS、Xcode、Rust Apple target、XcodeGen，以及能用于 Packet Tunnel 的 Apple 签名权限。当前 Windows 环境无法执行 Xcode 编译，更不能证明扩展启动、系统流量、内存限制、证书信任或 App Store 分发通过。
 
-iOS 新建请求的正文编辑已增加文本、JSON、URL 表单、Base64、原始文件和带普通字段及单个文件的 Multipart。文件经系统文件选择器授权，最多只读取 64 KiB；最终正文也限制为 64 KiB，并在发送前按实际 JSON 消息大小检查 128 KiB 扩展上限。JSON 语法、表单编码、Multipart 边界/文件原始字节和非法 MIME 回退有独立 Swift 测试，已接入手动 iOS 构建工作流；当前 Windows 缺 Swift/Xcode，测试和宿主编译仍待 Mac 执行。超过 64 KiB 的文件需要后续分块 IPC 或其他传输方案，界面操作与实际发送仍待 iPhone 验收。
+iOS 新建请求的正文编辑已增加文本、JSON、URL 表单、Base64、原始文件和带普通字段及单个文件的 Multipart。文件经系统文件选择器授权，最多读取 1 MiB；文本输入最多 64 KiB，最终正文最多 1 MiB。较小请求可直接通过扩展消息发送，较大请求使用带上传令牌和偏移校验的 16 KiB 分段消息，完成后再提交给内核；扩展同一时间仅暂存一份最多 1 MiB 的正文，新的上传会替换未完成的旧上传。Rust 本机测试已验证 160 KiB 二进制请求分段、错误偏移与未完成提交的拒绝，以及实际 HTTP POST 字节一致性；JSON 语法、表单编码、Multipart 边界/文件字节和非法 MIME 回退有独立 Swift 测试，已接入手动 iOS 构建工作流。当前 Windows 缺 Swift/Xcode，宿主编译和设备实际发送仍待 Mac/iPhone 验证；超过 1 MiB 的流式上传尚未实现。
 
 iOS 请求详情新增“复制到新请求”。它从元数据获取请求头和正文修订号，只复制启用的普通请求头，并保留重复项顺序；编辑器会改变首尾空格或不能表示的请求头则拒绝复制。正文按 16 KiB 分段读取，逐段核对偏移、总长度和最终结束位置。可显示的 UTF-8 正文原样进入文本编辑器，二进制或含控制字节的正文转 Base64；超过 64 KiB 或读取期间记录变化时明确拒绝，避免截断后重发。分段和头部转换已加入 Swift 独立测试，仍须在 Mac 执行并在 iPhone 验证弹窗与实际请求。
 
