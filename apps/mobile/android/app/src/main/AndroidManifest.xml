@@ -19,6 +19,8 @@
         <service android:name=".CaptureVpnService"
                  android:permission="android.permission.BIND_VPN_SERVICE"
                  android:exported="true">
+            <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
+                       android:value="false" />
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
