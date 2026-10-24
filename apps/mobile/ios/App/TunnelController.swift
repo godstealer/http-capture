@@ -121,7 +121,9 @@ final class TunnelController: ObservableObject {
     @Published var replayDraft: ManualRequestDraft?
     @Published private(set) var certificateURL: URL?
     @Published private(set) var blockingEnabled = false
+    @Published private(set) var blockingScope = "capture"
     @Published private(set) var blockingRules: [BlockingRule] = []
+    @Published private(set) var blockingSaving = false
     @Published private(set) var responseEnabled = false
     @Published private(set) var responseScope = "capture"
     @Published private(set) var responseRules: [ResponseRule] = []
@@ -137,7 +139,6 @@ final class TunnelController: ObservableObject {
     private var detailGeneration: UInt64 = 0
     private var replayGeneration: UInt64 = 0
     private var bodyOffsetHistory: [Int] = []
-    private var blockingScope = "capture"
     private var responseConfig: [String: Any] = [:]
     private var responseVersion = ""
     private var statusObserver: NSObjectProtocol?
@@ -380,11 +381,31 @@ final class TunnelController: ObservableObject {
 
     func setBlockingEnabled(_ enabled: Bool) { saveBlocking(enabled: enabled, rules: blockingRules) }
 
+    func setBlockingScope(_ scope: String) {
+        guard ["capture", "replay", "all"].contains(scope) else { return }
+        saveBlocking(enabled: blockingEnabled, rules: blockingRules, scope: scope)
+    }
+
     func addBlockingRule(matchType: String, pattern: String, method: String) {
         let pattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pattern.isEmpty else { message = "请填写匹配内容"; return }
-        saveBlocking(enabled: blockingEnabled,
+        saveBlocking(enabled: true,
                      rules: blockingRules + [BlockingRule(matchType: matchType, pattern: pattern, method: method)])
+    }
+
+    func editBlockingRule(id: String, matchType: String, pattern: String, method: String) {
+        let pattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pattern.isEmpty else { message = "请填写匹配内容"; return }
+        guard ["host", "urlContains", "urlRegex"].contains(matchType) else { return }
+        var rules = blockingRules
+        guard let index = rules.firstIndex(where: { $0.id == id }) else {
+            message = "规则已变化，请刷新后重试"
+            return
+        }
+        rules[index].matchType = matchType
+        rules[index].pattern = pattern
+        rules[index].method = method
+        saveBlocking(enabled: blockingEnabled, rules: rules)
     }
 
     func setRuleEnabled(_ id: String, _ enabled: Bool) {
@@ -400,12 +421,23 @@ final class TunnelController: ObservableObject {
         saveBlocking(enabled: blockingEnabled, rules: blockingRules.filter { $0.id != id })
     }
 
-    private func saveBlocking(enabled: Bool, rules: [BlockingRule]) {
-        let config: [String: Any] = ["enabled": enabled, "scope": blockingScope,
+    private func saveBlocking(enabled: Bool, rules: [BlockingRule], scope: String? = nil) {
+        guard !blockingSaving else { return }
+        let config: [String: Any] = ["enabled": enabled, "scope": scope ?? blockingScope,
                                      "rules": rules.map(\.dictionary)]
-        send(["method": "configure_blocking", "config": config]) { [weak self] value in
-            guard let self, let saved = value as? [String: Any] else { return }
+        blockingSaving = true
+        send(["method": "configure_blocking", "config": config], onFailure: { [weak self] in
+            self?.blockingSaving = false
+            self?.refreshBlocking()
+        }) { [weak self] value in
+            guard let self else { return }
+            self.blockingSaving = false
+            guard let saved = value as? [String: Any] else {
+                self.message = "VPN 扩展没有返回阻止规则配置"
+                return
+            }
             self.blockingEnabled = saved["enabled"] as? Bool ?? false
+            self.blockingScope = saved["scope"] as? String ?? "capture"
             self.blockingRules = ((saved["rules"] as? [[String: Any]]) ?? []).compactMap(BlockingRule.init)
             self.message = "阻止规则已保存"
         }

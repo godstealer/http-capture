@@ -397,6 +397,7 @@ private struct BlockingRulesView: View {
     @State private var matchType = "host"
     @State private var pattern = ""
     @State private var method = ""
+    @State private var editingID: String?
 
     var body: some View {
         NavigationStack {
@@ -404,26 +405,44 @@ private struct BlockingRulesView: View {
                 Section("请求阻止") {
                     Toggle("启用", isOn: Binding(get: { tunnel.blockingEnabled },
                                               set: { tunnel.setBlockingEnabled($0) }))
+                    Picker("作用范围", selection: Binding(get: { tunnel.blockingScope },
+                                                       set: { tunnel.setBlockingScope($0) })) {
+                        Text("仅抓包").tag("capture")
+                        Text("仅重放").tag("replay")
+                        Text("抓包和重放").tag("all")
+                    }
                     Text("匹配后返回 403，不向目标服务器发送 HTTP 请求。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("规则") {
                     ForEach(tunnel.blockingRules) { rule in
-                        HStack {
+                        VStack(alignment: .leading) {
                             Toggle(isOn: Binding(get: { rule.enabled },
                                                  set: { tunnel.setRuleEnabled(rule.id, $0) })) {
                                 VStack(alignment: .leading) {
                                     Text(rule.pattern)
-                                    Text(rule.matchType).font(.footnote).foregroundStyle(.secondary)
+                                    Text("\(rule.matchType) · \(rule.method.isEmpty ? "全部方法" : rule.method)")
+                                        .font(.footnote).foregroundStyle(.secondary)
                                 }
                             }
-                            Button(role: .destructive) { tunnel.removeRule(rule.id) } label: {
-                                Image(systemName: "trash")
-                            }.buttonStyle(.borderless)
+                            HStack {
+                                Button("编辑") {
+                                    editingID = rule.id
+                                    matchType = rule.matchType
+                                    pattern = rule.pattern
+                                    method = rule.method
+                                }
+                                Spacer()
+                                Button(role: .destructive) {
+                                    if editingID == rule.id { resetEditor() }
+                                    tunnel.removeRule(rule.id)
+                                } label: { Image(systemName: "trash") }
+                            }
+                            .buttonStyle(.borderless)
                         }
                     }
                 }
-                Section("新增规则") {
+                Section(editingID == nil ? "新增规则" : "编辑规则") {
                     Picker("匹配方式", selection: $matchType) {
                         Text("精确域名").tag("host")
                         Text("URL 包含").tag("urlContains")
@@ -433,17 +452,32 @@ private struct BlockingRulesView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("方法（留空表示全部）", text: $method)
                         .textInputAutocapitalization(.characters)
-                    Button("添加规则") {
-                        tunnel.addBlockingRule(matchType: matchType, pattern: pattern,
-                                               method: method.trimmingCharacters(in: .whitespaces).uppercased())
-                        pattern = ""
+                    Button(editingID == nil ? "添加规则" : "保存修改") {
+                        let normalized = method.trimmingCharacters(in: .whitespaces).uppercased()
+                        if let editingID {
+                            tunnel.editBlockingRule(id: editingID, matchType: matchType,
+                                                    pattern: pattern, method: normalized)
+                        } else {
+                            tunnel.addBlockingRule(matchType: matchType, pattern: pattern,
+                                                   method: normalized)
+                        }
                     }
+                    Button(editingID == nil ? "清空表单" : "取消编辑") { resetEditor() }
                 }
+                if tunnel.blockingSaving { ProgressView("正在保存阻止规则…") }
                 Text(tunnel.message).font(.footnote).foregroundStyle(.secondary)
             }
+            .disabled(tunnel.blockingSaving)
             .navigationTitle("阻止规则")
             .toolbar { Button("关闭") { dismiss() } }
             .task { tunnel.refreshBlocking() }
         }
+    }
+
+    private func resetEditor() {
+        editingID = nil
+        matchType = "host"
+        pattern = ""
+        method = ""
     }
 }
