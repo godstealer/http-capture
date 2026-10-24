@@ -132,8 +132,12 @@ final class TunnelController: ObservableObject {
     @Published private(set) var responseRules: [ResponseRule] = []
     @Published private(set) var responseSaving = false
     @Published private(set) var sendingManualRequest = false
-    @Published var port = 8899
-    @Published var captureQuic = false
+    @Published var port = UserDefaults.standard.object(forKey: "capture_port") as? Int ?? 8899 {
+        didSet { UserDefaults.standard.set(port, forKey: "capture_port") }
+    }
+    @Published var captureQuic = UserDefaults.standard.object(forKey: "capture_quic") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(captureQuic, forKey: "capture_quic") }
+    }
     @Published var urlFilterInput = ""
 
     private var manager: NETunnelProviderManager?
@@ -164,10 +168,14 @@ final class TunnelController: ObservableObject {
                 self.manager = managers?.first(where: {
                     ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "dev.httpcapture.mobile.ios.PacketTunnel"
                 })
-                if let number = (self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["port"] as? NSNumber {
+                if UserDefaults.standard.object(forKey: "capture_port") == nil,
+                   let number = (self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["port"] as? NSNumber {
                     self.port = number.intValue
                 }
-                self.captureQuic = ((self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["capture_quic"] as? NSNumber)?.boolValue ?? false
+                if UserDefaults.standard.object(forKey: "capture_quic") == nil,
+                   let number = (self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["capture_quic"] as? NSNumber {
+                    self.captureQuic = number.boolValue
+                }
                 self.watchStatus()
                 self.refreshStatus()
             }
