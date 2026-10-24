@@ -198,10 +198,11 @@ public final class MainActivity extends Activity {
         results = new LinearLayout(this);
         results.setOrientation(LinearLayout.VERTICAL);
         resultScroll = new ScrollView(this);
-        resultScroll.addView(results);
-        layout.addView(resultScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        resultScroll.setFillViewport(true);
+        layout.addView(results);
+        resultScroll.addView(layout);
         showEmptyResults();
-        setContentView(layout);
+        setContentView(resultScroll);
         if (CaptureVpnService.isStopping()) {
             status.setText("正在停止 VPN…");
             start.setEnabled(false);
