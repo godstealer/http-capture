@@ -59,7 +59,25 @@ struct TrustedCertificatesView: View {
                         tunnel.reportTrustedCertificateError("证书文件超过 64 KiB")
                         return
                     }
-                    let data = try Data(contentsOf: url)
+                    guard let stream = InputStream(url: url) else {
+                        tunnel.reportTrustedCertificateError("无法打开证书文件")
+                        return
+                    }
+                    stream.open()
+                    defer { stream.close() }
+                    var data = Data()
+                    var buffer = [UInt8](repeating: 0, count: 8192)
+                    let bufferLength = buffer.count
+                    while true {
+                        let count = stream.read(&buffer, maxLength: bufferLength)
+                        if count < 0 { throw stream.streamError ?? CocoaError(.fileReadUnknown) }
+                        if count == 0 { break }
+                        if data.count + count > 64 * 1024 {
+                            tunnel.reportTrustedCertificateError("证书文件超过 64 KiB")
+                            return
+                        }
+                        data.append(contentsOf: buffer.prefix(count))
+                    }
                     guard let portNumber = Int(port) else { return }
                     tunnel.importTrustedCertificate(data: data, name: name, host: host, port: portNumber)
                 } catch {

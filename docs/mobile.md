@@ -82,7 +82,7 @@ iOS 工作流先构建并安装无签名模拟器 App，启动后保存首页截
 
 ## 上游 CA 证书
 
-Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 通过 Packet Tunnel 消息传递，单张导入文件暂限 64 KiB。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；iOS Rust 命令测试 9 项通过。Android 模拟器导入/启停测试与 iOS Swift 界面构建仍待 CI，真机上游私有 CA 站点验收仍待设备测试。
+Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 通过 Packet Tunnel 消息传递，单张导入文件暂限 64 KiB。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40086909266) 已通过模拟器证书导入/启停/删除、VPN 和 HTTPS 抓取测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），并上传双架构 APK。iOS Rust 命令测试 9 项通过；iOS Swift 界面构建仍待 Mac CI，真机上游私有 CA 站点验收仍待设备测试。
 
 ## iOS 分发边界
 

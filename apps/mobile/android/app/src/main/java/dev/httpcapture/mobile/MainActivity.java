@@ -1834,8 +1834,7 @@ public final class MainActivity extends Activity {
                     labels[i + 1] = (entry.optBoolean("enabled") ? "✓ " : "○ ")
                         + entry.optString("name") + " · " + (host.isEmpty() ? "所有 HTTPS 目标" : host + ":" + entry.optInt("port"));
                 }
-                new AlertDialog.Builder(this).setTitle("上游 CA 证书")
-                    .setMessage("用于信任目标服务器的私有 CA，与导出供手机安装的抓包 CA 不同。")
+                new AlertDialog.Builder(this).setTitle("上游 CA · 目标服务器信任")
                     .setItems(labels, (dialog, index) -> {
                         if (index == 0) {
                             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
