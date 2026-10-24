@@ -1032,7 +1032,18 @@ mod tests {
         origin_task.join().unwrap();
 
         // The packet adapter always sends CONNECT, including for plain HTTP.
-        // Verify that its dedicated listener accepts the HTTP request after it.
+        // Verify that the transparent listener returns exact replacement bytes.
+        let rewrite = command(r#"{"method":"response_rewrite"}"#).unwrap();
+        let replacement = serde_json::json!({"method":"configure_response_rewrite",
+            "expectedVersion":rewrite["version"],
+            "config":{"enabled":true,"scope":"capture","rules":[{
+                "id":"ios-binary-smoke","enabled":true,"matchType":"urlContains",
+                "pattern":"/bridge","method":"GET","action":"replace",
+                "replacement":{"status":203,"headers":[{"name":"Content-Type",
+                    "value":"application/octet-stream"}],"bodyBase64":"AP9B"}
+            }]}});
+        let rewritten = command(&replacement.to_string()).unwrap();
+        assert_eq!(rewritten["config"]["rules"][0]["replacement"]["bodyBase64"], "AP9B");
         let bridge_address = active().lock().unwrap().as_ref().unwrap().bridge.address;
         let plain_origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let plain_address = plain_origin.local_addr().unwrap();
@@ -1091,10 +1102,10 @@ mod tests {
             }
             head.push_str(&line);
         }
-        assert!(head.starts_with("HTTP/1.1 202"), "{head}");
-        let mut body = [0_u8; 2];
+        assert!(head.starts_with("HTTP/1.1 203"), "{head}");
+        let mut body = [0_u8; 3];
         bridge.read_exact(&mut body).unwrap();
-        assert_eq!(&body, b"ok");
+        assert_eq!(&body, &[0, 255, 65]);
         plain_task.join().unwrap();
 
         // VPN forwarding must not turn unrelated binary TCP traffic into HTTP.
