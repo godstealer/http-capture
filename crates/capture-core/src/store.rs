@@ -585,6 +585,35 @@ mod body_storage_tests {
   assert!(flows[1]["request"]["bodyBase64"].as_str().unwrap().starts_with("BwcH"));
  }
  #[test]
+ fn session_export_keeps_snapshot_when_capture_writes_during_output() {
+  struct Writer<'a> { store: &'a Store, late: Flow, bytes: Vec<u8>, inserted: bool }
+  impl std::io::Write for Writer<'_> {
+   fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+    self.bytes.extend_from_slice(data);
+    let marker=b"\"id\":\"newest\"";
+    if !self.inserted && self.bytes.windows(marker.len()).any(|part|part==marker) {
+     self.store.insert(&self.late).map_err(std::io::Error::other)?;
+     self.inserted=true;
+    }
+    Ok(data.len())
+   }
+   fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+  }
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("capture.db")).unwrap();
+  let mut first=sample();first.id="first".into();first.request.body_base64=SharedBody::default();
+  store.insert(&first).unwrap();
+  let mut newest=first.clone();newest.id="newest".into();store.insert(&newest).unwrap();
+  let mut late=first.clone();late.id="late".into();
+  let mut writer=Writer { store:&store, late, bytes:Vec::new(), inserted:false };
+  assert_eq!(store.export_session_json(&mut writer).unwrap(),2);
+  assert!(writer.inserted,"the capture write did not overlap session output");
+  let session:serde_json::Value=serde_json::from_slice(&writer.bytes).unwrap();
+  let ids:Vec<&str>=session["flows"].as_array().unwrap().iter()
+   .map(|flow|flow["id"].as_str().unwrap()).collect();
+  assert_eq!(ids,vec!["newest","first"]);
+  assert_eq!(store.list().unwrap().len(),3);
+ }
+ #[test]
  fn encoded_prefix_proof_handles_all_base64_boundaries() {
   use sha2::{Digest,Sha256};
   let bytes:Vec<u8>=(0..100).map(|n|n as u8).collect();
