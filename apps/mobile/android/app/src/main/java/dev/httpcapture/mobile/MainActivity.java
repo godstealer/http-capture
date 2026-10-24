@@ -36,6 +36,8 @@ import org.json.JSONTokener;
 import java.io.OutputStream;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.text.Collator;
@@ -59,6 +61,7 @@ public final class MainActivity extends Activity {
     private Button start;
     private Button stop;
     private Button exportCa;
+    private Button exportSessionButton;
     private Button blockingRules;
     private Button responseRewriteRules;
     private Button manualRequest;
@@ -95,6 +98,7 @@ public final class MainActivity extends Activity {
     private static final int PICK_REQUEST_FILE = 1203;
     private static final int PICK_TRUST_CA = 1204;
     private static final int NOTIFICATION_REQUEST = 1205;
+    private static final int SAVE_SESSION_REQUEST = 1206;
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
@@ -173,6 +177,7 @@ public final class MainActivity extends Activity {
         start = button(layout, "启动 VPN 抓包", view -> startCapture());
         stop = button(layout, "停止", view -> stopCapture());
         exportCa = button(layout, "保存 CA 公钥证书", view -> saveCertificate());
+        exportSessionButton = button(layout, "导出抓包记录 JSON", view -> chooseSessionExport());
         button(layout, "上游 CA 证书", view -> showTrustedCertificates());
         blockingRules = button(layout, "阻止规则", view -> loadBlocking());
         responseRewriteRules = button(layout, "响应修改规则", view -> loadResponseRewrite());
@@ -180,6 +185,7 @@ public final class MainActivity extends Activity {
         savedRequestsButton = button(layout, "已保存请求", view -> showSavedRequests());
         stop.setEnabled(false);
         exportCa.setEnabled(false);
+        exportSessionButton.setEnabled(false);
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
         manualRequest.setEnabled(false);
@@ -234,6 +240,7 @@ public final class MainActivity extends Activity {
             start.setEnabled(false);
             stop.setEnabled(true);
             exportCa.setEnabled(true);
+            exportSessionButton.setEnabled(true);
             blockingRules.setEnabled(true);
             responseRewriteRules.setEnabled(true);
             manualRequest.setEnabled(true);
@@ -260,6 +267,7 @@ public final class MainActivity extends Activity {
                     vpnRequested = false;
                     stop.setEnabled(true);
                     exportCa.setEnabled(true);
+                    exportSessionButton.setEnabled(true);
                     blockingRules.setEnabled(true);
                     responseRewriteRules.setEnabled(true);
                     manualRequest.setEnabled(true);
@@ -463,6 +471,7 @@ public final class MainActivity extends Activity {
                     status.setText("代理运行中 · 127.0.0.1:" + selectedPort);
                     stop.setEnabled(true);
                     exportCa.setEnabled(true);
+                    exportSessionButton.setEnabled(true);
                     blockingRules.setEnabled(true);
                     responseRewriteRules.setEnabled(true);
                     manualRequest.setEnabled(true);
@@ -515,6 +524,7 @@ public final class MainActivity extends Activity {
         stop.setEnabled(true);
         setAppSelectionEnabled(false);
         exportCa.setEnabled(true);
+        exportSessionButton.setEnabled(true);
         blockingRules.setEnabled(true);
         responseRewriteRules.setEnabled(true);
         manualRequest.setEnabled(true);
@@ -552,6 +562,7 @@ public final class MainActivity extends Activity {
             start.setEnabled(false);
             setAppSelectionEnabled(false);
             exportCa.setEnabled(false);
+            exportSessionButton.setEnabled(false);
             blockingRules.setEnabled(false);
             responseRewriteRules.setEnabled(false);
             manualRequest.setEnabled(false);
@@ -569,6 +580,7 @@ public final class MainActivity extends Activity {
                 start.setEnabled(true);
                 setAppSelectionEnabled(true);
                 exportCa.setEnabled(false);
+                exportSessionButton.setEnabled(false);
                 blockingRules.setEnabled(false);
                 responseRewriteRules.setEnabled(false);
                 manualRequest.setEnabled(false);
@@ -587,6 +599,7 @@ public final class MainActivity extends Activity {
         setAppSelectionEnabled(true);
         stop.setEnabled(false);
         exportCa.setEnabled(false);
+        exportSessionButton.setEnabled(false);
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
         manualRequest.setEnabled(false);
@@ -622,6 +635,7 @@ public final class MainActivity extends Activity {
                         setAppSelectionEnabled(false);
                         stop.setEnabled(false);
                         exportCa.setEnabled(false);
+                        exportSessionButton.setEnabled(false);
                         blockingRules.setEnabled(false);
                         responseRewriteRules.setEnabled(false);
                         manualRequest.setEnabled(false);
@@ -2401,6 +2415,43 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void chooseSessionExport() {
+        if (!running) { status.setText("请先启动抓包，再导出记录"); return; }
+        Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        save.addCategory(Intent.CATEGORY_OPENABLE);
+        save.setType("application/json");
+        save.putExtra(Intent.EXTRA_TITLE, "capture-" + System.currentTimeMillis() + ".json");
+        startActivityForResult(save, SAVE_SESSION_REQUEST);
+    }
+
+    private void exportSessionTo(Uri destination) {
+        exportSessionButton.setEnabled(false);
+        status.setText("正在导出抓包记录…");
+        worker.execute(() -> {
+            File temporary = new File(getCacheDir(), "capture-" + UUID.randomUUID() + ".json");
+            try {
+                JSONObject reply = parseReply(NativeCapture.exportSession(temporary.getAbsolutePath()));
+                if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                int count = reply.getJSONObject("value").getInt("count");
+                try (InputStream input = new FileInputStream(temporary);
+                     OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                    if (output == null) throw new IllegalStateException("无法打开目标文件");
+                    byte[] buffer = new byte[64 * 1024];
+                    int length;
+                    while ((length = input.read(buffer)) != -1) output.write(buffer, 0, length);
+                    output.flush();
+                }
+                main.post(() -> status.setText("已导出 " + count + " 条抓包记录"));
+            } catch (Exception error) {
+                main.post(() -> status.setText("导出抓包记录失败：" + error.getMessage()));
+            } finally {
+                if (temporary.exists() && !temporary.delete())
+                    android.util.Log.w("HttpCapture", "Could not remove temporary session export");
+                main.post(() -> exportSessionButton.setEnabled(running));
+            }
+        });
+    }
+
     private void showTrustedCertificates() {
         worker.execute(() -> {
             JSONObject reply = parseReply(NativeCapture.certificates());
@@ -2560,6 +2611,11 @@ public final class MainActivity extends Activity {
         if (requestCode == PICK_TRUST_CA) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null)
                 chooseTrustedCertificateTarget(data.getData());
+            return;
+        }
+        if (requestCode == SAVE_SESSION_REQUEST) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null)
+                exportSessionTo(data.getData());
             return;
         }
         if (requestCode != SAVE_CA_REQUEST || resultCode != RESULT_OK || data == null || data.getData() == null || certificatePem == null) return;

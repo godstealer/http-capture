@@ -284,6 +284,22 @@ fn recent(cursor: &str, url_contains: &str) -> Result<serde_json::Value, String>
     .map_err(|error| error.to_string())
 }
 
+fn export_session(path: &Path) -> Result<serde_json::Value, String> {
+    let store = {
+        let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+        current.as_ref().ok_or("Capture is not running")?.runtime.engine.store.clone()
+    };
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(path).map_err(|error| error.to_string())?;
+        let count = store.export_session_json(&mut file).map_err(|error| format!("{error:#}"))?;
+        std::io::Write::flush(&mut file).map_err(|error| error.to_string())?;
+        Ok::<_, String>(json!({"count": count}))
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(path); }
+    result
+}
+
 fn metadata(id: &str) -> Result<serde_json::Value, String> {
     let current = capture()
         .lock()
@@ -659,6 +675,17 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_recent(
             .map_err(|error| error.to_string())?
             .into();
         recent(&cursor, &url_contains)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_exportSession(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, path: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let path: String = env.get_string(&path).map_err(|error| error.to_string())?.into();
+        export_session(Path::new(&path))
     })();
     jni_reply(env, result)
 }

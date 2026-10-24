@@ -16,6 +16,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
@@ -235,6 +237,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (probeUID < 0 || application.getInt("uid") != probeUID) {
                 throw new AssertionError("VPN source UID differs from probe UID: " + origin + " / " + probeUID);
             }
+            verifySessionExport(capturedID);
             Intent udpProbe = new Intent("dev.httpcapture.probe.RUN_UDP");
             udpProbe.setComponent(new ComponentName("dev.httpcapture.probe",
                     "dev.httpcapture.probe.ProbeReceiver"));
@@ -254,6 +257,42 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (CaptureVpnService.isManaged()) {
                 throw new AssertionError("VPN did not stop: " + CaptureVpnService.message());
             }
+        }
+    }
+
+    private void verifySessionExport(String capturedID) throws Exception {
+        File destination = new File(getTargetContext().getCacheDir(),
+                "vpn-session-" + System.nanoTime() + ".json");
+        try {
+            JSONObject result = expectOk(NativeCapture.exportSession(destination.getAbsolutePath()));
+            if (result.optInt("count", 0) < 1) throw new AssertionError("Session export is empty");
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (InputStream input = new FileInputStream(destination)) {
+                byte[] buffer = new byte[16 * 1024];
+                int length;
+                while ((length = input.read(buffer)) != -1) bytes.write(buffer, 0, length);
+            }
+            JSONObject session = new JSONObject(bytes.toString(StandardCharsets.UTF_8.name()));
+            if (!"http-capture-session".equals(session.optString("format"))
+                    || session.optInt("version") != 1) {
+                throw new AssertionError("Session export is not desktop-compatible");
+            }
+            JSONArray flows = session.getJSONArray("flows");
+            if (flows.length() != result.getInt("count"))
+                throw new AssertionError("Session export count differs from file");
+            boolean found = false;
+            for (int i = 0; i < flows.length(); i++) {
+                JSONObject flow = flows.getJSONObject(i);
+                if (capturedID.equals(flow.optString("id"))) {
+                    found = flow.getJSONObject("request").getString("url").contains("vpn-smoke")
+                            && flow.has("response");
+                    break;
+                }
+            }
+            if (!found) throw new AssertionError("Captured VPN flow missing from session export");
+        } finally {
+            if (destination.exists() && !destination.delete())
+                throw new AssertionError("Could not remove session export test file");
         }
     }
 

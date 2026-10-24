@@ -6,7 +6,7 @@ use capture_core::store::{Collection, SavedRequest};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -24,6 +24,7 @@ const QUEUE_DEPTH: usize = 256;
 const MAX_UPLOAD_BODY: usize = 1024 * 1024;
 const MAX_UPLOAD_CHUNK: usize = 16 * 1024;
 static UPLOAD_IDS: AtomicU64 = AtomicU64::new(1);
+const SESSION_EXPORT_CHUNK: usize = 32 * 1024;
 
 struct RequestUpload {
     token: u64,
@@ -42,6 +43,17 @@ struct SavedRead {
     id: String,
     token: u64,
     body_base64: String,
+}
+
+struct SessionExport {
+    token: u64,
+    path: std::path::PathBuf,
+    file: std::fs::File,
+    total: u64,
+}
+
+impl Drop for SessionExport {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.path); }
 }
 
 struct PacketDevice {
@@ -115,6 +127,7 @@ struct Active {
     task: tokio::task::JoinHandle<Result<usize, String>>,
     upload: Option<RequestUpload>,
     saved_read: Option<SavedRead>,
+    session_export: Option<SessionExport>,
 }
 
 static ACTIVE: OnceLock<Mutex<Option<Active>>> = OnceLock::new();
@@ -211,6 +224,7 @@ fn start(
         task,
         upload: None,
         saved_read: None,
+        session_export: None,
     });
     serde_json::to_value(status).map_err(|e| e.to_string())
 }
@@ -456,12 +470,66 @@ fn saved_request_body(token: u64, offset: usize) -> Result<serde_json::Value, St
         "nextOffset":(end < total).then_some(end)}))
 }
 
+fn begin_session_export() -> Result<serde_json::Value, String> {
+    let store = {
+        let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+        guard.as_ref().ok_or("Capture is not running")?.runtime.engine.store.clone()
+    };
+    let token = UPLOAD_IDS.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("http-capture-session-{}-{token}.json", Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new().read(true).write(true).create_new(true)
+            .open(&path).map_err(|error| error.to_string())?;
+        let count = store.export_session_json(&mut file).map_err(|error| format!("{error:#}"))?;
+        file.flush().map_err(|error| error.to_string())?;
+        let total = file.metadata().map_err(|error| error.to_string())?.len();
+        let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+        let capture = guard.as_mut().ok_or("Capture stopped during export")?;
+        capture.session_export = Some(SessionExport { token, path: path.clone(), file, total });
+        Ok(serde_json::json!({"token":token,"count":count,"totalBytes":total}))
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&path); }
+    result
+}
+
+fn read_session_export(token: u64, offset: u64) -> Result<serde_json::Value, String> {
+    let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_mut().ok_or("Capture is not running")?;
+    let export = capture.session_export.as_mut().ok_or("No session export is active")?;
+    if export.token != token || offset > export.total { return Err("Export token or offset does not match".into()); }
+    export.file.seek(SeekFrom::Start(offset)).map_err(|error| error.to_string())?;
+    let length = usize::try_from((export.total - offset).min(SESSION_EXPORT_CHUNK as u64))
+        .map_err(|error| error.to_string())?;
+    let mut bytes = vec![0; length];
+    export.file.read_exact(&mut bytes).map_err(|error| error.to_string())?;
+    let next = offset + length as u64;
+    Ok(serde_json::json!({"offset":offset,"totalBytes":export.total,
+        "chunkBase64":STANDARD.encode(bytes),"nextOffset":(next < export.total).then_some(next)}))
+}
+
+fn finish_session_export(token: u64) -> Result<serde_json::Value, String> {
+    let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_mut().ok_or("Capture is not running")?;
+    if capture.session_export.as_ref().is_none_or(|export| export.token != token) {
+        return Err("Export token does not match".into());
+    }
+    capture.session_export = None;
+    Ok(serde_json::Value::Null)
+}
+
 fn command(request: &str) -> Result<serde_json::Value, String> {
     let request: serde_json::Value = serde_json::from_str(request).map_err(|e| e.to_string())?;
     let method = request
         .get("method")
         .and_then(|v| v.as_str())
         .ok_or("Missing method")?;
+    if method == "begin_session_export" { return begin_session_export(); }
+    if method == "read_session_export" || method == "finish_session_export" {
+        let token = request.get("token").and_then(|value| value.as_u64()).ok_or("Invalid export token")?;
+        if method == "finish_session_export" { return finish_session_export(token); }
+        let offset = request.get("offset").and_then(|value| value.as_u64()).ok_or("Invalid export offset")?;
+        return read_session_export(token, offset);
+    }
     if method == "send_request" {
         let draft: RequestDraft = serde_json::from_value(
             request
@@ -1259,6 +1327,28 @@ mod tests {
         let metadata =
             command(&serde_json::json!({"method":"metadata","id":id}).to_string()).unwrap();
         assert_eq!(metadata["response"]["status"], 201);
+        let exported = command(r#"{"method":"begin_session_export"}"#).unwrap();
+        let token = exported["token"].as_u64().unwrap();
+        let total = exported["totalBytes"].as_u64().unwrap();
+        let mut session_bytes = Vec::new();
+        let mut offset = 0;
+        while offset < total {
+            let chunk = command(&serde_json::json!({"method":"read_session_export",
+                "token":token,"offset":offset}).to_string()).unwrap();
+            assert_eq!(chunk["offset"], offset);
+            let bytes = STANDARD.decode(chunk["chunkBase64"].as_str().unwrap()).unwrap();
+            assert!(!bytes.is_empty() && bytes.len() <= SESSION_EXPORT_CHUNK);
+            offset += bytes.len() as u64;
+            session_bytes.extend_from_slice(&bytes);
+        }
+        assert_eq!(offset, total);
+        let session: serde_json::Value = serde_json::from_slice(&session_bytes).unwrap();
+        assert_eq!(session["format"], "http-capture-session");
+        assert!(session["flows"].as_array().unwrap().iter().any(|flow|
+            flow["id"] == id && flow["response"]["status"] == 201));
+        command(&serde_json::json!({"method":"finish_session_export","token":token}).to_string()).unwrap();
+        assert!(command(&serde_json::json!({"method":"read_session_export",
+            "token":token,"offset":0}).to_string()).is_err());
         let body = command(
             &serde_json::json!({
                 "method":"body_preview","id":id,"variant":"response",

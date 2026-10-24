@@ -62,6 +62,12 @@ struct ContentView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("请求记录") {
+                    Button(tunnel.sessionExporting ? "正在导出…" : "导出抓包记录 JSON") {
+                        tunnel.exportSession()
+                    }.disabled(!tunnel.connected || tunnel.sessionExporting)
+                    if let url = tunnel.sessionExportURL {
+                        ShareLink("分享或保存抓包记录", item: url)
+                    }
                     HStack {
                         TextField("按 URL 搜索", text: $tunnel.urlFilterInput)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()

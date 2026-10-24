@@ -145,6 +145,8 @@ final class TunnelController: ObservableObject {
     @Published private(set) var replayError: String?
     @Published var replayDraft: ManualRequestDraft?
     @Published private(set) var certificateURL: URL?
+    @Published private(set) var sessionExportURL: URL?
+    @Published private(set) var sessionExporting = false
     @Published private(set) var trustedCertificates: [TrustedCertificate] = []
     @Published private(set) var trustedCertificatesBusy = false
     private var trustedCertificatesVersion = ""
@@ -1262,6 +1264,83 @@ final class TunnelController: ObservableObject {
                 self.message = error.localizedDescription
             }
         }
+    }
+
+    func exportSession() {
+        guard connected, !sessionExporting else { return }
+        sessionExportURL = nil
+        sessionExporting = true
+        message = "正在导出抓包记录…"
+        send(["method": "begin_session_export"], onFailure: { [weak self] in
+            self?.sessionExporting = false
+        }) { [weak self] value in
+            guard let self else { return }
+            guard let info = value as? [String: Any],
+                  let token = (info["token"] as? NSNumber)?.uint64Value,
+                  let total = (info["totalBytes"] as? NSNumber)?.uint64Value,
+                  let count = info["count"] as? Int else {
+                self.sessionExporting = false
+                self.message = "VPN 扩展没有返回导出信息"
+                return
+            }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("http-capture-\(UUID().uuidString).json")
+            guard FileManager.default.createFile(atPath: url.path, contents: nil),
+                  let file = try? FileHandle(forWritingTo: url) else {
+                self.sessionExporting = false
+                self.message = "无法创建临时导出文件"
+                self.send(["method": "finish_session_export", "token": token]) { _ in }
+                return
+            }
+            self.readSessionExport(token: token, total: total, offset: 0,
+                                   count: count, file: file, url: url)
+        }
+    }
+
+    private func readSessionExport(token: UInt64, total: UInt64, offset: UInt64,
+                                   count: Int, file: FileHandle, url: URL) {
+        send(["method": "read_session_export", "token": token, "offset": offset],
+             onFailure: { [weak self] in self?.endSessionExport(token: token, file: file, url: url, success: false) }) { [weak self] value in
+            guard let self else { return }
+            guard let chunk = value as? [String: Any],
+                  let returnedOffset = (chunk["offset"] as? NSNumber)?.uint64Value,
+                  returnedOffset == offset,
+                  let returnedTotal = (chunk["totalBytes"] as? NSNumber)?.uint64Value,
+                  returnedTotal == total,
+                  let encoded = chunk["chunkBase64"] as? String,
+                  let bytes = Data(base64Encoded: encoded),
+                  bytes.count <= 32 * 1024,
+                  UInt64(bytes.count) <= total - offset else {
+                self.message = "导出数据不完整"
+                self.endSessionExport(token: token, file: file, url: url, success: false)
+                return
+            }
+            do { try file.write(contentsOf: bytes) }
+            catch {
+                self.message = "写入导出文件失败：\(error.localizedDescription)"
+                self.endSessionExport(token: token, file: file, url: url, success: false)
+                return
+            }
+            let next = offset + UInt64(bytes.count)
+            if next == total {
+                self.endSessionExport(token: token, file: file, url: url, success: true)
+                self.message = "已导出 \(count) 条抓包记录"
+            } else if next > offset {
+                self.readSessionExport(token: token, total: total, offset: next,
+                                       count: count, file: file, url: url)
+            } else {
+                self.message = "导出数据未前进"
+                self.endSessionExport(token: token, file: file, url: url, success: false)
+            }
+        }
+    }
+
+    private func endSessionExport(token: UInt64, file: FileHandle, url: URL, success: Bool) {
+        try? file.close()
+        if success { sessionExportURL = url }
+        else { try? FileManager.default.removeItem(at: url) }
+        sessionExporting = false
+        send(["method": "finish_session_export", "token": token]) { _ in }
     }
 
     func refreshTrustedCertificates() {

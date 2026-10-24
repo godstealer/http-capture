@@ -232,6 +232,34 @@ impl Store {
         tx.commit()?;Ok(flows)
     }
 
+    /// Write a desktop-compatible session without retaining every flow in memory.
+    /// A separate read transaction keeps the export consistent while capture writes continue.
+    pub fn export_session_json(&self, mut output: impl std::io::Write) -> Result<usize> {
+        let database = {
+            let conn = self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
+            conn.path().ok_or_else(|| anyhow::anyhow!("Database has no file path"))?.to_owned()
+        };
+        let mut reader = Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let tx = reader.transaction()?;
+        output.write_all(b"{\"format\":\"http-capture-session\",\"version\":1,\"flows\":[")?;
+        let count = {
+            let mut statement = tx.prepare("SELECT data FROM flows ORDER BY rowid DESC")?;
+            let mut rows = statement.query([])?;
+            let mut count = 0;
+            while let Some(row) = rows.next()? {
+                let raw: String = row.get(0)?;
+                let flow = restore_bodies(&tx, &raw)?;
+                if count != 0 { output.write_all(b",")?; }
+                serde_json::to_writer(&mut output, &flow)?;
+                count += 1;
+            }
+            count
+        };
+        output.write_all(b"]}")?;
+        tx.commit()?;
+        Ok(count)
+    }
+
 }
 
 // Keep public Flow JSON backwards compatible. Large entity bodies live in the same
@@ -539,6 +567,23 @@ mod body_storage_tests {
  use super::*;
  use base64::{Engine as _,engine::general_purpose::STANDARD};
  fn sample()->Flow {serde_json::from_value(serde_json::json!({"id":"large","startedAt":1,"durationMs":1,"source":"capture","request":{"method":"POST","url":"https://example.invalid","headers":[],"bodyBase64":STANDARD.encode(vec![7u8;100000])},"response":null,"error":null,"notes":[]})).unwrap()}
+ #[test]
+ fn session_export_restores_large_bodies_in_desktop_format() {
+  let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("capture.db")).unwrap();
+  let large=sample();store.insert(&large).unwrap();
+  let mut small=large.clone();small.id="small".into();small.started_at=2;
+  small.request.body_base64=SharedBody::default();store.insert(&small).unwrap();
+  let mut output=Vec::new();
+  assert_eq!(store.export_session_json(&mut output).unwrap(),2);
+  let session:serde_json::Value=serde_json::from_slice(&output).unwrap();
+  assert_eq!(session["format"],"http-capture-session");
+  assert_eq!(session["version"],1);
+  let flows=session["flows"].as_array().unwrap();
+  assert_eq!(flows.len(),2);
+  assert_eq!(flows[0]["id"],"small");
+  assert_eq!(flows[1]["request"]["bodyBase64"],large.request.body_base64.as_str());
+  assert!(flows[1]["request"]["bodyBase64"].as_str().unwrap().starts_with("BwcH"));
+ }
  #[test]
  fn encoded_prefix_proof_handles_all_base64_boundaries() {
   use sha2::{Digest,Sha256};

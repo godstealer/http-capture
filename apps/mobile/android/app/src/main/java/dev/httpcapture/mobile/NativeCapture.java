@@ -7,6 +7,7 @@ public final class NativeCapture {
     public static native String start(String dataDir, int port);
     public static native String stop();
     public static native String recent(String cursor, String urlContains);
+    public static native String exportSession(String path);
     public static native String metadata(String id);
     public static native String savedRequests(int offset, String query, String collectionId);
     public static native String savedCollections();
