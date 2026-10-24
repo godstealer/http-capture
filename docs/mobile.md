@@ -14,7 +14,7 @@ iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无�
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,729,436 字节，SHA-256 `1F9C1E1605C52F72F4A95753053C138E311DD5B7F0DA4EF94012ECDFF7E6613A`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,635,493 字节，SHA-256 `27EAAEEC724D4201B7B23CEA448C604A8693DC3C4C72B4D8CB2EBCF7513D9A21`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
@@ -125,6 +125,7 @@ Android 和 iOS 手动请求可选择原生自动协商、HTTP/1.1、HTTP/2 或 
 
 Android 的 `VpnService` 只负责获得虚拟网卡与用户授权；包转发层应将可抓取的 HTTP/TLS 连接转给手机上的 `capture-core` 代理，非目标流量保持正常连通。核心拦截、规则、持久化和证书逻辑尽量由现有 Rust crate 维护。不能用 `setHttpProxy` 冒充全流量接管，因为应用可以忽略系统代理。
 对照 [ProxyPin Android VPN 服务](https://github.com/wanghongenpin/proxypin/blob/main/android/app/src/main/kotlin/com/network/proxy/ProxyVpnService.kt) 与 [iOS Packet Tunnel](https://github.com/wanghongenpin/proxypin/blob/main/ios/ProxyPin/PacketTunnelProvider.swift)：它在 Android 通过 `VpnService.Builder` 配置默认路由、可选应用名单和 HTTP 代理提示，再由独立 TUN 线程解析 IP/TCP/UDP 并转给应用内代理；iOS 配置 `NEProxySettings` 的 HTTP/HTTPS 代理，开启 `ipProxy` 时再配置 IPv4 默认路由并启动包转发服务。两端上层共用 Flutter/Dart 代理内核。我们的 Android 与 iOS 已采用相同的“系统 VPN + 本机代理”基本拓扑，但共用的是 Rust `capture-core`；两端都处理 TUN 原始包，不依赖应用遵守代理提示。ProxyPin 的代理提示、应用范围和绕过路由可作为交互参考，不能据此认为 HTTPS 证书固定、忽略用户 CA 或所有 UDP/IPv6 流量已经解决。
+ProxyPin 的 [Android TUN 线程](https://github.com/wanghongenpin/proxypin/blob/main/android/app/src/main/kotlin/com/network/proxy/vpn/ProxyVpnThread.kt) 从 VPN 文件描述符读包，交给连接处理器，再由写线程将响应包送回 TUN；其 VPN 服务监控默认网络变化并刷新转发地址。iOS 在 `ipProxy` 模式使用 IPv4 默认路由、排除回环/链路本地等地址和代理主机，以免转发形成环路；未开启该模式时主要依赖 HTTP/HTTPS 代理设置。我们的 Android 已监控默认网络并重建包转发连接，iOS 已配置 IPv4/IPv6 默认路由和回环代理提示，但仍须设备验收切网、IPv6、UDP 与代理绕路。Android 若系统拒绝启动前台 VPN 服务，宿主现会停止此前启动的本机代理并显示错误，避免遗留端口；此异常分支已编译，尚待设备触发验证。
 Android 原生桥接在解析本机透明代理地址失败时会停止已打开的桥接监听，避免下次启动遇到遗留端口；这一分支仍待 Android 目标交叉编译验证。
 Android 手动请求头编辑器现保留复制来源中普通请求头的停用状态与重复顺序；可粘贴浏览器请求头，点“逐项启用或停用请求头”切换发送状态。自动补充正文 `Content-Type` 时忽略已停用的同名头。独立 Java 请求头解析测试与离线调试 APK 编译已通过，实际点击与发送待设备验收。
 首次提交的 Android 模拟器冒烟在已有抓包记录、上游请求尚未完成时停止 VPN，导致脚本随后查不到目标服务的 `/vpn-smoke` 访问日志。instrumentation 现只检查本次新请求，并等待记录出现响应状态才停止 VPN；离线测试 APK 编译和单独运行的 [Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40078795556) 均已通过，包括模拟器内的原始 VPN TCP 到目标服务及抓包记录检查。

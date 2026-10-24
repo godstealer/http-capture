@@ -3,6 +3,7 @@ package dev.httpcapture.mobile;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -533,8 +534,19 @@ public final class MainActivity extends Activity {
         intent.putExtra(CaptureVpnService.EXTRA_ALLOWED_PACKAGES,
             selectedApps.toArray(new String[0]));
         intent.putExtra(CaptureVpnService.EXTRA_CAPTURE_QUIC, captureQuic.isChecked());
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
-        else startService(intent);
+        try {
+            ComponentName started = Build.VERSION.SDK_INT >= 26
+                ? startForegroundService(intent) : startService(intent);
+            if (started == null) throw new IllegalStateException("系统未启动 VPN 服务");
+        } catch (RuntimeException error) {
+            vpnRequested = false;
+            vpnWasManaged = false;
+            String reason = error.getMessage() == null ? error.getClass().getSimpleName()
+                : error.getMessage();
+            stopCapture();
+            worker.execute(() -> main.post(() -> status.setText("VPN 服务启动失败：" + reason)));
+            return;
+        }
         requestNotificationPermissionIfNeeded();
         running = true;
         start.setEnabled(false);
