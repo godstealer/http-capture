@@ -217,6 +217,7 @@ do {
         "bodyBase64": Data(savedBody.suffix(1)).base64EncodedString(), "nextOffset": NSNull()])
     let editableSaved = try savedCopy.draft()
     expect(lastSaved && editableSaved.savedID == "saved-1" && editableSaved.bodyMode == .base64
+           && editableSaved.savedCollectionID == "collection-1"
            && Data(base64Encoded: editableSaved.body) == savedBody,
            "已保存请求的分段二进制正文不能无损编辑")
     var lossySaved = savedValue

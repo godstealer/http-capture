@@ -1604,7 +1604,8 @@ mod tests {
         let saved_body = vec![0xA5; MAX_UPLOAD_BODY];
         let begun = command(&serde_json::json!({"method":"begin_saved_request_upload",
             "name":"iOS saved smoke","request":saved_draft,
-            "totalBytes":saved_body.len()}).to_string()).unwrap();
+            "totalBytes":saved_body.len(),
+            "newCollectionName":"iOS segmented collection"}).to_string()).unwrap();
         let saved_token = begun["token"].as_u64().unwrap();
         assert!(command(&serde_json::json!({"method":"commit_request_upload",
             "token":saved_token}).to_string()).is_err());
@@ -1616,6 +1617,14 @@ mod tests {
         let saved = command(&serde_json::json!({"method":"commit_saved_request_upload",
             "token":saved_token}).to_string()).unwrap();
         let saved_id = saved["id"].as_str().unwrap();
+        let saved_collections = command(r#"{"method":"list_saved_collections"}"#).unwrap();
+        let saved_collection_id = saved_collections["collections"].as_array().unwrap().iter()
+            .find(|entry| entry["name"] == "iOS segmented collection")
+            .unwrap()["id"].as_str().unwrap();
+        let saved_in_collection = command(&serde_json::json!({"method":"list_saved_requests",
+            "offset":0,"collectionId":saved_collection_id}).to_string()).unwrap();
+        assert_eq!(saved_in_collection["total"], 1);
+        assert_eq!(saved_in_collection["requests"][0]["id"], saved_id);
         let list = command(r#"{"method":"list_saved_requests","offset":0}"#).unwrap();
         assert_eq!(list["requests"][0]["id"], saved_id);
         let filtered = command(r#"{"method":"list_saved_requests","offset":0,"query":"IOS SAVED SMOKE"}"#).unwrap();
@@ -1625,6 +1634,7 @@ mod tests {
         assert_eq!(unmatched["total"], 0);
         let opened = command(&serde_json::json!({"method":"open_saved_request",
             "id":saved_id}).to_string()).unwrap();
+        assert_eq!(opened["request"]["collectionId"], saved_collection_id);
         assert_eq!(opened["totalBytes"], MAX_UPLOAD_BODY);
         assert_eq!(opened["request"]["draft"]["bodyBase64"], "");
         assert_eq!(opened["request"]["draft"]["headers"][1]["value"], "second");
@@ -1649,6 +1659,8 @@ mod tests {
         assert_eq!(command(&serde_json::json!({"method":"open_saved_request",
             "id":saved_id}).to_string()).unwrap()["request"]["draft"]["url"],
             "https://example.com/ios-saved-updated");
+        assert_eq!(command(&serde_json::json!({"method":"open_saved_request",
+            "id":saved_id}).to_string()).unwrap()["request"]["collectionId"], saved_collection_id);
         command(&serde_json::json!({"method":"delete_saved_request","id":saved_id})
             .to_string()).unwrap();
         assert!(command(&serde_json::json!({"method":"open_saved_request",
@@ -1663,8 +1675,6 @@ mod tests {
         let entries = collections["collections"].as_array().unwrap();
         let collection_id = entries.iter().find(|entry| entry["name"] == "iOS collection smoke")
             .unwrap()["id"].as_str().unwrap();
-        let default_id = entries.iter().find(|entry| entry["name"] == "我的请求")
-            .unwrap()["id"].as_str().unwrap();
         let in_collection = command(&serde_json::json!({"method":"list_saved_requests",
             "offset":0,"collectionId":collection_id}).to_string()).unwrap();
         assert_eq!(in_collection["total"], 1);
@@ -1673,7 +1683,7 @@ mod tests {
             "action":"delete","id":collection_id}).to_string()).is_err());
         command(&serde_json::json!({"method":"save_request","id":collection_request_id,
             "name":"collection request","request":collection_draft,
-            "collectionId":default_id}).to_string()).unwrap();
+            "collectionId":saved_collection_id}).to_string()).unwrap();
         command(&serde_json::json!({"method":"change_saved_collection",
             "action":"rename","id":collection_id,"name":"iOS collection renamed"}).to_string()).unwrap();
         command(&serde_json::json!({"method":"change_saved_collection",
