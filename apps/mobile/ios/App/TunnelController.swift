@@ -153,6 +153,7 @@ final class TunnelController: ObservableObject {
     private var sessionExportFile: FileHandle?
     private var sessionExportToken: UInt64?
     private var sessionExportTempURL: URL?
+    private var sessionExportOffline = false
     @Published private(set) var trustedCertificates: [TrustedCertificate] = []
     @Published private(set) var trustedCertificatesBusy = false
     private var trustedCertificatesVersion = ""
@@ -1273,7 +1274,7 @@ final class TunnelController: ObservableObject {
     }
 
     func exportSession() {
-        guard connected, !sessionExporting else { return }
+        guard !sessionExporting, !tunnelStarting, !tunnelStopping else { return }
         if let old = sessionExportURL { try? FileManager.default.removeItem(at: old) }
         sessionExportURL = nil
         sessionExporting = true
@@ -1281,6 +1282,10 @@ final class TunnelController: ObservableObject {
         sessionExportGeneration &+= 1
         let generation = sessionExportGeneration
         message = "正在导出抓包记录…"
+        if !connected {
+            exportOfflineSession(generation: generation)
+            return
+        }
         send(["method": "begin_session_export"], onFailure: { [weak self] in
             guard let self else { return }
             if self.sessionExportCancelPending && self.sessionExportGeneration == (generation &+ 1) {
@@ -1346,8 +1351,67 @@ final class TunnelController: ObservableObject {
         }
     }
 
+    private func exportOfflineSession(generation: UInt64) {
+        sessionExportOffline = true
+        guard let shared = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.dev.httpcapture.mobile.ios") else {
+            sessionExportOffline = false
+            sessionExporting = false
+            message = "App Group 未启用，无法导出离线记录"
+            return
+        }
+        let directory = shared.appendingPathComponent("HTTP Capture", isDirectory: true).path
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("http-capture-\(UUID().uuidString).json")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let response: Data? = directory.withCString { path in
+                url.path.withCString { output in
+                    guard let pointer = hc_ios_offline_export_session(path, output) else { return nil as Data? }
+                    defer { hc_ios_free_string(pointer) }
+                    return Data(String(cString: pointer).utf8)
+                }
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { try? FileManager.default.removeItem(at: url); return }
+                guard self.sessionExportGeneration == generation else {
+                    try? FileManager.default.removeItem(at: url)
+                    if self.sessionExportOffline && self.sessionExportCancelPending {
+                        self.sessionExportOffline = false
+                        self.sessionExportCancelPending = false
+                        self.sessionExporting = false
+                        self.message = "已取消导出抓包记录"
+                    }
+                    return
+                }
+                self.sessionExportOffline = false
+                self.sessionExporting = false
+                guard let response,
+                      let result = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any],
+                      result["ok"] as? Bool == true,
+                      let value = result["value"] as? [String: Any],
+                      let count = value["count"] as? Int else {
+                    try? FileManager.default.removeItem(at: url)
+                    let error = response.flatMap {
+                        (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any]
+                    }
+                    self.message = error?["error"] as? String ?? "离线导出失败"
+                    return
+                }
+                self.sessionExportProgress = 100
+                self.sessionExportURL = url
+                self.message = "已导出 \(count) 条抓包记录"
+            }
+        }
+    }
+
     func cancelSessionExport() {
         guard sessionExporting, !sessionExportCancelPending else { return }
+        if sessionExportOffline {
+            sessionExportGeneration &+= 1
+            sessionExportCancelPending = true
+            message = "正在取消导出抓包记录…"
+            return
+        }
         if let token = sessionExportToken,
            let file = sessionExportFile,
            let url = sessionExportTempURL {
@@ -1443,6 +1507,7 @@ final class TunnelController: ObservableObject {
         sessionExportFile = nil
         sessionExportTempURL = nil
         sessionExportToken = nil
+        sessionExportOffline = false
         sessionExportCancelPending = false
         sessionExporting = false
         sessionExportProgress = 0
@@ -1576,6 +1641,7 @@ final class TunnelController: ObservableObject {
     private func refreshStatus() {
         switch manager?.connection.status {
         case .connected:
+            if sessionExportOffline { abandonSessionExport() }
             if tunnelStopping {
                 manager?.connection.stopVPNTunnel()
                 connected = false
@@ -1619,7 +1685,7 @@ final class TunnelController: ObservableObject {
             requestPageLoading = false
             message = "正在停止 VPN…"
         default:
-            abandonSessionExport()
+            if !sessionExportOffline { abandonSessionExport() }
             abandonManualSend()
             resetSavedRequestUI()
             connected = false

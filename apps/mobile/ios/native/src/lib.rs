@@ -1,4 +1,4 @@
-//! C ABI for the iOS Packet Tunnel extension and read-only host history.
+//! C ABI for the iOS Packet Tunnel extension and host-side history access.
 //! The host uses provider messages while the tunnel is connected and a
 //! separate SQLite reader in the App Group when it is stopped.
 use capture_core::store::McpRequestFilter;
@@ -586,6 +586,20 @@ fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, 
     history_command(offline_store(data_dir)?.as_ref(), method, &request)
 }
 
+fn offline_export_session(data_dir: &Path, output: &Path) -> Result<serde_json::Value, String> {
+    let store = offline_store(data_dir)?;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+        .open(output).map_err(|error| error.to_string())?;
+    let result = (|| {
+        let count = store.export_session_json(&mut file)
+            .map_err(|error| format!("{error:#}"))?;
+        file.flush().map_err(|error| error.to_string())?;
+        Ok(serde_json::json!({"count": count}))
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(output); }
+    result
+}
+
 fn command(request: &str) -> Result<serde_json::Value, String> {
     let request: serde_json::Value = serde_json::from_str(request).map_err(|e| e.to_string())?;
     let method = request
@@ -845,6 +859,17 @@ pub unsafe extern "C" fn hc_ios_offline_command(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn hc_ios_offline_export_session(
+    data_dir: *const c_char, output_path: *const c_char,
+) -> *mut c_char {
+    reply((|| {
+        let data_dir = input_string(data_dir)?;
+        let output_path = input_string(output_path)?;
+        offline_export_session(Path::new(data_dir), Path::new(output_path))
+    })())
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn hc_ios_input_packet(packet: *const u8, length: usize) -> bool {
     if packet.is_null() || length < 20 || length > MAX_PACKET {
         return false;
@@ -902,6 +927,14 @@ mod tests {
         }).to_string()).unwrap();
         assert_eq!(chunk["bodyBase64"], "eHl6");
         assert!(offline_command(dir.path(), r#"{"method":"configure_blocking"}"#).is_err());
+        let exported = dir.path().join("session.json");
+        let info = offline_export_session(dir.path(), &exported).unwrap();
+        assert_eq!(info["count"], 1);
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&exported).unwrap()).unwrap();
+        assert!(json.to_string().contains("offline-ios-flow"));
+        assert!(json.to_string().contains("eHl6"));
+        assert!(offline_export_session(dir.path(), &exported).is_err());
+        assert!(exported.exists());
     }
 
     fn tunnel_to(

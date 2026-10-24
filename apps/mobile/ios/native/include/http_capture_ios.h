@@ -18,6 +18,9 @@ char *hc_ios_command(const char *request_json);
 // Read-only capture history while the Packet Tunnel is stopped. The caller
 // passes the App Group's HTTP Capture directory and frees the JSON result.
 char *hc_ios_offline_command(const char *data_dir, const char *request_json);
+// Export the stopped tunnel's shared history to a new file in the host app's
+// temporary directory. An existing output file is never overwritten.
+char *hc_ios_offline_export_session(const char *data_dir, const char *output_path);
 bool hc_ios_input_packet(const uint8_t *packet, size_t length);
 void hc_ios_free_string(char *result);
 

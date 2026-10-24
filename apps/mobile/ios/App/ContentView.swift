@@ -65,7 +65,7 @@ struct ContentView: View {
                     Button(tunnel.sessionExportCancelPending ? "正在结束导出…" :
                            tunnel.sessionExporting ? "正在导出…" : "导出抓包记录 JSON") {
                         tunnel.exportSession()
-                    }.disabled(!tunnel.connected || tunnel.sessionExporting)
+                    }.disabled(tunnel.tunnelStarting || tunnel.tunnelStopping || tunnel.sessionExporting)
                     if tunnel.sessionExporting {
                         HStack {
                             ProgressView(value: Double(tunnel.sessionExportProgress), total: 100)
