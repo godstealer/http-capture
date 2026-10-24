@@ -304,6 +304,16 @@ public final class CaptureVpnService extends VpnService {
         if (shutdownStarted) return;
         shutdownStarted = true;
         destroyed = true;
+        // Keep the failure visible after native shutdown. A fast startup
+        // failure can happen before the Activity observes managed=true; its
+        // polling loop relies on this message to leave the running state.
+        final String terminalMessage = message;
+        final boolean preserveMessage = terminalMessage.startsWith("VPN 启动失败")
+            || terminalMessage.startsWith("VPN 转发已退出")
+            || terminalMessage.startsWith("VPN 状态读取失败")
+            || terminalMessage.startsWith("切换网络后重建连接失败")
+            || terminalMessage.startsWith("VPN 权限已撤销")
+            || terminalMessage.startsWith("VPN 端口无效");
         if (currentService == this) currentService = null;
         active = false;
         requestStop();
@@ -315,18 +325,15 @@ public final class CaptureVpnService extends VpnService {
         }
         worker.execute(() -> {
             try {
-                if (!message.startsWith("VPN 权限已撤销")) message = "正在停止 VPN 隧道…";
+                if (!preserveMessage) message = "正在停止 VPN 隧道…";
                 NativeCapture.stopTunnel();
                 if (tunnel != null) {
                     try { tunnel.close(); } catch (IOException ignored) { }
                     tunnel = null;
                 }
-                if (!message.startsWith("VPN 权限已撤销")) message = "正在停止抓包引擎…";
+                if (!preserveMessage) message = "正在停止抓包引擎…";
                 NativeCapture.stop();
-                if (!message.startsWith("VPN 启动失败") && !message.startsWith("VPN 转发已退出")
-                        && !message.startsWith("VPN 状态读取失败")
-                        && !message.startsWith("切换网络后重建连接失败")
-                        && !message.startsWith("VPN 权限已撤销")) message = "VPN 已停止";
+                message = preserveMessage ? terminalMessage : "VPN 已停止";
             } finally {
                 managed = false;
                 stopPending = false;

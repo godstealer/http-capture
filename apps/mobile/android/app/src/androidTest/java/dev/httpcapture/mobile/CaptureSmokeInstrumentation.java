@@ -50,6 +50,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             runBodyBoundarySmoke();
             runVpnLifecycleSmoke();
             runSelectedAppSmoke();
+            runVpnStartupFailureSmoke();
             runPortableConfigurationSmoke();
             result.putString("smokeStatus", "ok");
             finish(Activity.RESULT_OK, result);
@@ -57,6 +58,33 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             result.putString("smokeStatus", "failed: " + error);
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    private void runVpnStartupFailureSmoke() throws Exception {
+        final String missingPackage = "dev.httpcapture.missing.smoke";
+        final int port;
+        try (ServerSocket reservation = new ServerSocket(0, 1,
+                InetAddress.getByName("127.0.0.1"))) {
+            port = reservation.getLocalPort();
+        }
+        Intent start = new Intent(getTargetContext(), CaptureVpnService.class);
+        start.setAction(CaptureVpnService.ACTION_START);
+        start.putExtra(CaptureVpnService.EXTRA_PORT, port);
+        start.putExtra(CaptureVpnService.EXTRA_ALLOWED_PACKAGES,
+                new String[] {missingPackage});
+        getTargetContext().startForegroundService(start);
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadline &&
+                (CaptureVpnService.isManaged() || CaptureVpnService.isStopping()
+                 || !CaptureVpnService.message().startsWith("VPN 启动失败"))) {
+            Thread.sleep(200);
+        }
+        if (CaptureVpnService.isManaged() || CaptureVpnService.isStopping())
+            throw new AssertionError("Failed VPN did not stop: " + CaptureVpnService.message());
+        if (!CaptureVpnService.message().contains(missingPackage))
+            throw new AssertionError("VPN failure was overwritten: " + CaptureVpnService.message());
+        try (ServerSocket available = new ServerSocket(port, 1,
+                InetAddress.getByName("127.0.0.1"))) { }
     }
 
     private void runPortableConfigurationSmoke() throws Exception {
@@ -170,9 +198,10 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 stop.setAction(CaptureVpnService.ACTION_STOP);
                 getTargetContext().startService(stop);
                 long deadline = System.currentTimeMillis() + 30_000;
-                while (System.currentTimeMillis() < deadline && CaptureVpnService.isManaged())
+                while (System.currentTimeMillis() < deadline &&
+                        (CaptureVpnService.isManaged() || CaptureVpnService.isStopping()))
                     Thread.sleep(200);
-                if (CaptureVpnService.isManaged())
+                if (CaptureVpnService.isManaged() || CaptureVpnService.isStopping())
                     throw new AssertionError("Selected-app VPN did not stop: " + CaptureVpnService.message());
             }
         }

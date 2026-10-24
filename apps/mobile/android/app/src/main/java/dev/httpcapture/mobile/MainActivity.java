@@ -657,6 +657,8 @@ public final class MainActivity extends Activity {
                             || vpnMessage.startsWith("VPN 启动失败")
                             || vpnMessage.startsWith("VPN 转发已退出")
                             || vpnMessage.startsWith("VPN 状态读取失败")
+                            || vpnMessage.startsWith("切换网络后重建连接失败")
+                            || vpnMessage.startsWith("VPN 端口无效")
                             || vpnMessage.startsWith("VPN 权限已撤销"))) {
                         running = false;
                         updatePagingControls();
