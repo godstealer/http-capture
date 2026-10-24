@@ -252,11 +252,15 @@ public final class CaptureVpnService extends VpnService {
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent pending = PendingIntent.getActivity(
             this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Intent stop = new Intent(this, CaptureVpnService.class).setAction(ACTION_STOP);
+        PendingIntent stopPendingIntent = PendingIntent.getService(
+            this, 1, stop, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("HTTP Capture 正在抓取流量")
             .setContentText("点击打开抓包界面")
             .setContentIntent(pending)
+            .addAction(android.R.drawable.ic_media_pause, "停止抓包", stopPendingIntent)
             .setOngoing(true)
             .build();
     }

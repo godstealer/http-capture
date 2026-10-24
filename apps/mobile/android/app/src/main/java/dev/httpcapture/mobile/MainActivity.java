@@ -1,5 +1,6 @@
 package dev.httpcapture.mobile;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
@@ -90,6 +91,7 @@ public final class MainActivity extends Activity {
     private static final int VPN_REQUEST = 1202;
     private static final int PICK_REQUEST_FILE = 1203;
     private static final int PICK_TRUST_CA = 1204;
+    private static final int NOTIFICATION_REQUEST = 1205;
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
@@ -503,6 +505,7 @@ public final class MainActivity extends Activity {
         intent.putExtra(CaptureVpnService.EXTRA_CAPTURE_QUIC, captureQuic.isChecked());
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
+        requestNotificationPermissionIfNeeded();
         running = true;
         start.setEnabled(false);
         stop.setEnabled(true);
@@ -514,6 +517,18 @@ public final class MainActivity extends Activity {
         savedRequestsButton.setEnabled(true);
         status.setText("正在建立 VPN…");
         poll();
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                   == PackageManager.PERMISSION_GRANTED
+                || getPreferences(MODE_PRIVATE).getBoolean("notification_permission_requested", false))
+            return;
+        getPreferences(MODE_PRIVATE).edit()
+            .putBoolean("notification_permission_requested", true).apply();
+        requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS},
+            NOTIFICATION_REQUEST);
     }
 
     private void stopCapture() {
