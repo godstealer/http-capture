@@ -10,6 +10,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var isStopping = false
     private var generation: UInt64 = 0
     private let healthQueue = DispatchQueue(label: "dev.httpcapture.mobile.tunnel-health")
+    private let shutdownQueue = DispatchQueue(label: "dev.httpcapture.mobile.tunnel-shutdown")
     private var healthTimer: DispatchSourceTimer?
 
     private var running: Bool {
@@ -28,9 +29,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let port = number.intValue
         let captureQuic = (configuration.providerConfiguration?["capture_quic"] as? NSNumber)?.boolValue ?? false
         lifecycleLock.lock()
-        if isStarting || isRunning {
+        if isStarting || isRunning || isStopping {
             lifecycleLock.unlock()
-            completionHandler(tunnelError("Tunnel is already starting or running"))
+            completionHandler(tunnelError("Tunnel is already starting, running or stopping"))
             return
         }
         generation &+= 1
@@ -122,6 +123,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         lifecycleLock.lock()
         generation &+= 1
+        let stopGeneration = generation
         isStopping = true
         isStarting = false
         isRunning = false
@@ -129,8 +131,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         healthTimer = nil
         lifecycleLock.unlock()
         timer?.cancel()
-        _ = consumeResponse(hc_ios_stop())
-        completionHandler()
+        shutdownQueue.async {
+            _ = self.consumeResponse(hc_ios_stop())
+            self.lifecycleLock.lock()
+            if self.generation == stopGeneration { self.isStopping = false }
+            self.lifecycleLock.unlock()
+            completionHandler()
+        }
     }
 
     private func startHealthMonitoring(_ token: UInt64) {
