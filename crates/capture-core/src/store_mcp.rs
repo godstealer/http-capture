@@ -62,6 +62,9 @@ impl Store {
             'method',substr(json_extract(data,'$.request.method'),1,32),
             'url',substr(json_extract(data,'$.request.url'),1,8192),
             'status',json_extract(data,'$.response.status'),
+            'originUid',CASE WHEN json_type(data,'$.trafficOrigin.application.uid')='integer'
+                THEN json_extract(data,'$.trafficOrigin.application.uid') END,
+            'originLabel',substr(json_extract(data,'$.trafficOrigin.application.label'),1,128),
             'clientProtocol',json_extract(data,'$.clientProtocol'),
             'upstreamProtocol',json_extract(data,'$.response.version')) FROM flows
             WHERE (?1 IS NULL OR rowid<?1)
@@ -219,5 +222,28 @@ mod tests {
         assert_eq!(first.requests.iter().map(|v|v["id"].as_str().unwrap()).collect::<Vec<_>>(),vec!["three","two"]);
         let second=store.mcp_list_requests(McpRequestFilter{cursor:Some(first.next_cursor.unwrap().parse().unwrap()),limit:2,..Default::default()}).unwrap();
         assert_eq!(second.requests[0]["id"],"one");assert!(second.next_cursor.is_none());
+    }
+    #[test]
+    fn request_summary_exposes_bounded_android_app_origin_without_body() {
+        let dir=tempfile::tempdir().unwrap();let store=Store::open(&dir.path().join("test.db")).unwrap();
+        let mut captured=flow("with-origin",b"private body");
+        captured.traffic_origin=Some(serde_json::from_value(json!({
+            "entry":"tun","clientAddress":"10.0.0.2:1234","process":null,
+            "application":{"uid":10123,"packages":["dev.example.app"],"label":"Example"},
+            "processStatus":"found"
+        })).unwrap());
+        store.insert(&captured).unwrap();
+        let page=store.mcp_list_requests(McpRequestFilter{limit:10,..Default::default()}).unwrap();
+        let summary=&page.requests[0];
+        assert_eq!(summary["originUid"],10123);
+        assert_eq!(summary["originLabel"],"Example");
+        assert!(summary.get("trafficOrigin").is_none());
+        assert!(!summary.to_string().contains("private body"));
+        store.0.lock().unwrap().execute(
+            "UPDATE flows SET data=json_set(data,'$.trafficOrigin.application.label',?1) WHERE id='with-origin'",
+            ["L".repeat(200)],
+        ).unwrap();
+        let bounded=store.mcp_list_requests(McpRequestFilter{limit:10,..Default::default()}).unwrap();
+        assert_eq!(bounded.requests[0]["originLabel"].as_str().unwrap().len(),128);
     }
 }

@@ -688,8 +688,13 @@ public final class MainActivity extends Activity {
             row.setClickable(true);
             row.setOnClickListener(view -> showFlowDetail(id));
             row.setBackgroundResource(android.R.drawable.list_selector_background);
+            String originLabel = summary.optString("originLabel", "");
+            int originUid = summary.optInt("originUid", -1);
+            String origin = originLabel.isEmpty()
+                ? (originUid >= 0 ? " · UID " + originUid : "")
+                : " · " + originLabel;
             row.setText(summary.optString("method", "?")
-                + (responseStatus.isEmpty() ? "" : "  " + responseStatus) + "\n"
+                + (responseStatus.isEmpty() ? "" : "  " + responseStatus) + origin + "\n"
                 + summary.optString("url", ""));
             results.addView(row, new LinearLayout.LayoutParams(-1, -2));
         }
