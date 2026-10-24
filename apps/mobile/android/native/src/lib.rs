@@ -308,12 +308,18 @@ struct SaveMobileRequest {
     draft: RequestDraft,
 }
 
-fn saved_requests(offset: usize) -> Result<serde_json::Value, String> {
+fn saved_requests(offset: usize, query: &str) -> Result<serde_json::Value, String> {
+    let query = query.trim().to_lowercase();
+    if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
     let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = current.as_ref().ok_or("Capture is not running")?;
     let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
-    let total = library.requests.len();
-    let requests: Vec<_> = library.requests.iter().rev().skip(offset).take(100).map(|request| {
+    let matches = |request: &&SavedRequest| query.is_empty()
+        || request.name.to_lowercase().contains(&query)
+        || request.draft.method.to_lowercase().contains(&query)
+        || request.draft.url.to_lowercase().contains(&query);
+    let total = library.requests.iter().filter(&matches).count();
+    let requests: Vec<_> = library.requests.iter().rev().filter(matches).skip(offset).take(100).map(|request| {
         let collection_name = library.collections.iter()
             .find(|collection| collection.id == request.collection_id)
             .map(|collection| collection.name.as_str()).unwrap_or("");
@@ -598,9 +604,13 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_metadata(
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedRequests(
-    env: JNIEnv<'_>, _class: JClass<'_>, offset: jint,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, offset: jint, query: JString<'_>,
 ) -> jstring {
-    jni_reply(env, saved_requests(offset.max(0) as usize))
+    let result = (|| {
+        let query: String = env.get_string(&query).map_err(|error| error.to_string())?.into();
+        saved_requests(offset.max(0) as usize, &query)
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]

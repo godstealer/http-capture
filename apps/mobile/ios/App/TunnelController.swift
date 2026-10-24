@@ -162,6 +162,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var manualSaveCounter: UInt64 = 0
     @Published private(set) var savedRequests: [SavedRequestSummary] = []
     @Published private(set) var savedRequestTotal = 0
+    @Published private(set) var savedRequestQuery = ""
     @Published private(set) var savedRequestOffset = 0
     @Published private(set) var savedRequestNextOffset: Int?
     @Published private(set) var savedRequestLoading = false
@@ -204,6 +205,7 @@ final class TunnelController: ObservableObject {
         savedRequestError = nil
         savedRequests = []
         savedRequestTotal = 0
+        savedRequestQuery = ""
         savedRequestOffset = 0
         savedRequestNextOffset = nil
         savedDraft = nil
@@ -741,13 +743,19 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    func loadSavedRequests(offset: Int = 0) {
+    func loadSavedRequests(offset: Int = 0, query: String? = nil) {
         guard connected, !savedRequestLoading, !savedDeleteBusy, offset >= 0 else { return }
+        let search = (query ?? savedRequestQuery).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard search.utf8.count <= 256 else {
+            savedRequestError = "搜索词最多 256 字节"
+            return
+        }
+        savedRequestQuery = search
         savedListGeneration &+= 1
         let generation = savedListGeneration
         savedRequestLoading = true
         savedRequestError = nil
-        send(["method": "list_saved_requests", "offset": offset],
+        send(["method": "list_saved_requests", "offset": offset, "query": search],
              onFailure: { [weak self] in
                  guard let self else { return }
                  self.savedRequestLoading = false

@@ -450,12 +450,15 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         JSONObject saved = expectOk(NativeCapture.saveRequest(
             new JSONObject().put("name", name).put("draft", draft).toString()));
         String id = saved.getString("id");
-        JSONObject page = expectOk(NativeCapture.savedRequests(0));
+        JSONObject page = expectOk(NativeCapture.savedRequests(0, ""));
         JSONArray rows = page.getJSONArray("requests");
         boolean listed = false;
         for (int i = 0; i < rows.length(); i++)
             if (id.equals(rows.getJSONObject(i).getString("id"))) listed = true;
         if (!listed) throw new AssertionError("Saved request missing from library list");
+        JSONObject filtered = expectOk(NativeCapture.savedRequests(0, name.toUpperCase(java.util.Locale.ROOT)));
+        if (filtered.getInt("total") != 1 || !id.equals(filtered.getJSONArray("requests").getJSONObject(0).getString("id")))
+            throw new AssertionError("Saved request search did not match the full name");
         JSONObject reopened = expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft");
         JSONArray reopenedHeaders = reopened.getJSONArray("headers");
         if (reopenedHeaders.length() != 3

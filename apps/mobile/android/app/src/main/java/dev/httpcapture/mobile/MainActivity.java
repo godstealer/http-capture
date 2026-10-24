@@ -77,6 +77,7 @@ public final class MainActivity extends Activity {
     private String pageCursor = "";
     private String nextCursor = "";
     private String urlFilter = "";
+    private String savedRequestQuery = "";
     private final List<String> pageHistory = new ArrayList<>();
     private boolean pageLoading;
     private boolean running;
@@ -1077,12 +1078,16 @@ public final class MainActivity extends Activity {
         draft.bodyMode = bodyMode.getSelectedItemPosition();
     }
 
-    private void showSavedRequests() { showSavedRequests(0); }
+    private void showSavedRequests() {
+        savedRequestQuery = "";
+        showSavedRequests(0);
+    }
 
     private void showSavedRequests(int offset) {
+        final String query = savedRequestQuery;
         worker.execute(() -> {
             try {
-                JSONObject reply = parseReply(NativeCapture.savedRequests(offset));
+                JSONObject reply = parseReply(NativeCapture.savedRequests(offset, query));
                 if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                 JSONObject page = reply.getJSONObject("value");
                 JSONArray rows = page.getJSONArray("requests");
@@ -1097,11 +1102,25 @@ public final class MainActivity extends Activity {
                 int total = page.optInt("total");
                 int next = page.isNull("nextOffset") ? -1 : page.getInt("nextOffset");
                 main.post(() -> {
-                    if (isFinishing() || isDestroyed()) return;
+                    if (isFinishing() || isDestroyed() || !query.equals(savedRequestQuery)) return;
+                    LinearLayout search = new LinearLayout(this);
+                    search.setOrientation(LinearLayout.HORIZONTAL);
+                    int padding = (int) (16 * getResources().getDisplayMetrics().density);
+                    search.setPadding(padding, 0, padding, 0);
+                    EditText searchInput = new EditText(this);
+                    searchInput.setSingleLine(true);
+                    searchInput.setHint("搜索名称、方法或 URL");
+                    searchInput.setText(query);
+                    search.addView(searchInput, new LinearLayout.LayoutParams(0, -2, 1));
+                    Button searchButton = new Button(this);
+                    searchButton.setText("搜索");
+                    search.addView(searchButton);
                     AlertDialog.Builder list = new AlertDialog.Builder(this)
                         .setTitle("已保存请求 · " + total + " 条（长按删除）")
+                        .setView(search)
                         .setNegativeButton("关闭", null);
-                    if (labels.length == 0) list.setMessage("还没有保存的请求。新建请求后点“保存请求”即可。");
+                    if (labels.length == 0) list.setMessage(query.isEmpty()
+                        ? "还没有保存的请求。新建请求后点“保存请求”即可。" : "没有匹配的请求。");
                     else list.setItems(labels, (dialog, which) -> openSavedRequest(ids[which]));
                     if (offset > 0) list.setNeutralButton("上一页",
                         (dialog, which) -> showSavedRequests(Math.max(0, offset - 100)));
@@ -1109,6 +1128,16 @@ public final class MainActivity extends Activity {
                         (dialog, which) -> showSavedRequests(next));
                     AlertDialog dialog = list.create();
                     dialog.show();
+                    searchButton.setOnClickListener(view -> {
+                        String nextQuery = searchInput.getText().toString().trim();
+                        if (nextQuery.getBytes(StandardCharsets.UTF_8).length > 256) {
+                            searchInput.setError("搜索词最多 256 字节");
+                            return;
+                        }
+                        savedRequestQuery = nextQuery;
+                        dialog.dismiss();
+                        showSavedRequests(0);
+                    });
                     if (labels.length > 0) dialog.getListView().setOnItemLongClickListener(
                         (parent, view, position, itemId) -> {
                             dialog.dismiss();

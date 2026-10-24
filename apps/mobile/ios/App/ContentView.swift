@@ -374,14 +374,24 @@ private struct ResponseRewriteRulesView: View {
 private struct SavedRequestsView: View {
     @EnvironmentObject private var tunnel: TunnelController
     @Environment(\.dismiss) private var dismiss
+    @State private var searchInput = ""
     @State private var deletingRequest: SavedRequestSummary?
     @State private var showingDeleteConfirmation = false
 
     var body: some View {
         NavigationStack {
             List {
+                HStack {
+                    TextField("搜索名称、方法或 URL", text: $searchInput)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onSubmit { tunnel.loadSavedRequests(query: searchInput) }
+                    Button("搜索") { tunnel.loadSavedRequests(query: searchInput) }
+                        .disabled(tunnel.savedRequestLoading || tunnel.savedDeleteBusy)
+                }
                 if tunnel.savedRequests.isEmpty && !tunnel.savedRequestLoading {
-                    Text("还没有保存的请求。新建请求后点“保存请求”即可。")
+                    Text(tunnel.savedRequestQuery.isEmpty
+                         ? "还没有保存的请求。新建请求后点“保存请求”即可。" : "没有匹配的请求。")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(tunnel.savedRequests) { request in
@@ -428,7 +438,10 @@ private struct SavedRequestsView: View {
             }
             .navigationTitle("已保存请求")
             .toolbar { Button("关闭") { dismiss() } }
-            .onAppear { tunnel.loadSavedRequests() }
+            .onAppear {
+                searchInput = tunnel.savedRequestQuery
+                tunnel.loadSavedRequests()
+            }
             .confirmationDialog("删除已保存请求？", isPresented: $showingDeleteConfirmation,
                                 titleVisibility: .visible) {
                 Button("删除请求", role: .destructive) {

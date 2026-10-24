@@ -306,12 +306,18 @@ fn save_request(id: Option<&str>, name: &str, draft: RequestDraft) -> Result<ser
     Ok(serde_json::json!({"id": id, "revision": revision}))
 }
 
-fn list_saved_requests(offset: usize) -> Result<serde_json::Value, String> {
+fn list_saved_requests(offset: usize, query: &str) -> Result<serde_json::Value, String> {
+    let query = query.trim().to_lowercase();
+    if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
     let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_ref().ok_or("Capture is not running")?;
     let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
-    let total = library.requests.len();
-    let requests: Vec<_> = library.requests.iter().rev().skip(offset).take(100).map(|request| {
+    let matches = |request: &&SavedRequest| query.is_empty()
+        || request.name.to_lowercase().contains(&query)
+        || request.draft.method.to_lowercase().contains(&query)
+        || request.draft.url.to_lowercase().contains(&query);
+    let total = library.requests.iter().filter(&matches).count();
+    let requests: Vec<_> = library.requests.iter().rev().filter(matches).skip(offset).take(100).map(|request| {
         let collection_name = library.collections.iter()
             .find(|collection| collection.id == request.collection_id)
             .map(|collection| collection.name.as_str()).unwrap_or("");
@@ -409,7 +415,8 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
     if method == "list_saved_requests" {
         let offset = request.get("offset").and_then(|value| value.as_u64())
             .and_then(|value| usize::try_from(value).ok()).unwrap_or(0);
-        return list_saved_requests(offset);
+        let query = request.get("query").and_then(|value| value.as_str()).unwrap_or("");
+        return list_saved_requests(offset, query);
     }
     if method == "delete_saved_request" {
         let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing request ID")?;
@@ -1530,6 +1537,11 @@ mod tests {
         let saved_id = saved["id"].as_str().unwrap();
         let list = command(r#"{"method":"list_saved_requests","offset":0}"#).unwrap();
         assert_eq!(list["requests"][0]["id"], saved_id);
+        let filtered = command(r#"{"method":"list_saved_requests","offset":0,"query":"IOS SAVED SMOKE"}"#).unwrap();
+        assert_eq!(filtered["total"], 1);
+        assert_eq!(filtered["requests"][0]["id"], saved_id);
+        let unmatched = command(r#"{"method":"list_saved_requests","offset":0,"query":"no such saved request"}"#).unwrap();
+        assert_eq!(unmatched["total"], 0);
         let opened = command(&serde_json::json!({"method":"open_saved_request",
             "id":saved_id}).to_string()).unwrap();
         assert_eq!(opened["totalBytes"], MAX_UPLOAD_BODY);
