@@ -2,6 +2,15 @@ name: Android mobile build
 
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/mcp-integration]
+    paths:
+      - 'apps/mobile/android/**'
+      - 'scripts/build-android.*'
+      - 'crates/capture-core/**'
+      - 'vendor/tun2proxy/**'
+      - 'Cargo.lock'
+      - '.github/workflows/mobile-android.yml'
 
 jobs:
   debug-apk:

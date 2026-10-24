@@ -2,6 +2,14 @@ name: iOS mobile build
 
 on:
   workflow_dispatch:
+  push:
+    branches: [codex/mcp-integration]
+    paths:
+      - 'apps/mobile/ios/**'
+      - 'crates/capture-core/**'
+      - 'vendor/tun2proxy/**'
+      - 'Cargo.lock'
+      - '.github/workflows/mobile-ios.yml'
 
 jobs:
   simulator:
