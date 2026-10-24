@@ -5,6 +5,7 @@ import Combine
 struct ContentView: View {
     @EnvironmentObject private var tunnel: TunnelController
     @State private var showingManualRequest = false
+    @State private var showingSavedRequests = false
     @State private var showingRules = false
     @State private var showingResponseRules = false
     @State private var showingTrustedCertificates = false
@@ -76,6 +77,7 @@ struct ContentView: View {
                         Button("刷新") { tunnel.refreshRequests() }
                         Spacer()
                         Button("新建请求") { showingManualRequest = true }
+                        Button("已保存") { showingSavedRequests = true }
                     }
                     .buttonStyle(.borderless)
                     .disabled(!tunnel.connected)
@@ -176,6 +178,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingManualRequest) {
                 ManualRequestView().environmentObject(tunnel)
+            }
+            .sheet(isPresented: $showingSavedRequests) {
+                SavedRequestsView().environmentObject(tunnel)
             }
             .sheet(isPresented: $showingTrustedCertificates) {
                 TrustedCertificatesView().environmentObject(tunnel)
@@ -366,10 +371,66 @@ private struct ResponseRewriteRulesView: View {
     }
 }
 
+private struct SavedRequestsView: View {
+    @EnvironmentObject private var tunnel: TunnelController
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if tunnel.savedRequests.isEmpty && !tunnel.savedRequestLoading {
+                    Text("还没有保存的请求。新建请求后点“保存请求”即可。")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(tunnel.savedRequests) { request in
+                    Button { tunnel.openSavedRequest(request.id) } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(request.name).font(.headline)
+                            Text(request.method + " " + request.url).font(.footnote).lineLimit(2)
+                                .foregroundStyle(.secondary)
+                            if !request.collectionName.isEmpty {
+                                Text(request.collectionName).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .disabled(tunnel.savedOpenLoading)
+                }
+                HStack {
+                    Button("上一页") {
+                        tunnel.loadSavedRequests(offset: max(0, tunnel.savedRequestOffset - 100))
+                    }.disabled(tunnel.savedRequestOffset == 0 || tunnel.savedRequestLoading)
+                    Spacer()
+                    Text("\(tunnel.savedRequestTotal == 0 ? 0 : tunnel.savedRequestOffset + 1)–\(min(tunnel.savedRequestOffset + 100, tunnel.savedRequestTotal)) / \(tunnel.savedRequestTotal)")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("下一页") {
+                        if let next = tunnel.savedRequestNextOffset {
+                            tunnel.loadSavedRequests(offset: next)
+                        }
+                    }.disabled(tunnel.savedRequestNextOffset == nil || tunnel.savedRequestLoading)
+                }
+                .buttonStyle(.borderless)
+                if tunnel.savedRequestLoading { ProgressView("正在读取请求库…") }
+                if tunnel.savedOpenLoading { ProgressView("正在读取完整请求正文…") }
+                if let error = tunnel.savedRequestError {
+                    Text(error).foregroundStyle(.red)
+                }
+            }
+            .navigationTitle("已保存请求")
+            .toolbar { Button("关闭") { dismiss() } }
+            .onAppear { tunnel.loadSavedRequests() }
+            .sheet(item: $tunnel.savedDraft) { draft in
+                ManualRequestView(draft: draft).environmentObject(tunnel)
+            }
+        }
+    }
+}
+
 private struct ManualRequestView: View {
     @EnvironmentObject private var tunnel: TunnelController
     @Environment(\.dismiss) private var dismiss
     @State private var method = "GET"
+    @State private var requestName = ""
     @State private var url = ""
     @State private var headers = ""
     @State private var requestBody = ""
@@ -380,10 +441,13 @@ private struct ManualRequestView: View {
     @State private var fileMimeType: String?
     @State private var showingFileImporter = false
     @State private var inputError: String?
+    private let savedID: String?
 
     private var headerLines: [String] { headers.components(separatedBy: "\n") }
 
     init(draft: ManualRequestDraft = .empty) {
+        savedID = draft.savedID
+        _requestName = State(initialValue: draft.savedName ?? "")
         _method = State(initialValue: draft.method)
         _url = State(initialValue: draft.url)
         _headers = State(initialValue: draft.headers)
@@ -460,8 +524,28 @@ private struct ManualRequestView: View {
                     Text("文件与最终正文最多 1 MiB（Multipart 包含边界），文本输入最多 64 KiB。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("保存请求") {
+                    TextField("请求名称（留空自动生成）", text: $requestName)
+                    Button(savedID == nil ? "保存请求" : "保存修改") {
+                        do {
+                            let prepared = try RequestBodyCodec.compose(
+                                mode: bodyMode, text: requestBody, file: fileData,
+                                fileName: fileName, mimeType: fileMimeType)
+                            let entered = requestName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let generated = method.trimmingCharacters(in: .whitespacesAndNewlines)
+                                .uppercased() + " " + url.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let name = entered.isEmpty ? String(generated.prefix(100)) : entered
+                            inputError = nil
+                            tunnel.saveManualRequest(id: savedID, name: name, method: method,
+                                                     url: url, engine: engine, headers: headers,
+                                                     body: prepared)
+                        } catch {
+                            inputError = error.localizedDescription
+                        }
+                    }.disabled(tunnel.sendingManualRequest)
+                }
                 if tunnel.sendingManualRequest {
-                    ProgressView("正在发送请求…")
+                    ProgressView(tunnel.manualActivityText)
                     if tunnel.canCancelManualUpload {
                         Button("取消正文上传", role: .cancel) { tunnel.cancelManualUpload() }
                     } else {
@@ -472,7 +556,7 @@ private struct ManualRequestView: View {
                 if let inputError { Text(inputError).foregroundStyle(.red) }
                 Text(tunnel.message).font(.footnote).foregroundStyle(.secondary)
             }
-            .navigationTitle("新建请求")
+            .navigationTitle(savedID == nil ? "新建请求" : "编辑已保存请求")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(tunnel.canCancelManualUpload ? "取消并关闭" :
@@ -515,6 +599,7 @@ private struct ManualRequestView: View {
             .onChange(of: tunnel.manualResultID) { resultID in
                 if resultID != nil { dismiss() }
             }
+            .onChange(of: tunnel.manualSaveCounter) { _ in dismiss() }
         }
     }
 }

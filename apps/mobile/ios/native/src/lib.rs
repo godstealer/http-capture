@@ -2,6 +2,7 @@
 //! extension through NetworkExtension provider messages, never by opening a
 //! second copy of the capture database or the loopback proxy.
 use capture_core::store::McpRequestFilter;
+use capture_core::store::{Collection, SavedRequest};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -14,6 +15,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
 use tun2proxy::{ArgDns, ArgProxy, Args, CancellationToken};
+use uuid::Uuid;
 
 type PacketCallback = unsafe extern "C" fn(*const u8, usize, *mut c_void);
 const MTU: u16 = 1500;
@@ -28,6 +30,17 @@ struct RequestUpload {
     draft: RequestDraft,
     expected: usize,
     received: usize,
+    action: UploadAction,
+}
+
+enum UploadAction {
+    Replay,
+    Save { id: Option<String>, name: String },
+}
+
+struct SavedRead {
+    token: u64,
+    body_base64: String,
 }
 
 struct PacketDevice {
@@ -100,6 +113,7 @@ struct Active {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<Result<usize, String>>,
     upload: Option<RequestUpload>,
+    saved_read: Option<SavedRead>,
 }
 
 static ACTIVE: OnceLock<Mutex<Option<Active>>> = OnceLock::new();
@@ -195,6 +209,7 @@ fn start(
         cancel,
         task,
         upload: None,
+        saved_read: None,
     });
     serde_json::to_value(status).map_err(|e| e.to_string())
 }
@@ -252,6 +267,103 @@ fn replay_request(draft: RequestDraft) -> Result<serde_json::Value, String> {
     }))
 }
 
+fn save_request(id: Option<&str>, name: &str, draft: RequestDraft) -> Result<serde_json::Value, String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
+    if draft.body_base64.len() > MAX_UPLOAD_BODY.div_ceil(3) * 4 {
+        return Err("Request body exceeds 1 MiB".into());
+    }
+    capture_core::http1::validate_draft(&draft).map_err(|error| error.to_string())?;
+    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_ref().ok_or("Capture is not running")?;
+    let store = &capture.runtime.engine.store;
+    let mut library = store.library().map_err(|error| error.to_string())?;
+    let id = if let Some(id) = id {
+        let request = library.requests.iter_mut().find(|request| request.id == id)
+            .ok_or("Saved request not found")?;
+        if request.grpc_draft.is_some() || request.request_mode.as_deref() == Some("grpc") {
+            return Err("gRPC requests cannot be edited in the mobile HTTP editor".into());
+        }
+        request.name = name.into();
+        request.draft = draft;
+        id.to_owned()
+    } else {
+        let collection_id = if let Some(collection) = library.collections.iter()
+            .find(|collection| collection.name == "我的请求") {
+            collection.id.clone()
+        } else {
+            let id = Uuid::new_v4().to_string();
+            library.collections.push(Collection { id: id.clone(), name: "我的请求".into() });
+            id
+        };
+        let id = Uuid::new_v4().to_string();
+        library.requests.push(SavedRequest { id: id.clone(), name: name.into(), collection_id,
+            draft, grpc_draft: None, request_mode: Some("http".into()) });
+        id
+    };
+    let revision = store.save_library(library).map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({"id": id, "revision": revision}))
+}
+
+fn list_saved_requests(offset: usize) -> Result<serde_json::Value, String> {
+    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_ref().ok_or("Capture is not running")?;
+    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    let total = library.requests.len();
+    let requests: Vec<_> = library.requests.iter().rev().skip(offset).take(100).map(|request| {
+        let collection_name = library.collections.iter()
+            .find(|collection| collection.id == request.collection_id)
+            .map(|collection| collection.name.as_str()).unwrap_or("");
+        serde_json::json!({"id":request.id,
+            "name":request.name.chars().take(32).collect::<String>(),
+            "collectionName":collection_name.chars().take(16).collect::<String>(),
+            "method":request.draft.method.chars().take(16).collect::<String>(),
+            "url":request.draft.url.chars().take(128).collect::<String>()})
+    }).collect();
+    Ok(serde_json::json!({"total":total,"nextOffset":
+        (offset + requests.len() < total).then_some(offset + requests.len()),"requests":requests}))
+}
+
+fn open_saved_request(id: &str) -> Result<serde_json::Value, String> {
+    let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_mut().ok_or("Capture is not running")?;
+    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    let request = library.requests.iter().find(|request| request.id == id)
+        .ok_or("Saved request not found")?;
+    if request.draft.body_base64.len() > MAX_UPLOAD_BODY.div_ceil(3) * 4 {
+        return Err("Saved request body exceeds 1 MiB".into());
+    }
+    let body = STANDARD.decode(request.draft.body_base64.as_bytes()).map_err(|error| error.to_string())?;
+    if body.len() > MAX_UPLOAD_BODY { return Err("Saved request body exceeds 1 MiB".into()); }
+    let mut value = serde_json::to_value(request).map_err(|error| error.to_string())?;
+    value["draft"]["bodyBase64"] = serde_json::json!("");
+    let token = UPLOAD_IDS.fetch_add(1, Ordering::Relaxed);
+    capture.saved_read = Some(SavedRead { token, body_base64: request.draft.body_base64.as_str().to_owned() });
+    let result = serde_json::json!({"request":value,"totalBytes":body.len(),"readToken":token});
+    if serde_json::to_vec(&result).map_err(|error| error.to_string())?.len() > 96 * 1024 {
+        capture.saved_read = None;
+        return Err("Saved request headers exceed the tunnel message limit".into());
+    }
+    Ok(result)
+}
+
+fn saved_request_body(token: u64, offset: usize) -> Result<serde_json::Value, String> {
+    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_ref().ok_or("Capture is not running")?;
+    let read = capture.saved_read.as_ref().ok_or("No saved request is open")?;
+    if read.token != token { return Err("Saved request read token has expired".into()); }
+    let encoded = read.body_base64.as_str();
+    let total = encoded.len() / 4 * 3 - encoded.as_bytes().iter().rev().take_while(|b| **b == b'=').count();
+    const CHUNK: usize = 12 * 1024;
+    if offset >= total || offset % CHUNK != 0 { return Err("Invalid saved body offset".into()); }
+    let end = (offset + CHUNK).min(total);
+    let begin_char = offset / 3 * 4;
+    let end_char = if end == total { encoded.len() } else { end / 3 * 4 };
+    Ok(serde_json::json!({"offset":offset,"totalBytes":total,
+        "bodyBase64":&encoded[begin_char..end_char],
+        "nextOffset":(end < total).then_some(end)}))
+}
+
 fn command(request: &str) -> Result<serde_json::Value, String> {
     let request: serde_json::Value = serde_json::from_str(request).map_err(|e| e.to_string())?;
     let method = request
@@ -268,7 +380,30 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())?;
         return replay_request(draft);
     }
-    if method == "begin_request_upload" {
+    if method == "save_request" {
+        let draft: RequestDraft = serde_json::from_value(request.get("request").cloned()
+            .ok_or("Missing request draft")?).map_err(|error| error.to_string())?;
+        let name = request.get("name").and_then(|value| value.as_str()).ok_or("Missing request name")?;
+        let id = request.get("id").and_then(|value| value.as_str());
+        return save_request(id, name, draft);
+    }
+    if method == "list_saved_requests" {
+        let offset = request.get("offset").and_then(|value| value.as_u64())
+            .and_then(|value| usize::try_from(value).ok()).unwrap_or(0);
+        return list_saved_requests(offset);
+    }
+    if method == "open_saved_request" {
+        let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing request ID")?;
+        return open_saved_request(id);
+    }
+    if method == "saved_request_body" {
+        let token = request.get("readToken").and_then(|value| value.as_u64())
+            .ok_or("Missing saved request read token")?;
+        let offset = request.get("offset").and_then(|value| value.as_u64())
+            .and_then(|value| usize::try_from(value).ok()).ok_or("Invalid saved body offset")?;
+        return saved_request_body(token, offset);
+    }
+    if method == "begin_request_upload" || method == "begin_saved_request_upload" {
         let expected = request.get("totalBytes").and_then(|value| value.as_u64())
             .and_then(|value| usize::try_from(value).ok())
             .ok_or("Invalid upload size")?;
@@ -276,10 +411,17 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
         let draft: RequestDraft = serde_json::from_value(request.get("request").cloned()
             .ok_or("Missing request draft")?).map_err(|e| e.to_string())?;
         if !draft.body_base64.is_empty() { return Err("Upload draft must have an empty body".into()); }
+        let action = if method == "begin_saved_request_upload" {
+            let name = request.get("name").and_then(|value| value.as_str())
+                .ok_or("Missing request name")?.trim();
+            if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
+            UploadAction::Save { id: request.get("id").and_then(|value| value.as_str()).map(str::to_owned),
+                name: name.to_owned() }
+        } else { UploadAction::Replay };
         let token = UPLOAD_IDS.fetch_add(1, Ordering::Relaxed);
         let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
         let capture = guard.as_mut().ok_or("Capture is not running")?;
-        capture.upload = Some(RequestUpload { token, draft, expected, received: 0 });
+        capture.upload = Some(RequestUpload { token, draft, expected, received: 0, action });
         return Ok(serde_json::json!({"token": token, "nextOffset": 0}));
     }
     if method == "append_request_upload" {
@@ -307,19 +449,27 @@ fn command(request: &str) -> Result<serde_json::Value, String> {
         upload.received = next;
         return Ok(serde_json::json!({"nextOffset": next}));
     }
-    if method == "cancel_request_upload" || method == "commit_request_upload" {
+    if method == "cancel_request_upload" || method == "commit_request_upload"
+        || method == "commit_saved_request_upload" {
         let token = request.get("token").and_then(|value| value.as_u64()).ok_or("Invalid upload token")?;
         let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
         let capture = guard.as_mut().ok_or("Capture is not running")?;
         let upload = capture.upload.as_ref().ok_or("No request upload is active")?;
         if upload.token != token { return Err("Upload token does not match".into()); }
-        if method == "commit_request_upload" && upload.received != upload.expected {
+        if method != "cancel_request_upload" && upload.received != upload.expected {
             return Err("Request body upload is incomplete".into());
+        }
+        if (method == "commit_request_upload") != matches!(&upload.action, UploadAction::Replay)
+            && method != "cancel_request_upload" {
+            return Err("Upload action does not match commit command".into());
         }
         let upload = capture.upload.take().unwrap();
         drop(guard);
         if method == "cancel_request_upload" { return Ok(serde_json::Value::Null); }
-        return replay_request(upload.draft);
+        return match upload.action {
+            UploadAction::Replay => replay_request(upload.draft),
+            UploadAction::Save { id, name } => save_request(id.as_deref(), &name, upload.draft),
+        };
     }
     let guard = active()
         .lock()
@@ -1333,6 +1483,56 @@ mod tests {
             "token":full_token}).to_string()).is_err());
         command(&serde_json::json!({"method":"cancel_request_upload",
             "token":replaced["token"]}).to_string()).unwrap();
+
+        let saved_draft = serde_json::json!({"engine":"auto", "method":"POST",
+            "url":"https://example.com/ios-saved", "headers":[
+                {"name":"X-Order","value":"first"},
+                {"name":"x-order","value":"second"},
+                {"name":"X-Disabled","value":"omit","disabled":true}],
+            "bodyBase64":""});
+        let saved_body = vec![0xA5; MAX_UPLOAD_BODY];
+        let begun = command(&serde_json::json!({"method":"begin_saved_request_upload",
+            "name":"iOS saved smoke","request":saved_draft,
+            "totalBytes":saved_body.len()}).to_string()).unwrap();
+        let saved_token = begun["token"].as_u64().unwrap();
+        assert!(command(&serde_json::json!({"method":"commit_request_upload",
+            "token":saved_token}).to_string()).is_err());
+        for (index, chunk) in saved_body.chunks(MAX_UPLOAD_CHUNK).enumerate() {
+            command(&serde_json::json!({"method":"append_request_upload",
+                "token":saved_token,"offset":index*MAX_UPLOAD_CHUNK,
+                "bodyBase64":STANDARD.encode(chunk)}).to_string()).unwrap();
+        }
+        let saved = command(&serde_json::json!({"method":"commit_saved_request_upload",
+            "token":saved_token}).to_string()).unwrap();
+        let saved_id = saved["id"].as_str().unwrap();
+        let list = command(r#"{"method":"list_saved_requests","offset":0}"#).unwrap();
+        assert_eq!(list["requests"][0]["id"], saved_id);
+        let opened = command(&serde_json::json!({"method":"open_saved_request",
+            "id":saved_id}).to_string()).unwrap();
+        assert_eq!(opened["totalBytes"], MAX_UPLOAD_BODY);
+        assert_eq!(opened["request"]["draft"]["bodyBase64"], "");
+        assert_eq!(opened["request"]["draft"]["headers"][1]["value"], "second");
+        assert_eq!(opened["request"]["draft"]["headers"][2]["disabled"], true);
+        let read_token = opened["readToken"].as_u64().unwrap();
+        let mut copied = Vec::new();
+        while copied.len() < saved_body.len() {
+            let part = command(&serde_json::json!({"method":"saved_request_body",
+                "readToken":read_token,"offset":copied.len()}).to_string()).unwrap();
+            copied.extend(STANDARD.decode(part["bodyBase64"].as_str().unwrap()).unwrap());
+            assert_eq!(part["nextOffset"].as_u64().map(|v| v as usize),
+                (copied.len() < saved_body.len()).then_some(copied.len()));
+        }
+        assert_eq!(copied, saved_body);
+        assert!(command(&serde_json::json!({"method":"saved_request_body",
+            "readToken":read_token,"offset":1}).to_string()).is_err());
+        let updated_draft = serde_json::json!({"engine":"auto", "method":"GET",
+            "url":"https://example.com/ios-saved-updated", "headers":[], "bodyBase64":""});
+        let updated = command(&serde_json::json!({"method":"save_request",
+            "id":saved_id,"name":"iOS saved updated","request":updated_draft}).to_string()).unwrap();
+        assert_eq!(updated["id"], saved_id);
+        assert_eq!(command(&serde_json::json!({"method":"open_saved_request",
+            "id":saved_id}).to_string()).unwrap()["request"]["draft"]["url"],
+            "https://example.com/ios-saved-updated");
 
         // A manual replay may still be waiting on an upstream server when
         // Network Extension asks the tunnel to stop. Teardown must release

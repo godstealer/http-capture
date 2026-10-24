@@ -2,12 +2,27 @@ import Foundation
 
 struct ManualRequestDraft: Identifiable {
     let id = UUID()
+    var savedID: String? = nil
+    var savedName: String? = nil
     let method: String
     let url: String
     let headers: String
     let body: String
     let bodyMode: ManualBodyMode
     let engine: ManualSendEngine
+
+    init(method: String, url: String, headers: String, body: String,
+         bodyMode: ManualBodyMode, engine: ManualSendEngine,
+         savedID: String? = nil, savedName: String? = nil) {
+        self.savedID = savedID
+        self.savedName = savedName
+        self.method = method
+        self.url = url
+        self.headers = headers
+        self.body = body
+        self.bodyMode = bodyMode
+        self.engine = engine
+    }
 
     static let empty = ManualRequestDraft(method: "GET", url: "", headers: "",
                                            body: "", bodyMode: .text, engine: .auto)

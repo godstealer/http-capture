@@ -159,6 +159,15 @@ final class TunnelController: ObservableObject {
     @Published private(set) var sendingManualRequest = false
     @Published private(set) var canCancelManualUpload = false
     @Published private(set) var manualResultID: String?
+    @Published private(set) var manualSaveCounter: UInt64 = 0
+    @Published private(set) var savedRequests: [SavedRequestSummary] = []
+    @Published private(set) var savedRequestTotal = 0
+    @Published private(set) var savedRequestOffset = 0
+    @Published private(set) var savedRequestNextOffset: Int?
+    @Published private(set) var savedRequestLoading = false
+    @Published private(set) var savedOpenLoading = false
+    @Published private(set) var savedRequestError: String?
+    @Published var savedDraft: ManualRequestDraft?
     @Published var port = UserDefaults.standard.object(forKey: "capture_port") as? Int ?? 8899 {
         didSet { UserDefaults.standard.set(port, forKey: "capture_port") }
     }
@@ -178,6 +187,25 @@ final class TunnelController: ObservableObject {
     private var replayGeneration: UInt64 = 0
     private var manualSendGeneration: UInt64 = 0
     private var manualUploadToken: UInt64?
+    private var manualSaving = false
+    private var savedOpenGeneration: UInt64 = 0
+    private var savedListGeneration: UInt64 = 0
+    private var pendingSavedCopy: SavedRequestCopy?
+    var manualActivityText: String { manualSaving ? "正在保存请求…" : "正在发送请求…" }
+
+    private func resetSavedRequestUI() {
+        savedOpenGeneration &+= 1
+        savedListGeneration &+= 1
+        pendingSavedCopy = nil
+        savedOpenLoading = false
+        savedRequestLoading = false
+        savedRequestError = nil
+        savedRequests = []
+        savedRequestTotal = 0
+        savedRequestOffset = 0
+        savedRequestNextOffset = nil
+        savedDraft = nil
+    }
     private var bodyOffsetHistory: [Int] = []
     private var responseConfig: [String: Any] = [:]
     private var responseVersion = ""
@@ -711,9 +739,102 @@ final class TunnelController: ObservableObject {
         }
     }
 
+    func loadSavedRequests(offset: Int = 0) {
+        guard connected, !savedRequestLoading, offset >= 0 else { return }
+        savedListGeneration &+= 1
+        let generation = savedListGeneration
+        savedRequestLoading = true
+        savedRequestError = nil
+        send(["method": "list_saved_requests", "offset": offset],
+             onFailure: { [weak self] in
+                 guard let self else { return }
+                 self.savedRequestLoading = false
+                 self.savedRequestError = self.message
+             }, accept: { [weak self] in self?.savedListGeneration == generation }) { [weak self] value in
+            guard let self else { return }
+            self.savedRequestLoading = false
+            guard let page = value as? [String: Any],
+                  let rows = page["requests"] as? [[String: Any]] else {
+                self.savedRequestError = "请求库没有返回列表"
+                return
+            }
+            self.savedRequests = rows.compactMap(SavedRequestSummary.init)
+            self.savedRequestTotal = (page["total"] as? NSNumber)?.intValue ?? 0
+            self.savedRequestOffset = offset
+            self.savedRequestNextOffset = (page["nextOffset"] as? NSNumber)?.intValue
+        }
+    }
+
+    func openSavedRequest(_ id: String) {
+        guard connected, !savedOpenLoading else { return }
+        savedOpenGeneration &+= 1
+        let generation = savedOpenGeneration
+        pendingSavedCopy = nil
+        savedOpenLoading = true
+        savedRequestError = nil
+        send(["method": "open_saved_request", "id": id],
+             onFailure: { [weak self] in
+                 guard let self else { return }
+                 self.savedOpenLoading = false
+                 self.savedRequestError = self.message
+             },
+             accept: { [weak self] in self?.savedOpenGeneration == generation }) { [weak self] value in
+            guard let self else { return }
+            do {
+                guard let object = value as? [String: Any] else {
+                    throw SavedRequestCopy.CopyError.invalid("请求库没有返回完整请求")
+                }
+                let copy = try SavedRequestCopy(object)
+                if copy.totalBytes == 0 {
+                    self.savedDraft = try copy.draft()
+                    self.savedOpenLoading = false
+                } else {
+                    self.pendingSavedCopy = copy
+                    self.readSavedBody(generation: generation)
+                }
+            } catch {
+                self.savedOpenLoading = false
+                self.savedRequestError = error.localizedDescription
+            }
+        }
+    }
+
+    private func readSavedBody(generation: UInt64) {
+        guard savedOpenGeneration == generation, let copy = pendingSavedCopy else { return }
+        send(["method": "saved_request_body", "readToken": copy.readToken, "offset": copy.offset],
+             onFailure: { [weak self] in
+                 guard let self else { return }
+                 self.savedOpenLoading = false
+                 self.pendingSavedCopy = nil
+                 self.savedRequestError = self.message
+             },
+             accept: { [weak self] in self?.savedOpenGeneration == generation }) { [weak self] value in
+            guard let self else { return }
+            do {
+                guard let part = value as? [String: Any], var pending = self.pendingSavedCopy else {
+                    throw SavedRequestCopy.CopyError.invalid("保存的正文读取会话已结束")
+                }
+                let complete = try pending.append(part)
+                self.pendingSavedCopy = pending
+                if complete {
+                    self.savedDraft = try pending.draft()
+                    self.pendingSavedCopy = nil
+                    self.savedOpenLoading = false
+                } else {
+                    self.readSavedBody(generation: generation)
+                }
+            } catch {
+                self.pendingSavedCopy = nil
+                self.savedOpenLoading = false
+                self.savedRequestError = error.localizedDescription
+            }
+        }
+    }
+
     func sendManualRequest(method: String, url: String, engine: ManualSendEngine,
                            headers: String, body: PreparedRequestBody) {
         guard !sendingManualRequest else { return }
+        manualSaving = false
         let method = method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !method.isEmpty, let parsed = URLComponents(string: url),
@@ -796,6 +917,99 @@ final class TunnelController: ObservableObject {
         }
     }
 
+    func saveManualRequest(id: String?, name: String, method: String, url: String,
+                           engine: ManualSendEngine, headers: String, body: PreparedRequestBody) {
+        guard connected, !sendingManualRequest else { return }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.utf8.count <= 512 else {
+            message = "请求名称须为 1–512 字节"
+            return
+        }
+        let method = method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !method.isEmpty, let parsed = URLComponents(string: url),
+              ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""), parsed.host != nil else {
+            message = "请输入 HTTP(S) URL 和请求方法"
+            return
+        }
+        if engine == .h3 && parsed.scheme?.lowercased() != "https" {
+            message = "HTTP/3 需要 HTTPS URL"
+            return
+        }
+        guard body.bytes.count <= RequestBodyCodec.maxBodyBytes, headers.utf8.count <= 16 * 1024 else {
+            message = "正文最多 1 MiB，请求头最多 16 KiB"
+            return
+        }
+        var headerRows: [[String: Any]]
+        do { headerRows = try RequestHeaderText.parse(headers) }
+        catch { message = error.localizedDescription; return }
+        if let contentType = body.contentType {
+            if body.replaceContentType {
+                headerRows.removeAll { ($0["name"] as? String)?.lowercased() == "content-type" }
+            }
+            if !headerRows.contains(where: {
+                $0["disabled"] as? Bool != true &&
+                ($0["name"] as? String)?.lowercased() == "content-type"
+            }) {
+                headerRows.append(["name": "Content-Type", "value": contentType])
+            }
+        }
+        var draft: [String: Any] = ["method": method, "url": url, "engine": engine.rawValue,
+                                    "headers": headerRows, "bodyBase64": ""]
+        manualSendGeneration &+= 1
+        let generation = manualSendGeneration
+        manualSaving = true
+        sendingManualRequest = true
+        canCancelManualUpload = false
+        manualUploadToken = nil
+        message = "正在保存请求…"
+        if body.bytes.count <= 48 * 1024 {
+            draft["bodyBase64"] = body.bytes.base64EncodedString()
+            var direct: [String: Any] = ["method": "save_request", "name": name, "request": draft]
+            if let id { direct["id"] = id }
+            if let data = try? JSONSerialization.data(withJSONObject: direct), data.count <= 128 * 1024 {
+                send(direct, onFailure: { [weak self] in self?.failManualSave() },
+                     accept: { [weak self] in self?.manualSendGeneration == generation }) {
+                    [weak self] value in self?.finishManualRequest(value)
+                }
+                return
+            }
+            draft["bodyBase64"] = ""
+        }
+        var begin: [String: Any] = ["method": "begin_saved_request_upload", "name": name,
+                                    "request": draft, "totalBytes": body.bytes.count]
+        if let id { begin["id"] = id }
+        guard let data = try? JSONSerialization.data(withJSONObject: begin), data.count <= 128 * 1024 else {
+            failManualSave()
+            message = "请求头超过 VPN 扩展消息上限 128 KiB"
+            return
+        }
+        send(begin, onFailure: { [weak self] in self?.failManualSave() },
+             accept: { [weak self] in self?.manualSendGeneration == generation }) { [weak self] value in
+            guard let self else { return }
+            let reply = value as? [String: Any]
+            guard let token = (reply?["token"] as? NSNumber)?.uint64Value,
+                  (reply?["nextOffset"] as? NSNumber)?.intValue == 0 else {
+                if let token = (reply?["token"] as? NSNumber)?.uint64Value {
+                    self.cancelUploadToken(token)
+                }
+                self.failManualSave()
+                self.message = "VPN 扩展没有创建保存上传会话"
+                return
+            }
+            self.manualUploadToken = token
+            self.canCancelManualUpload = true
+            self.appendManualBody(body.bytes, token: token, offset: 0, generation: generation)
+        }
+    }
+
+    private func failManualSave() {
+        sendingManualRequest = false
+        canCancelManualUpload = false
+        manualSaving = false
+        manualUploadToken = nil
+    }
+
     func cancelManualUpload() {
         guard sendingManualRequest, canCancelManualUpload,
               let token = manualUploadToken else { return }
@@ -803,6 +1017,7 @@ final class TunnelController: ObservableObject {
         sendingManualRequest = false
         canCancelManualUpload = false
         manualUploadToken = nil
+        manualSaving = false
         cancelUploadToken(token)
         message = "已取消正文上传；请求尚未提交"
     }
@@ -818,6 +1033,7 @@ final class TunnelController: ObservableObject {
         sendingManualRequest = false
         canCancelManualUpload = false
         manualUploadToken = nil
+        manualSaving = false
         cancelUploadToken(token)
     }
 
@@ -828,6 +1044,7 @@ final class TunnelController: ObservableObject {
         sendingManualRequest = false
         canCancelManualUpload = false
         manualUploadToken = nil
+        manualSaving = false
         if let token { cancelUploadToken(token) }
     }
 
@@ -836,7 +1053,8 @@ final class TunnelController: ObservableObject {
         guard sendingManualRequest, manualSendGeneration == generation else { return }
         if offset == body.count {
             canCancelManualUpload = false
-            send(["method": "commit_request_upload", "token": token],
+            send(["method": manualSaving ? "commit_saved_request_upload" : "commit_request_upload",
+                  "token": token],
                  onFailure: { [weak self] in self?.failManualUpload(token) },
                  accept: { [weak self] in self?.manualSendGeneration == generation }) {
                 [weak self] value in self?.finishManualRequest(value)
@@ -864,6 +1082,17 @@ final class TunnelController: ObservableObject {
         sendingManualRequest = false
         canCancelManualUpload = false
         manualUploadToken = nil
+        if manualSaving {
+            manualSaving = false
+            guard let result = value as? [String: Any], result["id"] as? String != nil else {
+                message = "VPN 扩展没有返回保存结果"
+                return
+            }
+            message = "请求已保存"
+            manualSaveCounter &+= 1
+            loadSavedRequests()
+            return
+        }
         guard let result = value as? [String: Any] else {
             message = "VPN 扩展没有返回发送结果"
             return
@@ -1000,6 +1229,7 @@ final class TunnelController: ObservableObject {
             refreshRequests()
         case .connecting, .reasserting:
             abandonManualSend()
+            resetSavedRequestUI()
             if tunnelStopping {
                 connected = false
                 message = "正在停止 VPN…"
@@ -1016,6 +1246,7 @@ final class TunnelController: ObservableObject {
             message = "正在建立 VPN…"
         case .disconnecting:
             abandonManualSend()
+            resetSavedRequestUI()
             connected = false
             tunnelStarting = false
             tunnelStopping = true
@@ -1027,6 +1258,7 @@ final class TunnelController: ObservableObject {
             message = "正在停止 VPN…"
         default:
             abandonManualSend()
+            resetSavedRequestUI()
             connected = false
             tunnelStarting = false
             tunnelStopping = false
