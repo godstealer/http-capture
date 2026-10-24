@@ -61,7 +61,7 @@ iOS 请求详情默认按摘要、请求头、响应头、正文大小和说明�
 
 iOS 阻止规则页可切换仅抓包、仅重放或两者，可编辑已有规则的匹配方式、内容和方法，同时保留规则 ID 与启用状态；新增规则会开启总开关。保存期间禁用重复操作，失败后重新读取规则并保留表单内容供修正。Swift 界面已通过 Xcode 模拟器目标编译，仍待真机交互验收。
 
-iOS 扩展停止时会在旧代理、TUN 转发任务和执行器全部清理完成前保持全局启动锁，避免用户快速关开 VPN 时新隧道抢先占用相同端口和数据库。系统 `stopTunnel` 回调已改为把原生清理放到串行后台队列，清理完成前拒绝重新启动，再通知系统停止完成；Rust 桥接回归已通过，Swift 编译与实际快速重启仍需验证。
+iOS 扩展停止时会在旧代理、TUN 转发任务和执行器全部清理完成前保持全局启动锁，避免用户快速关开 VPN 时新隧道抢先占用相同端口和数据库。系统 `stopTunnel` 回调已改为把原生清理放到串行后台队列，清理完成前拒绝重新启动，再通知系统停止完成；Rust 桥接回归已通过；[iOS mobile build](https://github.com/godstealer/http-capture/actions/runs/40067945885) 已通过模拟器 App/扩展编译、安装启动及无签名 iPhone arm64 编译，实际快速重启仍需 iPhone 验证。
 iOS 宿主在系统显示“正在连接”或重连时提供“停止抓包”，阻止重复启动；停止过程中禁用按钮，待系统状态回到未连接再允许启动。Swift 界面已通过 Mac 编译，仍需 iPhone 状态切换验收。
 
 iOS 扩展命令现接入共享内核的响应修改快照和版本校验保存，宿主可启停总开关与单条规则、设置作用范围、删除规则，并新增或编辑 UTF-8 整份响应替换及单操作正文文本/正则局部替换。编辑保留原规则 ID、启用状态，以及正文修改未展示的大小写/全部匹配参数；二进制、超出移动输入上限、多操作规则和不能无损回填的响应头禁用编辑入口。保存基于完整配置字典修改，保留界面尚未展示的高级规则字段；消息超过 128 KiB 时给出明确错误，不发送截断配置。Rust 本机测试验证了规则保存和旧版本拒绝；Swift 界面已通过 iOS Simulator 目标编译，尚未经过设备操作验证。移动端高级规则界面仍待补齐。
@@ -70,6 +70,10 @@ iOS 历史记录已接通内核的 URL 包含过滤；搜索时重置分页游�
 
 在 macOS 上先安装 Xcode、Rust 和 XcodeGen，然后执行 `cd apps/mobile/ios && xcodegen generate`，用 Xcode 打开生成的 `HTTPCaptureMobile.xcodeproj`，为宿主与扩展选择同一个 Apple Team 及支持 Packet Tunnel 的配置。首次构建会运行 `build-native.sh` 编译对应架构的 Rust 静态库。另有在开发分支的移动端文件更新时自动触发的 **iOS mobile build** 工作流，用 Mac 构建机按宿主架构构建无签名模拟器 App 与 Packet Tunnel 扩展，并检查两个可执行文件的架构；已执行并通过，但不能代替 iPhone 的签名、VPN 权限和流量验收。只有 Xcode 构建、签名和 iPhone 真机 VPN 测试通过后，iOS 才能算可交付。
 iOS 工作流先构建并安装无签名模拟器 App，启动后保存首页截图，再上传 `http-capture-ios-simulator` 与 `http-capture-ios-launch` 附件；随后在同一台 Mac 上额外编译无签名的 iPhone arm64 宿主与扩展并核对架构。[首次模拟器启动](https://github.com/godstealer/http-capture/actions/runs/40065417596) 已通过，截图确认首页实际显示；后续[端口输入修复运行](https://github.com/godstealer/http-capture/actions/runs/40066439156) 的截图确认默认端口显示为 `8899` 而非 `8,899`。模拟器附件不能安装到 iPhone，设备目标编译和首页截图也不能代替签名、VPN 权限与流量验收。
+
+## iOS 分发边界
+
+Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-expected-use-cases-for-network-extension-packet-tunnel-providers) 明确不推荐在 Packet Tunnel 扩展内托管本机监听器或代理，也不把它作为通用内容过滤器。当前扩展在本机启动 `capture-core` 代理并由 TUN 转发流量，因此模拟器编译与启动不能证明 App Store 审核适用性。现阶段按开发/测试实现继续验证；若目标是上架，需要先确认可用的 Network Extension 能力与审核边界，再决定是否改用受支持的架构。
 
 ## ProxyPin 源码参考（2026-10-24）
 

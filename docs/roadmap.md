@@ -15,7 +15,7 @@
 | 继续开发 | H3/浏览器引擎 SSE、WebSocket 脚本/断点及主动压缩、H2/H3 扩展 CONNECT、QPACK/Alt-Svc/trailers | R6 协议能力；固定目标 QUIC 反向代理不等于通用 TUN H3 抓包 |
 | 继续开发 | ClientHello 结构化扩展/顺序与 H2 参数控制、各引擎实际发送/TLS 详情、按规则选择上游、嵌套规则/集合、分段耗时 | R5 与后续功能；按具体功能分别验证 |
 | 继续开发 | 配置迁移剩余类别的逐项冲突选择、插件扩展 UI/菜单/流式钩子及能力授权、完整 HTTP/IPC 契约与类型生成、许可证/变更记录 | 已有基础不等于这些后续能力完成 |
-| 开发中 | Android 本机抓包，随后 iOS | Android arm64/x86_64 `.so` 已打入含 TUN 透明代理桥的双架构调试 APK；按应用选择、分页记录与正文、手动多格式 HTTP 请求、阻止与响应修改规则、IPv4/IPv6 路由及双地址池虚拟 DNS 已写入，普通 UDP 设计为直连。Android 设备流量验证、UDP 内容抓取、QUIC、完整移动端规则/编辑尚未完成；本机无设备且模拟器启动失败。iOS 宿主、Packet Tunnel 和 Rust 包桥接已实现基础链路、请求列表与正文、阻止与响应修改规则、手动多格式请求；Rust 本地测试通过，Swift 编码测试已加入手动 Mac 工作流，且已通过 Xcode iOS Simulator 目标编译，且无签名 iPhone arm64 目标也已编译，真机尚未验收 |
+| 开发中 | Android 本机抓包，随后 iOS | Android 双架构调试 APK 已在 Linux CI 构建，API 33 模拟器完成 VPN 授权、TUN 建立、独立 App 原始 TCP HTTP 请求到达目标并写入抓包记录、停止清理和首页启动；真机 HTTPS、证书信任、双栈 DNS、UDP/QUIC、切网及长期运行仍待验收。iOS 宿主与 Packet Tunnel 已通过模拟器编译、安装和首页启动，iPhone arm64 无签名目标已编译；设备签名、VPN 权限和真实流量仍未验证。详见 [移动端进度](mobile.md) |
 
 待验证的项目与未开发项分开记录：
 
@@ -264,7 +264,7 @@ P0 脚本后续增量：正文已从元数据 JSON 入参中分离，未修改�
 
 同日后续本地增量：手动请求正文自动模式对超过 8 MiB 或非法 Base64 的草稿避免预先整份解码；上传文件及 Multipart 构造改为流式分块 Base64 编码，移除构造时完整 `arrayBuffer()` 二进制副本。跨块三字节边界、空文件、重复字段已有定向测试，前端生产构建通过；草稿和发送仍保留完整 Base64，P0 未完成。[详细边界](body-memory.md)。
 
-移动端原按 2026-10-22 决定放在桌面路线图之后；用户随后明确改为先实现 Android，再实现 iOS。Android arm64/x86_64 原生库与含透明代理桥修复的双架构调试 APK 已在 Windows NDK 构建成功；共享 TUN 层已修复会话计数依赖 trace 日志求值及单条连接失败结束 VPN 主循环的问题，回归测试通过。设备验收及完整协议覆盖仍未完成，独立 Linux CI 已成功构建并上传双架构调试 APK。iOS 工程入口、共享内核桥接与基础操作界面已有实现，Rust 本地测试通过；Mac Xcode iOS Simulator 目标编译通过；iPhone arm64 目标无签名编译通过，签名和设备验收尚未进行。具体边界与下一步见 [移动端进度](mobile.md)。当前桌面版不能直接当作移动版发布。
+移动端原按 2026-10-22 决定放在桌面路线图之后；用户随后明确改为先实现 Android，再实现 iOS。Android 已在 API 33 模拟器完成独立 App 的 VPN 原始 TCP 抓包闭环；iOS 已通过模拟器安装启动、首页截图和 iPhone arm64 无签名编译。签名与真机验收、完整协议覆盖仍待完成；具体证据与边界见 [移动端进度](mobile.md)。当前桌面版不能直接当作移动版发布。
 
 本轮验证：`npm run test:frontend`、前端 TypeScript 检查、`capture-service` 3 项契约测试通过。其他测试按各阶段记录，不把历史通过次数当作本轮全量测试结果。
 
