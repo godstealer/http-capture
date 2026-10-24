@@ -8,6 +8,7 @@ android {
         applicationId 'dev.httpcapture.mobile'
         minSdk 26
         targetSdk 33
+        testInstrumentationRunner 'dev.httpcapture.mobile.CaptureSmokeInstrumentation'
         versionCode 1
         versionName '0.1.0-dev'
     }
