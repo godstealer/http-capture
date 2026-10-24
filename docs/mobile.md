@@ -62,7 +62,7 @@ Android 新增模拟器冒烟测试：在 API 33 x86_64 模拟器安装构建的
 
 2026-10-25：iOS 请求库增加集合列表、按集合筛选、保存时选择或新建集合，以及重命名和删除空集合。直接保存与分段正文上传共用集合选择；编辑旧请求时默认保留其集合。Rust 扩展命令测试覆盖创建、迁移、筛选、非空删除拒绝、空集合删除，以及 1 MiB 分段正文保存到新集合并在编辑后保留集合；Windows 本机 9 项测试和交叉目标源码检查通过。Swift 测试增加编辑草稿保留集合 ID 的断言；Swift/Xcode 编译、模拟器和 iPhone 交互仍待 Mac 环境集中验证，本批改动尚未推送或发布。
 
-iOS 请求库在列表读取期间完成保存或删除时，会排队再读一次列表和集合数量，避免较早的读结果把刚写入的状态覆盖；VPN 停止时清除排队刷新。此 Swift 控制器改动仍待 Mac 编译和界面验收。移动端抓包记录尚无导出入口；桌面 HAR 下载依赖前端分段生成和服务端暂存，移动端需另建有界的本地文件生成与分享流程，不能直接复用现有 HTTP 下载路由。
+iOS 请求库在列表读取期间完成保存或删除时，会排队再读一次列表和集合数量，避免较早的读结果把刚写入的状态覆盖；VPN 停止时清除排队刷新。此 Swift 控制器改动仍待 Mac 编译和界面验收。Android 和 iOS 的抓包记录 JSON 导出已接入，见文首；Android 文件选择器与 iOS 分享菜单仍待设备验收。
 
 Android 打开已保存请求时，会将每个请求头转成编辑器文本并重新解析，确认名称、值、顺序和停用状态未改变；带首尾空格等无法无损表示的字段直接拒绝编辑。方法或 URL 若会在保存时被规范化改写，请求头超过 16 KiB，或使用非默认脚本模块，也会拒绝打开，避免覆盖保存时丢失配置。此保护及模拟器回归源码的离线测试 APK 编译已通过，模拟器实际运行尚待集中 CI。
 
@@ -127,8 +127,8 @@ Android 手动请求头编辑器现保留复制来源中普通请求头的停用
 
 iOS 请求库列表增加左滑删除和确认；扩展删除记录后会使该请求未完成的正文读取令牌失效，正文读到末段也会释放缓存。Swift 转换回归已接入 iOS 构建工作流，覆盖分段二进制正文及请求头、方法、URL 的无损校验；当前只有 Rust 桥接源码离线交叉类型检查通过，Swift/Xcode 与设备运行尚待白天 CI 和设备验收。
 
-- `apps/mobile/ios/native` 是 Rust `staticlib`，提供 C ABI：在 Packet Tunnel 扩展中启动同一个 `capture-core` 回环代理，将 `NEPacketTunnelFlow` 的 IP 包通过有界队列送入 `tun2proxy::run`，并将生成的包写回扩展。它支持虚拟 DNS、IPv4/IPv6、非 DNS UDP 直连及每页最多 50 条的请求摘要、请求元数据、按偏移每段 16 KiB 的正文读取、CA 公钥证书读取。C ABI 不允许宿主 App 再打开第二份代理/数据库，宿主通过 `sendProviderMessage` 与扩展通信。
-- `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现，这些界面已通过 iOS Simulator 目标编译，尚未经过真机验证。
+- `apps/mobile/ios/native` 是 Rust `staticlib`，提供 C ABI：在 Packet Tunnel 扩展中启动同一个 `capture-core` 回环代理，将 `NEPacketTunnelFlow` 的 IP 包通过有界队列送入 `tun2proxy::run`，并将生成的包写回扩展。它支持虚拟 DNS、IPv4/IPv6、非 DNS UDP 直连及每页最多 50 条的请求摘要、请求元数据、按偏移每段 16 KiB 的正文读取、CA 公钥证书读取。VPN 运行时宿主不另开代理，通过 `sendProviderMessage` 与扩展通信；停抓后宿主可读取 App Group 中的历史并编辑请求库、规则和证书，离线手动发送复用内核重放路径。
+- `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现；基础界面此前通过 iOS Simulator 目标编译，近期离线能力与列表界面改动仍待 Mac 重编，全部界面尚未经过真机验收。
 - `apps/mobile/ios/project.yml` 由 XcodeGen 生成宿主和 Packet Tunnel 扩展工程；扩展构建前 `build-native.sh` 根据 iPhoneOS/Simulator 与架构编译 Rust 静态库。Rust 本地测试已覆盖扩展启停、阻止规则，以及本机 HTTP 请求发送、记录详情、正文预览，2026-10-24 共 4 项通过；扩展消息限长 128 KiB。需要 macOS、Xcode、Rust Apple target、XcodeGen，以及能用于 Packet Tunnel 的 Apple 签名权限。当前 Windows 环境无法执行 Xcode 编译，更不能证明扩展启动、系统流量、内存限制、证书信任或 App Store 分发通过。
 
 iOS 新建请求的正文编辑已增加文本、JSON、URL 表单、Base64、原始文件和带普通字段及单个文件的 Multipart。文件经系统文件选择器授权，最多读取 1 MiB；文本输入最多 64 KiB，最终正文最多 1 MiB。较小请求可直接通过扩展消息发送，较大请求使用带上传令牌和偏移校验的 16 KiB 分段消息，完成后再提交给内核；扩展同一时间仅暂存一份最多 1 MiB 的正文，新的上传会替换未完成的旧上传。Rust 本机测试已验证 160 KiB 二进制请求分段、错误偏移与未完成提交的拒绝、实际 HTTP POST 字节一致性，以及完整 1 MiB 分段接收和旧令牌失效；JSON 语法、表单编码、Multipart 边界/文件字节和非法 MIME 回退有独立 Swift 测试，已接入手动 iOS 构建工作流。Mac CI 已通过宿主编译与 Swift 测试，设备实际发送仍待 iPhone 验证；超过 1 MiB 的流式上传尚未实现。
