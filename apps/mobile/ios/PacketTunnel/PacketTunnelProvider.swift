@@ -63,35 +63,39 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // The proxy must be listening before the system advertises it to apps.
         // The packet bridge remains idle until readPackets starts below.
+        let dataDirectory: String
+        do {
+            // The first launch can copy a legacy database. Let stopTunnel mark
+            // the generation cancelled while that filesystem work is running.
+            dataDirectory = try makeDataDirectory()
+        } catch {
+            finishStartup(startGeneration)
+            completionHandler(error)
+            return
+        }
         lifecycleLock.lock()
         if isStopping || generation != startGeneration {
             lifecycleLock.unlock()
             completionHandler(tunnelError("Tunnel stopped while starting"))
             return
         }
-        do {
-            let dataDirectory = try makeDataDirectory()
-            let pointer = dataDirectory.withCString { path in
-                hc_ios_start(path, UInt16(port), captureQuic, Self.outputPacket, Unmanaged.passUnretained(self).toOpaque())
-            }
-            let response = consumeResponse(pointer)
-            lifecycleLock.unlock()
-            guard response["ok"] as? Bool == true else {
-                finishStartup(startGeneration)
-                completionHandler(tunnelError(response["error"] as? String ?? "Capture engine failed to start"))
-                return
-            }
-            lifecycleLock.lock()
-            let stopped = isStopping || generation != startGeneration
-            lifecycleLock.unlock()
-            if stopped {
-                completionHandler(tunnelError("Tunnel stopped while starting"))
-                return
-            }
-        } catch {
-            lifecycleLock.unlock()
+        // Keep the final check and native start atomic: otherwise stopTunnel
+        // could finish before hc_ios_start and leave a listener running.
+        let pointer = dataDirectory.withCString { path in
+            hc_ios_start(path, UInt16(port), captureQuic, Self.outputPacket, Unmanaged.passUnretained(self).toOpaque())
+        }
+        let response = consumeResponse(pointer)
+        lifecycleLock.unlock()
+        guard response["ok"] as? Bool == true else {
             finishStartup(startGeneration)
-            completionHandler(error)
+            completionHandler(tunnelError(response["error"] as? String ?? "Capture engine failed to start"))
+            return
+        }
+        lifecycleLock.lock()
+        let stopped = isStopping || generation != startGeneration
+        lifecycleLock.unlock()
+        if stopped {
+            completionHandler(tunnelError("Tunnel stopped while starting"))
             return
         }
 
