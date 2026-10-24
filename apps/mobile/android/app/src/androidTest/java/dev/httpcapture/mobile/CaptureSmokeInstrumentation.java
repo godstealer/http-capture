@@ -50,11 +50,50 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             runBodyBoundarySmoke();
             runVpnLifecycleSmoke();
             runSelectedAppSmoke();
+            runPortableConfigurationSmoke();
             result.putString("smokeStatus", "ok");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putString("smokeStatus", "failed: " + error);
             finish(Activity.RESULT_CANCELED, result);
+        }
+    }
+
+    private void runPortableConfigurationSmoke() throws Exception {
+        String dataDir = getTargetContext().getFilesDir().getAbsolutePath();
+        File exported = new File(getTargetContext().getCacheDir(),
+                "portable-smoke-" + System.nanoTime() + ".hccfg");
+        File recovery = new File(getTargetContext().getCacheDir(),
+                "portable-recovery-" + System.nanoTime() + ".hccfg");
+        try {
+            JSONObject summary = expectOk(NativeCapture.exportConfiguration(
+                dataDir, exported.getAbsolutePath(), "{}", "portable-smoke-password"));
+            if (summary.getJSONArray("sections").length() == 0 || exported.length() == 0)
+                throw new AssertionError("Portable configuration export is empty");
+            JSONObject preview = expectOk(NativeCapture.previewConfiguration(
+                dataDir, exported.getAbsolutePath(), "portable-smoke-password"));
+            if (preview.getJSONArray("sections").length() == 0)
+                throw new AssertionError("Portable configuration preview is empty");
+            String revision = preview.getString("expectedRevision");
+            JSONObject stale = new JSONObject(NativeCapture.importConfiguration(
+                dataDir, exported.getAbsolutePath(), "[\"blocking\"]", "stale",
+                "portable-smoke-password"));
+            if (stale.optBoolean("ok"))
+                throw new AssertionError("Stale configuration import was accepted");
+            JSONObject imported = expectOk(NativeCapture.importConfiguration(
+                dataDir, exported.getAbsolutePath(), "[\"blocking\"]", revision,
+                "portable-smoke-password"));
+            if (!imported.getBoolean("requiresRestart") || !imported.getBoolean("recoveryAvailable"))
+                throw new AssertionError("Configuration import did not require restart or save recovery");
+            expectOk(NativeCapture.exportConfigurationRecovery(
+                dataDir, recovery.getAbsolutePath(), "portable-recovery-password"));
+            if (recovery.length() == 0)
+                throw new AssertionError("Portable recovery export is empty");
+        } finally {
+            if (exported.exists() && !exported.delete())
+                throw new AssertionError("Could not remove portable configuration test file");
+            if (recovery.exists() && !recovery.delete())
+                throw new AssertionError("Could not remove portable recovery test file");
         }
     }
 
