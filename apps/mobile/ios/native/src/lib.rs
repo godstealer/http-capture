@@ -828,6 +828,28 @@ mod tests {
             "token":cancelled_token}).to_string()).unwrap();
         assert!(command(&serde_json::json!({"method":"commit_request_upload",
             "token":cancelled_token}).to_string()).is_err());
+        let full = command(&serde_json::json!({"method":"begin_request_upload",
+            "request":upload_draft,"totalBytes":MAX_UPLOAD_BODY}).to_string()).unwrap();
+        let full_token = full["token"].as_u64().unwrap();
+        let full_chunk = vec![0xA5; MAX_UPLOAD_CHUNK];
+        for index in 0..MAX_UPLOAD_BODY / MAX_UPLOAD_CHUNK {
+            command(&serde_json::json!({"method":"append_request_upload",
+                "token":full_token,"offset":index*MAX_UPLOAD_CHUNK,
+                "bodyBase64":STANDARD.encode(&full_chunk)}).to_string()).unwrap();
+        }
+        {
+            let guard = active().lock().unwrap();
+            let upload = guard.as_ref().unwrap().upload.as_ref().unwrap();
+            assert_eq!(upload.received, MAX_UPLOAD_BODY);
+            assert_eq!(STANDARD.decode(upload.draft.body_base64.as_str()).unwrap(),
+                vec![0xA5; MAX_UPLOAD_BODY]);
+        }
+        let replaced = command(&serde_json::json!({"method":"begin_request_upload",
+            "request":upload_draft,"totalBytes":0}).to_string()).unwrap();
+        assert!(command(&serde_json::json!({"method":"commit_request_upload",
+            "token":full_token}).to_string()).is_err());
+        command(&serde_json::json!({"method":"cancel_request_upload",
+            "token":replaced["token"]}).to_string()).unwrap();
         assert!(stop().is_ok());
         assert!(command(r#"{"method":"status"}"#).is_err());
         assert!(command(r#"{"method":"blocking"}"#).is_err());
