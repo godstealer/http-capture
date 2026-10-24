@@ -10,7 +10,7 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
-    <application android:label="HTTP Capture">
+    <application android:label="HTTP Capture" android:icon="@drawable/ic_http_capture">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
