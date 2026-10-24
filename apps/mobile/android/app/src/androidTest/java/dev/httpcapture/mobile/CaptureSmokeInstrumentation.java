@@ -18,6 +18,8 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Exercises the packaged JNI library, loopback proxy and persistent capture on an emulator. */
@@ -90,21 +92,37 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 throw new AssertionError("VPN did not establish: " + CaptureVpnService.message());
             }
             expectOk(NativeCapture.tunnelStatus());
+            Set<String> previousIDs = new HashSet<>();
+            JSONArray previous = expectOk(NativeCapture.recent("", "vpn-smoke")).getJSONArray("requests");
+            for (int i = 0; i < previous.length(); i++) {
+                previousIDs.add(previous.getJSONObject(i).optString("id"));
+            }
             Intent probe = new Intent("dev.httpcapture.probe.RUN");
             probe.setComponent(new ComponentName("dev.httpcapture.probe",
                     "dev.httpcapture.probe.ProbeReceiver"));
             getTargetContext().sendBroadcast(probe);
             long trafficDeadline = System.currentTimeMillis() + 20_000;
             boolean captured = false;
+            String lastState = "请求尚未出现";
             while (System.currentTimeMillis() < trafficDeadline) {
                 JSONObject page = expectOk(NativeCapture.recent("", "vpn-smoke"));
-                if (page.getJSONArray("requests").length() > 0) {
-                    captured = true;
-                    break;
+                JSONArray requests = page.getJSONArray("requests");
+                for (int i = 0; i < requests.length(); i++) {
+                    JSONObject summary = requests.getJSONObject(i);
+                    if (previousIDs.contains(summary.optString("id"))) continue;
+                    lastState = summary.optString("state") + " · HTTP " + summary.optString("status")
+                        + " · " + summary.optString("error");
+                    // A pending capture record can appear before the proxy has
+                    // sent the request to the origin. Do not stop the VPN yet.
+                    if (!summary.isNull("status")) {
+                        captured = true;
+                        break;
+                    }
                 }
+                if (captured) break;
                 Thread.sleep(200);
             }
-            if (!captured) throw new AssertionError("VPN raw TCP request did not enter capture");
+            if (!captured) throw new AssertionError("VPN raw TCP request did not finish: " + lastState);
         } finally {
             Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
             stop.setAction(CaptureVpnService.ACTION_STOP);
