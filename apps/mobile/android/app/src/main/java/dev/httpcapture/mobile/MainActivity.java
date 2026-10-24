@@ -663,13 +663,15 @@ public final class MainActivity extends Activity {
         Button edit = new Button(this);
         edit.setText("复制到新请求");
         contentLayout.addView(edit);
+        Button raw = new Button(this);
+        raw.setText("查看原始详情");
+        contentLayout.addView(raw);
         TextView content = new TextView(this);
         content.setTypeface(Typeface.MONOSPACE);
         content.setTextSize(12);
         content.setTextIsSelectable(true);
         content.setPadding(20, 12, 20, 12);
-        try { content.setText(flow.toString(2)); }
-        catch (JSONException error) { content.setText(flow.toString()); }
+        content.setText(formatFlowDetail(flow));
         ScrollView scroll = new ScrollView(this);
         contentLayout.addView(content);
         scroll.addView(contentLayout);
@@ -689,6 +691,72 @@ public final class MainActivity extends Activity {
             shown.dismiss();
             editRecordedRequest(flow);
         });
+        raw.setOnClickListener(view -> {
+            if ("查看原始详情".contentEquals(raw.getText())) {
+                try { content.setText(flow.toString(2)); }
+                catch (JSONException error) { content.setText(flow.toString()); }
+                raw.setText("查看摘要与请求头");
+            } else {
+                content.setText(formatFlowDetail(flow));
+                raw.setText("查看原始详情");
+            }
+        });
+    }
+
+    private static String formatFlowDetail(JSONObject flow) {
+        StringBuilder text = new StringBuilder();
+        JSONObject request = flow.optJSONObject("request");
+        JSONObject response = flow.optJSONObject("response");
+        text.append(request == null ? "请求" : request.optString("method", "请求"))
+            .append(' ').append(request == null ? "" : request.optString("url"))
+            .append("\n\n状态：").append(flow.optString("state", "未知"));
+        if (response != null) text.append(" · HTTP ").append(response.optInt("status"));
+        text.append("\n耗时：").append(flow.optLong("durationMs")).append(" ms");
+        String protocol = flow.optString("clientProtocol");
+        if (!protocol.isEmpty()) text.append("\n客户端协议：").append(protocol);
+        JSONObject origin = flow.optJSONObject("trafficOrigin");
+        if (origin != null) {
+            text.append("\n来源：").append(origin.optString("entry", "未知"));
+            JSONObject process = origin.optJSONObject("process");
+            if (process != null) text.append(" · ").append(process.optString("name"));
+        }
+        String error = flow.optString("error");
+        if (!error.isEmpty() && !"null".equals(error)) text.append("\n错误：").append(error);
+        appendFlowHeaders(text, "请求头", request);
+        appendFlowHeaders(text, "响应头", response);
+        JSONObject bodies = flow.optJSONObject("bodyReferences");
+        if (bodies != null) {
+            text.append("\n\n正文大小");
+            for (String kind : new String[] {"request", "response"}) {
+                JSONObject body = bodies.optJSONObject(kind);
+                if (body != null) text.append("\n")
+                    .append("request".equals(kind) ? "请求" : "响应")
+                    .append("：").append(body.optLong("byteLength")).append(" 字节");
+            }
+        }
+        JSONArray notes = flow.optJSONArray("notes");
+        if (notes != null && notes.length() > 0) {
+            text.append("\n\n说明");
+            for (int i = 0; i < notes.length(); i++) text.append("\n").append(notes.optString(i));
+        }
+        return text.toString();
+    }
+
+    private static void appendFlowHeaders(StringBuilder text, String title, JSONObject side) {
+        if (side == null) return;
+        JSONArray headers = side.optJSONArray("headers");
+        text.append("\n\n").append(title);
+        if (headers == null || headers.length() == 0) {
+            text.append("\n（无）");
+            return;
+        }
+        for (int i = 0; i < headers.length(); i++) {
+            JSONObject header = headers.optJSONObject(i);
+            if (header == null) continue;
+            text.append("\n");
+            if (header.optBoolean("disabled")) text.append("[停用] ");
+            text.append(header.optString("name")).append(": ").append(header.optString("value"));
+        }
     }
 
     private void showBodyPreview(JSONObject flow, String variant) {
