@@ -125,6 +125,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var message = "VPN 未启动"
     @Published private(set) var requests: [CapturedRequest] = []
+    @Published private(set) var requestPageLoading = false
     @Published private(set) var selectedDetail = ""
     @Published private(set) var detailRaw = false
     @Published private(set) var detailOpen = false
@@ -160,6 +161,7 @@ final class TunnelController: ObservableObject {
 
     private var manager: NETunnelProviderManager?
     private var cursor: String?
+    private var requestPageCursors: [String?] = [nil]
     private var urlFilter = ""
     private var requestGeneration: UInt64 = 0
     private var requestPollID: UInt64?
@@ -252,28 +254,51 @@ final class TunnelController: ObservableObject {
     }
 
     func refreshRequests(loadMore: Bool = false) {
+        if loadMore {
+            guard !requestPageLoading else { return }
+            guard let cursor, Int64(cursor) != nil else { return }
+            loadRequestPage(startingAfter: cursor, history: requestPageCursors + [cursor])
+        } else {
+            loadRequestPage(startingAfter: nil, history: [nil])
+        }
+    }
+
+    func previousRequestsPage() {
+        guard !requestPageLoading, requestPageCursors.count > 1 else { return }
+        let history = Array(requestPageCursors.dropLast())
+        loadRequestPage(startingAfter: history[history.count - 1], history: history)
+    }
+
+    private func loadRequestPage(startingAfter pageCursor: String?, history: [String?]) {
         var command: [String: Any] = ["method": "recent"]
         if !urlFilter.isEmpty { command["urlContains"] = urlFilter }
-        if loadMore {
-            guard let cursor, let value = Int64(cursor) else { return }
+        if let pageCursor, let value = Int64(pageCursor) {
             command["cursor"] = value
-        } else {
-            cursor = nil
-            requestPollID = nil
         }
         requestGeneration &+= 1
         let generation = requestGeneration
-        send(command) { [weak self] result in
-            guard let self, let page = result as? [String: Any] else { return }
-            guard self.requestGeneration == generation else { return }
+        requestPollID = nil
+        requestPageLoading = true
+        send(command, onFailure: { [weak self] in
+            guard let self, self.requestGeneration == generation else { return }
+            self.requestPageLoading = false
+        }) { [weak self] result in
+            guard let self, self.requestGeneration == generation else { return }
+            self.requestPageLoading = false
+            guard let page = result as? [String: Any] else {
+                self.message = "请求列表返回格式无效"
+                return
+            }
             let incoming = ((page["requests"] as? [[String: Any]]) ?? []).compactMap(CapturedRequest.init)
-            self.requests = loadMore ? self.requests + incoming : incoming
+            self.requests = incoming
+            self.requestPageCursors = history
             self.cursor = page["nextCursor"] as? String
         }
     }
 
     func pollRequests() {
-        guard connected, requestPollID == nil else { return }
+        guard connected, requestPageCursors.count == 1,
+              !requestPageLoading, requestPollID == nil else { return }
         nextRequestPollID &+= 1
         let pollID = nextRequestPollID
         requestPollID = pollID
@@ -288,17 +313,14 @@ final class TunnelController: ObservableObject {
             guard self.connected, self.requestGeneration == generation,
                   let page = result as? [String: Any] else { return }
             let incoming = ((page["requests"] as? [[String: Any]]) ?? []).compactMap(CapturedRequest.init)
-            if self.requests.isEmpty {
-                self.requests = incoming
-                self.cursor = page["nextCursor"] as? String
-                return
-            }
-            let incomingIDs = Set(incoming.map(\.id))
-            self.requests = Array((incoming + self.requests.filter { !incomingIDs.contains($0.id) }).prefix(500))
+            self.requests = incoming
+            self.cursor = page["nextCursor"] as? String
         }
     }
 
     var hasMoreRequests: Bool { cursor != nil }
+    var hasPreviousRequests: Bool { requestPageCursors.count > 1 }
+    var requestPageNumber: Int { requestPageCursors.count }
 
     func applyUrlFilter() {
         let filter = urlFilterInput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -308,6 +330,7 @@ final class TunnelController: ObservableObject {
         }
         urlFilter = filter
         cursor = nil
+        requestPageCursors = [nil]
         requests = []
         refreshRequests()
     }
@@ -928,6 +951,8 @@ final class TunnelController: ObservableObject {
             requestGeneration &+= 1
             requestPollID = nil
             cursor = nil
+            requestPageCursors = [nil]
+            requestPageLoading = false
             message = "正在建立 VPN…"
         case .disconnecting:
             connected = false
@@ -936,6 +961,8 @@ final class TunnelController: ObservableObject {
             requestGeneration &+= 1
             requestPollID = nil
             cursor = nil
+            requestPageCursors = [nil]
+            requestPageLoading = false
             message = "正在停止 VPN…"
         default:
             connected = false
@@ -944,6 +971,8 @@ final class TunnelController: ObservableObject {
             requestGeneration &+= 1
             requestPollID = nil
             cursor = nil
+            requestPageCursors = [nil]
+            requestPageLoading = false
             message = "VPN 未启动"
         }
     }

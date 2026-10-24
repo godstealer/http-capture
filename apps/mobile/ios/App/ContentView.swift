@@ -90,9 +90,18 @@ struct ContentView: View {
                             }
                         }
                     }
-                    if tunnel.hasMoreRequests {
-                        Button("加载更多") { tunnel.refreshRequests(loadMore: true) }
+                    HStack {
+                        Button("上一页") { tunnel.previousRequestsPage() }
+                            .disabled(!tunnel.connected || !tunnel.hasPreviousRequests || tunnel.requestPageLoading)
+                        Spacer()
+                        Text("第 \(tunnel.requestPageNumber) 页")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("下一页") { tunnel.refreshRequests(loadMore: true) }
+                            .disabled(!tunnel.connected || !tunnel.hasMoreRequests || tunnel.requestPageLoading)
                     }
+                    .buttonStyle(.borderless)
+                    if tunnel.requestPageLoading { ProgressView("正在读取请求记录…") }
                 }
                 Section("规则") {
                     Button("管理请求阻止规则") { showingRules = true }
