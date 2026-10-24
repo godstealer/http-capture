@@ -2,7 +2,10 @@ package dev.httpcapture.mobile;
 
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.content.Intent;
+import android.net.VpnService;
 import android.os.Bundle;
+import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -27,12 +30,79 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             runSmoke();
+            runVpnLifecycleSmoke();
             result.putString("smokeStatus", "ok");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putString("smokeStatus", "failed: " + error);
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    private void runVpnLifecycleSmoke() throws Exception {
+        Intent consent = VpnService.prepare(getTargetContext());
+        if (consent != null) {
+            consent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getTargetContext().startActivity(consent);
+            long deadline = System.currentTimeMillis() + 15_000;
+            boolean approved = false;
+            while (System.currentTimeMillis() < deadline) {
+                AccessibilityNodeInfo root = getUiAutomation().getRootInActiveWindow();
+                AccessibilityNodeInfo button = findConsentButton(root);
+                if (button != null && button.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    approved = true;
+                    break;
+                }
+                Thread.sleep(200);
+            }
+            if (!approved) throw new AssertionError("VPN consent button was not available");
+        }
+        long permissionDeadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < permissionDeadline
+                && VpnService.prepare(getTargetContext()) != null) Thread.sleep(100);
+        if (VpnService.prepare(getTargetContext()) != null) {
+            throw new AssertionError("VPN consent was not granted");
+        }
+
+        try (ServerSocket reservation = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            int port = reservation.getLocalPort();
+            reservation.close();
+            Intent start = new Intent(getTargetContext(), CaptureVpnService.class);
+            start.setAction(CaptureVpnService.ACTION_START);
+            start.putExtra(CaptureVpnService.EXTRA_PORT, port);
+            getTargetContext().startForegroundService(start);
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (System.currentTimeMillis() < deadline && !CaptureVpnService.isActive()) {
+                if (!CaptureVpnService.isManaged() && CaptureVpnService.isStopping()) {
+                    throw new AssertionError(CaptureVpnService.message());
+                }
+                Thread.sleep(200);
+            }
+            if (!CaptureVpnService.isActive()) {
+                throw new AssertionError("VPN did not establish: " + CaptureVpnService.message());
+            }
+            expectOk(NativeCapture.tunnelStatus());
+        } finally {
+            Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
+            stop.setAction(CaptureVpnService.ACTION_STOP);
+            getTargetContext().startService(stop);
+            long deadline = System.currentTimeMillis() + 15_000;
+            while (System.currentTimeMillis() < deadline && CaptureVpnService.isManaged()) {
+                Thread.sleep(200);
+            }
+            if (CaptureVpnService.isManaged()) throw new AssertionError("VPN did not stop");
+        }
+    }
+
+    private static AccessibilityNodeInfo findConsentButton(AccessibilityNodeInfo node) {
+        if (node == null) return null;
+        CharSequence id = node.getViewIdResourceName();
+        if ("android:id/button1".contentEquals(id == null ? "" : id)) return node;
+        for (int index = 0; index < node.getChildCount(); index++) {
+            AccessibilityNodeInfo found = findConsentButton(node.getChild(index));
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void runSmoke() throws Exception {

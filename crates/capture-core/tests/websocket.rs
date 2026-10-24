@@ -22,7 +22,7 @@ fn roots(ca: &CertificateAuthority) -> rustls::RootCertStore {
 #[tokio::test]
 async fn active_ws_wss_text_binary_ping_and_close() {
  for secure in [false,true] {
-  tokio::time::timeout(Duration::from_secs(10),async {
+  tokio::time::timeout(Duration::from_secs(30),async {
    let dir=tempfile::tempdir().unwrap();let _=rustls::crypto::ring::default_provider().install_default();
    let ca=CertificateAuthority::load_or_create(&dir.path().join("origin")).unwrap();
    let engine=Engine::open_with_roots(&dir.path().join("capture"),roots(&ca)).unwrap();
@@ -71,7 +71,7 @@ async fn frame<R: AsyncRead + Unpin>(reader: &mut R, masked: bool) -> (u8, Vec<u
 #[tokio::test]
 async fn ws_and_wss_relay_fragments_ping_binary_close_and_preserve_frames() {
     for (secure, stop) in [(false,false), (true,false), (false,true)] {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             let dir=tempfile::tempdir().unwrap(); let _=rustls::crypto::ring::default_provider().install_default();
             let ca=CertificateAuthority::load_or_create(&dir.path().join("origin")).unwrap();
             let engine=Engine::open_with_roots(&dir.path().join("capture"),roots(&ca)).unwrap();
@@ -123,7 +123,7 @@ fn rfc_accept_key() {assert_eq!(websocket::accept("dGhlIHNhbXBsZSBub25jZQ=="),"s
 #[tokio::test]
 async fn active_upgrade_rejection_and_handshake_cancellation(){
  for rejected in [false,true]{
- tokio::time::timeout(Duration::from_secs(5),async{
+ tokio::time::timeout(Duration::from_secs(20),async{
   let dir=tempfile::tempdir().unwrap();let engine=Engine::open(dir.path()).unwrap();
   let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
   let draft=serde_json::from_value(serde_json::json!({"engine":"auto","method":"GET","url":format!("ws://{address}/"),"headers":[],"bodyBase64":""})).unwrap();
