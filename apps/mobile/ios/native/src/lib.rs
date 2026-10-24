@@ -1333,7 +1333,41 @@ mod tests {
             "token":full_token}).to_string()).is_err());
         command(&serde_json::json!({"method":"cancel_request_upload",
             "token":replaced["token"]}).to_string()).unwrap();
-        assert!(stop().is_ok());
+
+        // A manual replay may still be waiting on an upstream server when
+        // Network Extension asks the tunnel to stop. Teardown must release
+        // the listener and executor even with that replay in flight.
+        let pending_origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let pending_port = pending_origin.local_addr().unwrap().port();
+        let (pending_tx, pending_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let pending_server = std::thread::spawn(move || {
+            let (mut stream, _) = pending_origin.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut request = [0_u8; 1024];
+            let count = stream.read(&mut request).unwrap();
+            assert!(request[..count].starts_with(b"GET /stop-during-replay HTTP/1.1"));
+            pending_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(8));
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        });
+        let pending_replay = std::thread::spawn(move || command(&serde_json::json!({
+            "method":"send_request","request":{
+                "engine":"native","method":"GET",
+                "url":format!("http://127.0.0.1:{pending_port}/stop-during-replay"),
+                "headers":[],"bodyBase64":""
+            }
+        }).to_string()));
+        pending_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let stop_started = std::time::Instant::now();
+        let stopped = stop();
+        let stop_elapsed = stop_started.elapsed();
+        release_tx.send(()).unwrap();
+        assert!(stopped.is_ok(), "{stopped:?}");
+        assert!(stop_elapsed < std::time::Duration::from_secs(7),
+            "tunnel stop waited too long for replay: {stop_elapsed:?}");
+        let _ = pending_replay.join().unwrap();
+        pending_server.join().unwrap();
         assert!(command(r#"{"method":"status"}"#).is_err());
         assert!(command(r#"{"method":"blocking"}"#).is_err());
 
