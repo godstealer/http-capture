@@ -42,12 +42,13 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
     private void runVpnLifecycleSmoke() throws Exception {
         Intent consent = VpnService.prepare(getTargetContext());
         if (consent != null) {
-            consent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getTargetContext().startActivity(consent);
-            long deadline = System.currentTimeMillis() + 15_000;
+            startActivitySync(consent);
+            long deadline = System.currentTimeMillis() + 30_000;
             boolean approved = false;
+            String visibleWindow = "no accessibility window";
             while (System.currentTimeMillis() < deadline) {
                 AccessibilityNodeInfo root = getUiAutomation().getRootInActiveWindow();
+                if (root != null) visibleWindow = describeWindow(root);
                 AccessibilityNodeInfo button = findConsentButton(root);
                 if (button != null && button.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                     approved = true;
@@ -55,7 +56,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 }
                 Thread.sleep(200);
             }
-            if (!approved) throw new AssertionError("VPN consent button was not available");
+            if (!approved) throw new AssertionError("VPN consent button was not available: " + visibleWindow);
         }
         long permissionDeadline = System.currentTimeMillis() + 10_000;
         while (System.currentTimeMillis() < permissionDeadline
@@ -98,11 +99,32 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         if (node == null) return null;
         CharSequence id = node.getViewIdResourceName();
         if ("android:id/button1".contentEquals(id == null ? "" : id)) return node;
+        CharSequence label = node.getText();
+        String text = label == null ? "" : label.toString().trim();
+        if ("android.widget.Button".contentEquals(node.getClassName() == null ? "" : node.getClassName())
+                && ("OK".equalsIgnoreCase(text) || "Allow".equalsIgnoreCase(text)
+                || "Continue".equalsIgnoreCase(text) || "确定".equals(text) || "允许".equals(text))) return node;
         for (int index = 0; index < node.getChildCount(); index++) {
             AccessibilityNodeInfo found = findConsentButton(node.getChild(index));
             if (found != null) return found;
         }
         return null;
+    }
+
+    private static String describeWindow(AccessibilityNodeInfo root) {
+        StringBuilder details = new StringBuilder();
+        describeNode(root, details);
+        return details.length() > 800 ? details.substring(0, 800) : details.toString();
+    }
+
+    private static void describeNode(AccessibilityNodeInfo node, StringBuilder details) {
+        if (node == null || details.length() > 800) return;
+        details.append('[').append(node.getClassName()).append(' ')
+                .append(node.getViewIdResourceName()).append(' ')
+                .append(node.getText()).append(']');
+        for (int index = 0; index < node.getChildCount(); index++) {
+            describeNode(node.getChild(index), details);
+        }
     }
 
     private void runSmoke() throws Exception {
