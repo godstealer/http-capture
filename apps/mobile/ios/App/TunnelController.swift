@@ -272,8 +272,9 @@ final class TunnelController: ObservableObject {
 
     func start() {
         if busy || shouldOfferStop || tunnelStopping { return }
-        if sendingManualRequest || savedCollectionSaving || savedDeleteBusy {
-            message = "请等待离线请求操作完成后再启动 VPN"
+        if sendingManualRequest || savedCollectionSaving || savedDeleteBusy ||
+           blockingSaving || responseSaving {
+            message = "请等待离线操作完成后再启动 VPN"
             return
         }
         guard (1...65535).contains(port) else {
@@ -614,7 +615,7 @@ final class TunnelController: ObservableObject {
             guard let self else { return }
             self.blockingSaving = false
             guard let saved = value as? [String: Any] else {
-                self.message = "VPN 扩展没有返回阻止规则配置"
+                self.message = "抓包内核没有返回阻止规则配置"
                 return
             }
             self.blockingEnabled = saved["enabled"] as? Bool ?? false
@@ -1611,7 +1612,8 @@ final class TunnelController: ObservableObject {
                   ["recent", "metadata", "body_preview", "list_saved_collections",
                    "change_saved_collection", "list_saved_requests", "save_request",
                    "delete_saved_request", "open_saved_request", "saved_request_body",
-                   "send_request"].contains(method),
+                   "send_request", "blocking", "configure_blocking",
+                   "response_rewrite", "configure_response_rewrite"].contains(method),
                   !tunnelStarting, !tunnelStopping else {
                 message = "请先启动 VPN"
                 onFailure?()

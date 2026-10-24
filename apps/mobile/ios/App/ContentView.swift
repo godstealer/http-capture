@@ -123,9 +123,9 @@ struct ContentView: View {
                 }
                 Section("规则") {
                     Button("管理请求阻止规则") { showingRules = true }
-                        .disabled(!tunnel.connected)
+                        .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping)
                     Button("管理响应修改规则") { showingResponseRules = true }
-                        .disabled(!tunnel.connected)
+                        .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping)
                 }
             }
             .navigationTitle("HTTP Capture")

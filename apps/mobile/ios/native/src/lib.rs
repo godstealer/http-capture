@@ -646,6 +646,36 @@ fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, 
         return history_command(store.as_ref(), method, &request);
     }
     match method {
+        "blocking" => {
+            let blocking = capture_core::blocking::Blocking::open(store.clone())
+                .map_err(|error| format!("{error:#}"))?;
+            serde_json::to_value(blocking.snapshot()).map_err(|error| error.to_string())
+        }
+        "configure_blocking" => {
+            let config: capture_core::blocking::Config = serde_json::from_value(
+                request.get("config").cloned().ok_or("Missing blocking config")?)
+                .map_err(|error| error.to_string())?;
+            let blocking = capture_core::blocking::Blocking::open(store.clone())
+                .map_err(|error| format!("{error:#}"))?;
+            blocking.configure(config).map_err(|error| format!("{error:#}"))?;
+            serde_json::to_value(blocking.snapshot()).map_err(|error| error.to_string())
+        }
+        "response_rewrite" => {
+            let rewrite = capture_core::response_rewrite::ResponseRewrite::open(store.clone())
+                .map_err(|error| format!("{error:#}"))?;
+            serde_json::to_value(rewrite.snapshot()).map_err(|error| error.to_string())
+        }
+        "configure_response_rewrite" => {
+            let config: capture_core::response_rewrite::Config = serde_json::from_value(
+                request.get("config").cloned().ok_or("Missing response rewrite config")?)
+                .map_err(|error| error.to_string())?;
+            let expected = request.get("expectedVersion").and_then(|value| value.as_str())
+                .ok_or("Missing response rewrite version")?;
+            let rewrite = capture_core::response_rewrite::ResponseRewrite::open(store.clone())
+                .map_err(|error| format!("{error:#}"))?;
+            serde_json::to_value(rewrite.configure(config, expected)
+                .map_err(|error| format!("{error:#}"))?).map_err(|error| error.to_string())
+        }
         "list_saved_collections" => list_saved_collections_in(store.as_ref()),
         "change_saved_collection" => {
             let action = request.get("action").and_then(|value| value.as_str()).ok_or("Missing collection action")?;
@@ -691,7 +721,7 @@ fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, 
                 .lock().map_err(|_| "Saved request reader is unavailable")?;
             saved_request_body_in(&mut read, token, offset)
         }
-        _ => Err("Offline command is limited to capture history, saved requests and manual sending".into()),
+        _ => Err("Offline command is limited to history, saved requests, rules and manual sending".into()),
     }
 }
 
@@ -1104,6 +1134,33 @@ mod tests {
         let page = offline_command(dir.path(), r#"{"method":"recent","urlContains":"ios-offline-send"}"#).unwrap();
         assert_eq!(page["requests"][0]["id"], sent["id"]);
         assert_eq!(page["requests"][0]["status"], 200);
+    }
+
+    #[test]
+    fn offline_rules_persist_and_reject_stale_rewrite_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let blocking = serde_json::json!({"enabled":true,"scope":"all","rules":[{
+            "id":"ios-offline-block","enabled":true,"matchType":"host",
+            "pattern":"blocked.example","method":""
+        }]});
+        let saved = offline_command(dir.path(), &serde_json::json!({
+            "method":"configure_blocking","config":blocking}).to_string()).unwrap();
+        assert_eq!(saved["rules"][0]["id"], "ios-offline-block");
+        let before = offline_command(dir.path(), r#"{"method":"response_rewrite"}"#).unwrap();
+        let config = serde_json::json!({"enabled":true,"scope":"all","rules":[{
+            "id":"ios-offline-response","name":"offline","enabled":true,
+            "matchType":"host","pattern":"example.com","method":"GET",
+            "action":"replace","replacement":{"status":201,"headers":[],"bodyBase64":"b2s="}
+        }]});
+        let update = serde_json::json!({"method":"configure_response_rewrite",
+            "expectedVersion":before["version"],"config":config});
+        let after = offline_command(dir.path(), &update.to_string()).unwrap();
+        assert_eq!(after["config"]["rules"][0]["id"], "ios-offline-response");
+        assert!(offline_command(dir.path(), &update.to_string()).is_err());
+        let engine = Engine::open(dir.path()).unwrap();
+        assert_eq!(engine.blocking.snapshot().rules[0].id, "ios-offline-block");
+        assert_eq!(engine.response_rewrite.snapshot().config.rules[0].id, "ios-offline-response");
     }
 
     fn tunnel_to(
