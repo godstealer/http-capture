@@ -173,7 +173,10 @@ struct ContentView: View {
                             }
                             Button("复制到新请求") { tunnel.copySelectedRequest() }
                                 .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping || tunnel.replayLoading)
-                            if tunnel.replayLoading { ProgressView("正在读取完整请求正文…") }
+                            if tunnel.replayLoading {
+                                ProgressView("正在读取完整请求正文…")
+                                Button("取消复制") { tunnel.cancelRequestCopy() }
+                            }
                             if let error = tunnel.replayError {
                                 Text(error).font(.footnote).foregroundStyle(.red)
                             }

@@ -52,6 +52,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** First device UI for the shared Rust capture engine. */
 public final class MainActivity extends Activity {
@@ -952,11 +953,21 @@ public final class MainActivity extends Activity {
             showReplayError("请求头超过 16 KiB，当前移动编辑器尚不能安全编辑后重发");
             return;
         }
+        AtomicBoolean cancelled = new AtomicBoolean();
+        AlertDialog loading = new AlertDialog.Builder(this)
+            .setTitle("正在复制请求")
+            .setMessage("正在分段读取正文…")
+            .setView(new android.widget.ProgressBar(this))
+            .setNegativeButton("取消", (dialog, which) -> cancelled.set(true))
+            .create();
+        loading.setOnCancelListener(dialog -> cancelled.set(true));
+        loading.show();
         worker.execute(() -> {
             try {
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream((int) bodyLength);
                 long offset = 0;
                 while (offset < bodyLength) {
+                    if (cancelled.get()) return;
                     JSONObject reply = parseReply(NativeCapture.bodyPreview(
                         getFilesDir().getAbsolutePath(), flow.optString("id"), "request",
                         flow.optString("bodyRevision"), offset));
@@ -974,8 +985,11 @@ public final class MainActivity extends Activity {
                     offset = RecordedRequestBody.appendChunk(bytes, chunk.getLong("offset"),
                         bodyLength, part, next);
                 }
+                if (cancelled.get()) return;
                 RecordedRequestBody editable = RecordedRequestBody.from(bytes.toByteArray());
                 main.post(() -> {
+                    loading.dismiss();
+                    if (cancelled.get() || isFinishing() || isDestroyed()) return;
                     ManualRequestDraft draft = new ManualRequestDraft();
                     draft.method = method;
                     draft.url = url;
@@ -986,12 +1000,16 @@ public final class MainActivity extends Activity {
                     openManualRequest(draft);
                 });
             } catch (Exception error) {
-                main.post(() -> showReplayError(error.getMessage()));
+                main.post(() -> {
+                    loading.dismiss();
+                    if (!cancelled.get()) showReplayError(error.getMessage());
+                });
             }
         });
     }
 
     private void showReplayError(String reason) {
+        if (isFinishing() || isDestroyed()) return;
         new AlertDialog.Builder(this).setTitle("无法复制为新请求")
             .setMessage(reason).setPositiveButton("关闭", null).show();
     }

@@ -509,6 +509,13 @@ final class TunnelController: ObservableObject {
         }
     }
 
+    func cancelRequestCopy() {
+        guard replayLoading else { return }
+        replayGeneration &+= 1
+        replayLoading = false
+        replayError = nil
+    }
+
     private func readCopyChunk(_ copy: RecordedRequestCopy, generation: UInt64) {
         guard replayGeneration == generation else { return }
         if copy.offset == copy.byteLength {
