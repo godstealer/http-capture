@@ -92,6 +92,10 @@ public final class MainActivity extends Activity {
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
+    private static final String[] SEND_ENGINES = {"auto", "native", "h2", "h3"};
+    private static final String[] SEND_ENGINE_LABELS = {
+        "自动协商（HTTP/1.1 或 HTTP/2）", "HTTP/1.1", "HTTP/2", "HTTP/3"
+    };
     private ManualRequestDraft pendingFileRequest;
 
     private static final class ManualRequestDraft {
@@ -99,6 +103,7 @@ public final class MainActivity extends Activity {
         String url = "";
         String headers = "";
         String body = "";
+        String engine = "auto";
         int bodyMode;
         Uri fileUri;
         String fileName;
@@ -115,6 +120,7 @@ public final class MainActivity extends Activity {
                 pendingFileRequest.url = state.getString("requestUrl", "");
                 pendingFileRequest.headers = state.getString("requestHeaders", "");
                 pendingFileRequest.body = state.getString("requestBody", "");
+                pendingFileRequest.engine = state.getString("requestEngine", "auto");
                 pendingFileRequest.bodyMode = state.getInt("requestBodyMode", 0);
                 String fileUri = state.getString("requestFileUri");
                 if (fileUri != null) pendingFileRequest.fileUri = Uri.parse(fileUri);
@@ -749,6 +755,10 @@ public final class MainActivity extends Activity {
             showReplayError("这条记录缺少请求信息，请重新打开详情");
             return;
         }
+        if (!java.util.Arrays.asList(SEND_ENGINES).contains(request.optString("engine", "auto"))) {
+            showReplayError("原请求的发送引擎未内置于移动版，无法无损复制；可手动新建请求");
+            return;
+        }
         long bodyLength = bodyReference.optLong("byteLength", -1);
         if (bodyLength < 0 || bodyLength > 64 * 1024) {
             showReplayError("请求正文超过 64 KiB，当前移动编辑器尚不能安全编辑后重发");
@@ -791,7 +801,8 @@ public final class MainActivity extends Activity {
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
                     .decode(ByteBuffer.wrap(bytes.toByteArray())).toString();
                 main.post(() -> openManualRequest(request.optString("method", "GET"),
-                    request.optString("url"), headerText.toString(), bodyText));
+                    request.optString("url"), headerText.toString(), bodyText,
+                    request.optString("engine", "auto")));
             } catch (Exception error) {
                 main.post(() -> showReplayError(error.getMessage()));
             }
@@ -808,12 +819,13 @@ public final class MainActivity extends Activity {
     }
 
     private void openManualRequest(String initialMethod, String initialUrl,
-                                   String initialHeaders, String initialBody) {
+                                   String initialHeaders, String initialBody, String initialEngine) {
         ManualRequestDraft draft = new ManualRequestDraft();
         draft.method = initialMethod;
         draft.url = initialUrl;
         draft.headers = initialHeaders;
         draft.body = initialBody;
+        draft.engine = initialEngine;
         openManualRequest(draft);
     }
 
@@ -833,6 +845,15 @@ public final class MainActivity extends Activity {
         url.setSingleLine(true);
         url.setText(draft.url);
         content.addView(url);
+        TextView engineLabel = new TextView(this);
+        engineLabel.setText("发送协议（移动端使用原生 TLS）");
+        content.addView(engineLabel);
+        Spinner engine = new Spinner(this);
+        engine.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item, SEND_ENGINE_LABELS));
+        int engineIndex = java.util.Arrays.asList(SEND_ENGINES).indexOf(draft.engine);
+        engine.setSelection(Math.max(0, engineIndex));
+        content.addView(engine);
         EditText headers = new EditText(this);
         headers.setHint("请求头，每行一个：\nContent-Type: application/json");
         headers.setMinLines(3);
@@ -873,6 +894,7 @@ public final class MainActivity extends Activity {
             draft.url = url.getText().toString();
             draft.headers = headers.getText().toString();
             draft.body = body.getText().toString();
+            draft.engine = SEND_ENGINES[engine.getSelectedItemPosition()];
             draft.bodyMode = bodyMode.getSelectedItemPosition();
             pendingFileRequest = draft;
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -896,6 +918,7 @@ public final class MainActivity extends Activity {
             draft.url = url.getText().toString();
             draft.headers = headers.getText().toString();
             draft.body = body.getText().toString();
+            draft.engine = SEND_ENGINES[engine.getSelectedItemPosition()];
             draft.bodyMode = bodyMode.getSelectedItemPosition();
             if (sendManualRequest(draft)) {
                 dialog.dismiss();
@@ -913,6 +936,12 @@ public final class MainActivity extends Activity {
                     || !("http".equalsIgnoreCase(uri.getScheme())
                          || "https".equalsIgnoreCase(uri.getScheme()))) {
                 throw new IllegalArgumentException("请输入 HTTP(S) URL 和请求方法");
+            }
+            if (!java.util.Arrays.asList(SEND_ENGINES).contains(draft.engine)) {
+                throw new IllegalArgumentException("此发送引擎未内置于移动版，请选择原生协议");
+            }
+            if ("h3".equals(draft.engine) && !"https".equalsIgnoreCase(uri.getScheme())) {
+                throw new IllegalArgumentException("HTTP/3 需要 HTTPS URL");
             }
             if (draft.body.getBytes(StandardCharsets.UTF_8).length > 64 * 1024
                     || draft.headers.getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
@@ -939,7 +968,7 @@ public final class MainActivity extends Activity {
                     JSONObject request = new JSONObject()
                         .put("method", requestMethod)
                         .put("url", requestUrl)
-                        .put("engine", "auto")
+                        .put("engine", draft.engine)
                         .put("headers", preparedHeaders)
                         .put("bodyBase64", Base64.encodeToString(requestBody.bytes, Base64.NO_WRAP));
                     JSONObject reply = parseReply(NativeCapture.sendRequest(request.toString()));
@@ -1645,6 +1674,7 @@ public final class MainActivity extends Activity {
             state.putString("requestUrl", pendingFileRequest.url);
             state.putString("requestHeaders", pendingFileRequest.headers);
             state.putString("requestBody", pendingFileRequest.body);
+            state.putString("requestEngine", pendingFileRequest.engine);
             state.putInt("requestBodyMode", pendingFileRequest.bodyMode);
             state.putString("requestFileUri", pendingFileRequest.fileUri == null
                 ? null : pendingFileRequest.fileUri.toString());

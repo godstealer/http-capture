@@ -7,9 +7,10 @@ struct ManualRequestDraft: Identifiable {
     let headers: String
     let body: String
     let bodyMode: ManualBodyMode
+    let engine: ManualSendEngine
 
     static let empty = ManualRequestDraft(method: "GET", url: "", headers: "",
-                                           body: "", bodyMode: .text)
+                                           body: "", bodyMode: .text, engine: .auto)
 }
 
 struct RecordedRequestCopy {
@@ -20,6 +21,7 @@ struct RecordedRequestCopy {
     let method: String
     let url: String
     let headers: String
+    let engine: ManualSendEngine
     private(set) var bytes = Data()
 
     init(flow: [String: Any]) throws {
@@ -41,6 +43,10 @@ struct RecordedRequestCopy {
         byteLength = length
         self.method = method
         self.url = url
+        guard let engine = ManualSendEngine(rawValue: request["engine"] as? String ?? "auto") else {
+            throw CopyError.invalid("原请求的发送引擎未内置于移动版，无法无损复制")
+        }
+        self.engine = engine
         guard let rows = request["headers"] as? [[String: Any]] else {
             throw CopyError.invalid("这条记录的请求头不完整")
         }
@@ -94,10 +100,11 @@ struct RecordedRequestCopy {
                scalar.value < 0x20 && scalar.value != 0x09 && scalar.value != 0x0A && scalar.value != 0x0D
            }) {
             return ManualRequestDraft(method: method, url: url, headers: headers,
-                                      body: text, bodyMode: .text)
+                                      body: text, bodyMode: .text, engine: engine)
         }
         return ManualRequestDraft(method: method, url: url, headers: headers,
-                                  body: bytes.base64EncodedString(), bodyMode: .base64)
+                                  body: bytes.base64EncodedString(), bodyMode: .base64,
+                                  engine: engine)
     }
 
     enum CopyError: LocalizedError {

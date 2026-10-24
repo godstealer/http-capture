@@ -47,7 +47,7 @@ do {
 
     let flow: [String: Any] = [
         "id": "recorded", "bodyRevision": "run:1",
-        "request": ["method": "POST", "url": "https://example.test/upload", "headers": [
+        "request": ["method": "POST", "url": "https://example.test/upload", "engine": "h2", "headers": [
             ["name": ":authority", "value": "example.test"],
             ["name": "X-Test", "value": "one"],
             ["name": "X-Test", "value": "two"],
@@ -64,8 +64,17 @@ do {
                                         "bodyBase64": "Cg==", "nextOffset": NSNull()])
     expect(lastComplete, "末页未完成")
     let replay = try copy.draft()
-    expect(replay.method == "POST" && replay.bodyMode == .base64 && replay.body == "AP8K",
+    expect(replay.method == "POST" && replay.engine == .h2
+           && replay.bodyMode == .base64 && replay.body == "AP8K",
            "二进制请求复制后字节改变")
+    var unsupported = flow
+    var unsupportedRequest = unsupported["request"] as! [String: Any]
+    unsupportedRequest["engine"] = "wreq"
+    unsupported["request"] = unsupportedRequest
+    do {
+        _ = try RecordedRequestCopy(flow: unsupported)
+        preconditionFailure("未内置的发送引擎不能静默降级")
+    } catch RecordedRequestCopy.CopyError.invalid(_) { }
     let largestBinary = Data(repeating: 255, count: RequestBodyCodec.maxBodyBytes)
     let largestEncoded = try RequestBodyCodec.compose(mode: .base64,
         text: largestBinary.base64EncodedString(), file: nil, fileName: nil, mimeType: nil)

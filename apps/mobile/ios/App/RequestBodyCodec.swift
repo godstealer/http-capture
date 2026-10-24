@@ -1,5 +1,18 @@
 import Foundation
 
+enum ManualSendEngine: String, CaseIterable, Identifiable {
+    case auto, native, h2, h3
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto: return "自动协商（HTTP/1.1 或 HTTP/2）"
+        case .native: return "HTTP/1.1"
+        case .h2: return "HTTP/2"
+        case .h3: return "HTTP/3"
+        }
+    }
+}
+
 enum ManualBodyMode: String, CaseIterable, Identifiable {
     case text = "文本"
     case json = "JSON"

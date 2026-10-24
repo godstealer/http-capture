@@ -282,6 +282,7 @@ private struct ManualRequestView: View {
     @State private var url = ""
     @State private var headers = ""
     @State private var requestBody = ""
+    @State private var engine: ManualSendEngine = .auto
     @State private var bodyMode: ManualBodyMode = .text
     @State private var fileData: Data?
     @State private var fileName: String?
@@ -295,6 +296,7 @@ private struct ManualRequestView: View {
         _headers = State(initialValue: draft.headers)
         _requestBody = State(initialValue: draft.body)
         _bodyMode = State(initialValue: draft.bodyMode)
+        _engine = State(initialValue: draft.engine)
     }
 
     var body: some View {
@@ -310,6 +312,15 @@ private struct ManualRequestView: View {
                 }
                 Section("请求头，每行 名称: 值") {
                     TextEditor(text: $headers).frame(minHeight: 100)
+                }
+                Section("发送协议") {
+                    Picker("协议", selection: $engine) {
+                        ForEach(ManualSendEngine.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
+                    Text("移动端使用原生 TLS；Chrome/Firefox 指纹发送引擎尚未内置。")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("请求正文") {
                     Picker("类型", selection: $bodyMode) {
@@ -353,7 +364,7 @@ private struct ManualRequestView: View {
                                 mode: bodyMode, text: requestBody, file: fileData,
                                 fileName: fileName, mimeType: fileMimeType)
                             inputError = nil
-                            tunnel.sendManualRequest(method: method, url: url,
+                            tunnel.sendManualRequest(method: method, url: url, engine: engine,
                                                      headers: headers, body: prepared)
                         } catch {
                             inputError = error.localizedDescription

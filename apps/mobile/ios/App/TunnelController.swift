@@ -551,13 +551,18 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    func sendManualRequest(method: String, url: String, headers: String, body: PreparedRequestBody) {
+    func sendManualRequest(method: String, url: String, engine: ManualSendEngine,
+                           headers: String, body: PreparedRequestBody) {
         guard !sendingManualRequest else { return }
         let method = method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !method.isEmpty, let parsed = URLComponents(string: url),
               ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""), parsed.host != nil else {
             message = "请输入 HTTP(S) URL 和请求方法"
+            return
+        }
+        if engine == .h3 && parsed.scheme?.lowercased() != "https" {
+            message = "HTTP/3 需要 HTTPS URL"
             return
         }
         guard body.bytes.count <= RequestBodyCodec.maxBodyBytes, headers.utf8.count <= 16 * 1024 else {
@@ -586,7 +591,7 @@ final class TunnelController: ObservableObject {
                 headerRows.append(["name": "Content-Type", "value": contentType])
             }
         }
-        var draft: [String: Any] = ["method": method, "url": url, "engine": "auto",
+        var draft: [String: Any] = ["method": method, "url": url, "engine": engine.rawValue,
                                     "headers": headerRows, "bodyBase64": ""]
         sendingManualRequest = true
         message = "正在发送请求…"
