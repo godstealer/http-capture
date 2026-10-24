@@ -39,7 +39,7 @@ iOS 手动 HTTP(S) 请求也可在停抓时发送：宿主用同一 `Engine::rep
 
 iOS 停抓时还可查看和编辑请求阻止规则、整份响应替换与部分内容修改规则。宿主复用共享内核的配置校验和 App Group 数据库，响应规则更新继续检查配置版本，避免旧页面覆盖新版本；再次启动 VPN 时会载入离线保存的规则。Rust 测试覆盖离线保存、重新打开内核后的持久化和旧版本拒绝；Swift/Xcode 编译、界面交互及实际流量效果仍待验证。
 
-本机离线手动发送集成测试现进一步验证规则的实际效果：HTTP 上游返回 200 和 `real`，保存的响应替换规则让调用方收到 201 和 `ok`；另一条域名阻止规则让未连接目标主机的请求直接得到 403。iOS Rust 桥接 15 项测试通过。这证明宿主离线重放链路会应用规则，但仍不能代替 iPhone 系统 VPN 抓包流量的验收。
+本机离线手动发送集成测试现进一步验证规则的实际效果：HTTP 上游返回 200 和 `real`，保存的响应替换规则让调用方收到 201 和 `ok`；另一条域名阻止规则让未连接目标主机的请求直接得到 403。iOS Rust 桥接当前 20 项测试通过。这证明宿主离线重放链路会应用规则，但仍不能代替 iPhone 系统 VPN 抓包流量的验收。
 
 iOS 停抓后也可导出抓包 CA 公钥证书，并导入、启用、停用或删除上游 CA。宿主使用共享目录中的证书库，保持配置版本校验；CA 分享文件仅含公开证书，不含私钥。首次仍须启动一次 VPN 完成旧目录迁移。Rust 桥接测试验证公开 CA、离线导入与启用、旧版本拒绝及重新打开内核后的配置；14 项测试通过。Swift/Mac 编译、系统证书安装和真实私有 CA 站点仍待设备验收。
 
@@ -190,7 +190,7 @@ Android 设备冒烟测试已追加配置迁移的 JNI 全链路：加密导出�
 
 ## 上游 CA 证书
 
-Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 单张导入文件暂限 64 KiB，VPN 运行时通过扩展消息、停抓时通过宿主 Rust 桥接保存。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40086909266) 已通过模拟器证书导入/启停/删除、VPN 和 HTTPS 抓取测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），并上传双架构 APK。iOS Rust 桥接当前 15 项测试通过；近期 Swift 界面改动仍待 Mac CI，真机上游私有 CA 站点验收仍待设备测试。
+Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 单张导入文件暂限 64 KiB，VPN 运行时通过扩展消息、停抓时通过宿主 Rust 桥接保存。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40086909266) 已通过模拟器证书导入/启停/删除、VPN 和 HTTPS 抓取测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），并上传双架构 APK。iOS Rust 桥接当前 20 项测试通过；近期 Swift 界面改动仍待 Mac CI，真机上游私有 CA 站点验收仍待设备测试。
 
 ## iOS 分发边界
 
