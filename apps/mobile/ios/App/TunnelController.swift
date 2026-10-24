@@ -7,6 +7,7 @@ struct CapturedRequest: Identifiable {
     let method: String
     let url: String
     let status: Int?
+    let sourceLabel: String?
 
     init?(_ value: [String: Any]) {
         guard let id = value["id"] as? String else { return nil }
@@ -14,6 +15,11 @@ struct CapturedRequest: Identifiable {
         method = value["method"] as? String ?? "?"
         url = value["url"] as? String ?? ""
         status = value["status"] as? Int
+        switch (value["source"] as? String) ?? "" {
+        case "capture": sourceLabel = "抓包"
+        case "replay": sourceLabel = "手动"
+        default: sourceLabel = nil
+        }
     }
 }
 
@@ -392,6 +398,7 @@ final class TunnelController: ObservableObject {
     var hasMoreRequests: Bool { cursor != nil }
     var hasPreviousRequests: Bool { requestPageCursors.count > 1 }
     var requestPageNumber: Int { requestPageCursors.count }
+    var hasActiveUrlFilter: Bool { !urlFilter.isEmpty }
 
     func applyUrlFilter() {
         let filter = urlFilterInput.trimmingCharacters(in: .whitespacesAndNewlines)

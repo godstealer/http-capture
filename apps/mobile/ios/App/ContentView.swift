@@ -107,10 +107,19 @@ struct ContentView: View {
                                 HStack {
                                     Text(request.method).bold()
                                     if let status = request.status { Text(String(status)).foregroundStyle(.secondary) }
+                                    if let source = request.sourceLabel {
+                                        Text(source).font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
                                 Text(request.url).lineLimit(2).font(.footnote)
                             }
                         }
+                    }
+                    if tunnel.requests.isEmpty && !tunnel.requestPageLoading {
+                        Text(tunnel.hasActiveUrlFilter
+                             ? "没有匹配的请求记录"
+                             : "暂无请求记录；启动 VPN 后流量会显示在这里")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                     HStack {
                         Button("上一页") { tunnel.previousRequestsPage() }
