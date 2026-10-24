@@ -19,6 +19,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -311,10 +312,87 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     Thread.sleep(100);
                 }
                 if (!recorded) throw new AssertionError("proxy response was not recorded");
+                runBinaryResponseRewriteSmoke(proxyPort);
                 runTlsSmoke(proxyPort, certificate);
             } finally {
                 expectOk(NativeCapture.stop());
             }
+        }
+    }
+
+    private void runBinaryResponseRewriteSmoke(int proxyPort) throws Exception {
+        JSONObject original = expectOk(NativeCapture.responseRewrite());
+        byte[] binary = {0, (byte) 255, 65};
+        JSONObject replacement = new JSONObject().put("status", 201)
+                .put("headers", new JSONArray().put(new JSONObject()
+                        .put("name", "Content-Type").put("value", "application/octet-stream")))
+                .put("bodyBase64", Base64.encodeToString(binary, Base64.NO_WRAP));
+        JSONObject rule = new JSONObject().put("id", "mobile-binary-rewrite-smoke")
+                .put("name", "Binary smoke").put("enabled", true)
+                .put("matchType", "urlContains").put("pattern", "/mobile-binary-rewrite-smoke")
+                .put("method", "GET").put("action", "replace")
+                .put("replacement", replacement);
+        JSONObject config = new JSONObject().put("enabled", true).put("scope", "capture")
+                .put("rules", new JSONArray().put(rule));
+        JSONObject update = new JSONObject().put("config", config)
+                .put("expectedVersion", original.getString("version"));
+        expectOk(NativeCapture.configureResponseRewrite(update.toString()));
+        try (ServerSocket origin = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            AtomicReference<Throwable> originError = new AtomicReference<>();
+            Thread server = new Thread(() -> {
+                try (Socket peer = origin.accept()) {
+                    peer.setSoTimeout(10_000);
+                    InputStream input = peer.getInputStream();
+                    int state = 0;
+                    while (state < 4) {
+                        int next = input.read();
+                        if (next < 0) throw new AssertionError("upstream request ended early");
+                        state = next == "\r\n\r\n".charAt(state) ? state + 1 : 0;
+                    }
+                    peer.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n"
+                            + "Connection: close\r\n\r\norigin")
+                            .getBytes(StandardCharsets.US_ASCII));
+                } catch (Throwable error) { originError.set(error); }
+            }, "capture-rewrite-origin");
+            server.start();
+            try (Socket client = new Socket("127.0.0.1", proxyPort)) {
+                client.setSoTimeout(10_000);
+                String target = "127.0.0.1:" + origin.getLocalPort();
+                client.getOutputStream().write(("GET http://" + target
+                        + "/mobile-binary-rewrite-smoke HTTP/1.1\r\nHost: " + target
+                        + "\r\nConnection: close\r\n\r\n")
+                        .getBytes(StandardCharsets.US_ASCII));
+                ByteArrayOutputStream response = new ByteArrayOutputStream();
+                byte[] buffer = new byte[4096];
+                int count;
+                while ((count = client.getInputStream().read(buffer)) != -1) {
+                    response.write(buffer, 0, count);
+                    if (response.size() > 64 * 1024) throw new AssertionError("oversized rewrite response");
+                }
+                byte[] wire = response.toByteArray();
+                int bodyOffset = -1;
+                for (int index = 0; index + 3 < wire.length; index++) {
+                    if (wire[index] == '\r' && wire[index + 1] == '\n'
+                            && wire[index + 2] == '\r' && wire[index + 3] == '\n') {
+                        bodyOffset = index + 4;
+                        break;
+                    }
+                }
+                if (bodyOffset < 0 || !new String(wire, 0, bodyOffset, StandardCharsets.US_ASCII)
+                        .startsWith("HTTP/1.1 201")
+                        || !Arrays.equals(binary, Arrays.copyOfRange(wire, bodyOffset, wire.length))) {
+                    throw new AssertionError("binary response rewrite changed status or body");
+                }
+            } finally {
+                server.join(10_000);
+                if (server.isAlive()) throw new AssertionError("rewrite origin did not finish");
+                if (originError.get() != null) throw new AssertionError("rewrite origin failed", originError.get());
+            }
+        } finally {
+            JSONObject current = expectOk(NativeCapture.responseRewrite());
+            JSONObject restore = new JSONObject().put("config", original.getJSONObject("config"))
+                    .put("expectedVersion", current.getString("version"));
+            expectOk(NativeCapture.configureResponseRewrite(restore.toString()));
         }
     }
 
