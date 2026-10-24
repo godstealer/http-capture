@@ -29,6 +29,7 @@ apps/desktop/src-tauri/tauri.release.json
 release-assets/
 apps/mobile/android/.gradle/
 apps/mobile/android/app/build/
+apps/mobile/android/vpn-probe/build/
 apps/mobile/android/app/src/main/jniLibs/
 apps/mobile/android/local.properties
 # Generated iOS project and native Apple static library.

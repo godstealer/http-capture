@@ -1,7 +1,0 @@
-dev.httpcapture.probe.vpn-probe-pngs-0 E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\build\generated\res\pngs\debug
-dev.httpcapture.probe.vpn-probe-resValues-1 E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\build\generated\res\resValues\debug
-dev.httpcapture.probe.vpn-probe-packageDebugResources-2 E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\build\intermediates\incremental\debug\packageDebugResources\merged.dir
-dev.httpcapture.probe.vpn-probe-packageDebugResources-3 E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\build\intermediates\incremental\debug\packageDebugResources\stripped.dir
-dev.httpcapture.probe.vpn-probe-merged_res-4 E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\build\intermediates\merged_res\debug
-dev.httpcapture.probe.vpn-probe-debug-5 E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\debug\res
-dev.httpcapture.probe.vpn-probe-main-6 E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\res
