@@ -12,7 +12,7 @@ iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无�
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，121,496,574 字节，SHA-256 `3b687621b4b4c9a725825f089c5cfd252d7436e76511c4ef1b5dc5e6ffce1003`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，121,496,510 字节，SHA-256 `4f5c3de89b01be8aaba3e6c891148ce42eb4b008285f7401720ff4c44eec408a`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
@@ -194,6 +194,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 2026-10-25：Android 切网重建增加代次检查，失效的重建任务停止旧 TUN 后不再用已丢失的网络启动；巡检在等待新网络和重建期间不把暂时停止的转发器误判为永久故障。Android 原生 Rust 8 项测试、本地双架构交叉编译与调试 APK 组装通过；转发任务自行退出时还会停止可选 QUIC 监听器。仍需真机验证 Wi-Fi/蜂窝连续切换、短时断网恢复和手动停止的竞态。
 
 2026-10-25：iOS 宿主在读取系统 VPN 配置期间禁用启动按钮，避免用户快速点击时新建重复的 `NETunnelProviderManager`；配置读取失败后恢复按钮并显示错误。此项 Swift 改动尚待 Mac 编译和设备首次启动验收。
+
+2026-10-25：Android 切网时显式停止旧 TUN，即使旧转发任务已因失联而返回网络错误，完成桥与 QUIC 清理后仍允许在新网络建立新任务；真正的停止超时和任务异常仍返回错误。arm64-v8a、x86_64 原生库及调试 APK 本地重编通过；断网后恢复仍待设备实测。
 
 待完成顺序：
 

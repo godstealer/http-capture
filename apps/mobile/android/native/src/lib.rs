@@ -234,8 +234,9 @@ fn stop_tunnel_inner(capture: &mut MobileCapture) -> Result<(), String> {
         tokio::time::timeout(std::time::Duration::from_secs(5), &mut tunnel.task).await
     });
     let outcome = match result {
-        Ok(Ok(Ok(_))) => Ok(()),
-        Ok(Ok(Err(error))) => Err(error),
+        // The previous network may have already failed. Its forwarding error
+        // does not mean cleanup failed; a new network can start a fresh task.
+        Ok(Ok(Ok(_))) | Ok(Ok(Err(_))) => Ok(()),
         Ok(Err(error)) => Err(error.to_string()),
         Err(_) => {
             tunnel.task.abort();
