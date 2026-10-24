@@ -879,5 +879,21 @@ mod tests {
         assert!(stop().is_ok());
         assert!(command(r#"{"method":"status"}"#).is_err());
         assert!(command(r#"{"method":"blocking"}"#).is_err());
+
+        // The optional HTTP/3 listener is owned by the extension lifecycle.
+        start(directory.path(), port, true, packet, 0).unwrap();
+        let quic_address = active()
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .quic
+            .as_ref()
+            .unwrap()
+            .address;
+        assert!(quic_address.ip().is_loopback());
+        assert!(stop().is_ok());
+        std::net::UdpSocket::bind(quic_address)
+            .expect("stopping the extension must release the HTTP/3 listener");
     }
 }
