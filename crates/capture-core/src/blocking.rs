@@ -74,7 +74,7 @@ fn canonical_host(value:&str) -> Result<String> {
 }
 
 fn compile(config:&mut Config) -> Result<()> {
-    ensure!(matches!(config.scope.as_str(), "capture" | "all"), "阻止范围必须为 capture 或 all");
+    ensure!(matches!(config.scope.as_str(), "capture" | "replay" | "all"), "阻止范围必须为 capture、replay 或 all");
     ensure!(config.rules.len()<=100, "最多支持 100 条阻止规则");
     let mut ids = HashSet::new();
     for rule in &mut config.rules {
@@ -109,7 +109,7 @@ impl Blocking {
     }
     pub fn check(&self, request:&RequestDraft, source:&str) -> Option<Match> {
         let config = self.config.read().unwrap();
-        if !config.enabled || (config.scope=="capture" && source!="capture") { return None; }
+        if !config.enabled || !scope_applies(&config.scope, source) { return None; }
         let host = url::Url::parse(&request.url).ok().and_then(|u|u.host().map(|h|h.to_string().trim_end_matches('.').to_ascii_lowercase()));
         config.rules.iter().find(|rule|rule.enabled && (rule.method.is_empty() || rule.method.eq_ignore_ascii_case(&request.method)) && match rule.match_type.as_str() {
             "host" => host.as_deref()==Some(rule.pattern.as_str()),
@@ -120,7 +120,7 @@ impl Blocking {
     /// A method-free exact host rule can be decided before reading HTTP inside TLS.
     pub(crate) fn host_match_before_tls(&self, url:&url::Url, source:&str) -> Option<Match> {
         let config = self.config.read().unwrap();
-        if !config.enabled || (config.scope=="capture" && source!="capture") { return None; }
+        if !config.enabled || !scope_applies(&config.scope, source) { return None; }
         let host = url.host().map(|h|h.to_string().trim_end_matches('.').to_ascii_lowercase());
         config.rules.iter().find(|rule|rule.enabled && rule.match_type=="host" && rule.method.is_empty() && host.as_deref()==Some(rule.pattern.as_str()))
             .map(|rule|Match { rule_id:rule.id.clone(), match_type:rule.match_type.clone() })
@@ -133,6 +133,10 @@ impl Blocking {
         hit.apply(flow);
         true
     }
+}
+
+fn scope_applies(scope: &str, source: &str) -> bool {
+    scope == "all" || scope == source
 }
 
 /// Return a local denial before a WebSocket Upgrade is sent upstream.

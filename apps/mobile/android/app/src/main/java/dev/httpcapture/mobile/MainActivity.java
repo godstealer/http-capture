@@ -1142,6 +1142,21 @@ public final class MainActivity extends Activity {
         enabled.setText("启用 HTTP 请求阻止");
         enabled.setChecked(config.optBoolean("enabled"));
         content.addView(enabled);
+        TextView scopeLabel = new TextView(this);
+        scopeLabel.setText("作用范围");
+        content.addView(scopeLabel);
+        Spinner scope = new Spinner(this);
+        String[] scopeValues = {"capture", "replay", "all"};
+        ArrayAdapter<String> scopes = new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_item, new String[] {"仅抓包", "仅重放", "抓包和重放"});
+        scopes.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        scope.setAdapter(scopes);
+        int selectedScope = java.util.Arrays.asList(scopeValues).indexOf(config.optString("scope", "capture"));
+        scope.setSelection(Math.max(0, selectedScope));
+        content.addView(scope);
+        Button saveScope = new Button(this);
+        saveScope.setText("保存作用范围");
+        content.addView(saveScope);
         JSONArray rules = config.optJSONArray("rules");
         if (rules == null) {
             rules = new JSONArray();
@@ -1156,14 +1171,22 @@ public final class MainActivity extends Activity {
             JSONObject rule = ruleList.optJSONObject(i);
             if (rule == null) continue;
             LinearLayout line = new LinearLayout(this);
-            line.setOrientation(LinearLayout.HORIZONTAL);
+            line.setOrientation(LinearLayout.VERTICAL);
             CheckBox ruleEnabled = new CheckBox(this);
-            ruleEnabled.setText(rule.optString("pattern") + " · " + rule.optString("matchType"));
+            String ruleMethod = rule.optString("method");
+            ruleEnabled.setText(rule.optString("pattern") + " · " + rule.optString("matchType")
+                + " · " + (ruleMethod.isEmpty() ? "全部方法" : ruleMethod));
             ruleEnabled.setChecked(rule.optBoolean("enabled"));
-            line.addView(ruleEnabled, new LinearLayout.LayoutParams(0, -2, 1));
+            line.addView(ruleEnabled);
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            Button edit = new Button(this);
+            edit.setText("编辑");
+            actions.addView(edit);
             Button delete = new Button(this);
             delete.setText("删除");
-            line.addView(delete);
+            actions.addView(delete);
+            line.addView(actions);
             content.addView(line);
             ruleLines.add(line);
             ruleObjects.add(rule);
@@ -1202,17 +1225,31 @@ public final class MainActivity extends Activity {
             dialog.dismiss();
             saveBlocking(config);
         });
+        saveScope.setOnClickListener(view -> {
+            String selected = scopeValues[scope.getSelectedItemPosition()];
+            if (selected.equals(config.optString("scope", "capture"))) return;
+            try { config.put("scope", selected); }
+            catch (JSONException ignored) { return; }
+            dialog.dismiss();
+            saveBlocking(config);
+        });
         for (int i = 0; i < ruleLines.size(); i++) {
             JSONObject rule = ruleObjects.get(i);
             LinearLayout line = ruleLines.get(i);
             CheckBox ruleEnabled = (CheckBox) line.getChildAt(0);
-            Button delete = (Button) line.getChildAt(1);
+            LinearLayout actions = (LinearLayout) line.getChildAt(1);
+            Button edit = (Button) actions.getChildAt(0);
+            Button delete = (Button) actions.getChildAt(1);
             final int index = ruleIndices.get(i);
             ruleEnabled.setOnCheckedChangeListener((button, checked) -> {
                 try { rule.put("enabled", checked); }
                 catch (JSONException ignored) { return; }
                 dialog.dismiss();
                 saveBlocking(config);
+            });
+            edit.setOnClickListener(view -> {
+                dialog.dismiss();
+                editBlockingRule(config, rule);
             });
             delete.setOnClickListener(view -> {
                 ruleList.remove(index);
@@ -1240,6 +1277,55 @@ public final class MainActivity extends Activity {
             saveBlocking(config);
         });
         dialog.show();
+    }
+
+    private void editBlockingRule(JSONObject config, JSONObject rule) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int inset = (int) (12 * getResources().getDisplayMetrics().density);
+        content.setPadding(inset, inset, inset, inset);
+        Spinner matchType = new Spinner(this);
+        String[] matchValues = {"host", "urlContains", "urlRegex"};
+        ArrayAdapter<String> matches = new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_item, new String[] {"精确域名", "URL 包含", "URL 正则"});
+        matches.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        matchType.setAdapter(matches);
+        matchType.setSelection(Math.max(0,
+            java.util.Arrays.asList(matchValues).indexOf(rule.optString("matchType"))));
+        content.addView(matchType);
+        EditText pattern = new EditText(this);
+        pattern.setSingleLine(true);
+        pattern.setHint("域名或 URL 匹配内容");
+        pattern.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        pattern.setText(rule.optString("pattern"));
+        content.addView(pattern);
+        EditText method = new EditText(this);
+        method.setSingleLine(true);
+        method.setHint("方法（留空表示全部）");
+        method.setText(rule.optString("method"));
+        content.addView(method);
+        AlertDialog editor = new AlertDialog.Builder(this)
+            .setTitle("编辑阻止规则")
+            .setView(content)
+            .setNegativeButton("取消", (ignored, which) -> showBlocking(config))
+            .setPositiveButton("保存修改", null)
+            .create();
+        editor.setOnShowListener(ignored -> editor.getButton(AlertDialog.BUTTON_POSITIVE)
+            .setOnClickListener(view -> {
+                String value = pattern.getText().toString().trim();
+                if (value.isEmpty()) {
+                    pattern.setError("请填写匹配内容");
+                    return;
+                }
+                try {
+                    rule.put("matchType", matchValues[matchType.getSelectedItemPosition()]);
+                    rule.put("pattern", value);
+                    rule.put("method", method.getText().toString().trim().toUpperCase(Locale.ROOT));
+                } catch (JSONException ignoredError) { return; }
+                editor.dismiss();
+                saveBlocking(config);
+            }));
+        editor.show();
     }
 
     private void loadResponseRewrite() {

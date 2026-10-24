@@ -53,7 +53,7 @@ fn config_validation_is_atomic_persistent_and_restores_compiled_regex() {
         let mut bad=serde_json::to_value(&valid).unwrap();
         match mutate {
             "regex"=>bad["rules"][0]["pattern"]=json!("["),
-            "scope"=>bad["scope"]=json!("replay"),
+            "scope"=>bad["scope"]=json!("invalid"),
             "host"=>{bad["rules"][0]["matchType"]=json!("host");bad["rules"][0]["pattern"]=json!("*.example.test");},
             "method"=>bad["rules"][0]["method"]=json!("GET\r\n"),
             "duplicate"=>{let rule=bad["rules"][0].clone();bad["rules"].as_array_mut().unwrap().push(rule);},
@@ -113,6 +113,9 @@ async fn capture_scope_all_scope_and_script_rewrites_are_checked_before_send() {
         let server=tokio::spawn(async move {let (stream,_)=origin.accept().await.unwrap();let mut stream=BufReader::new(stream);read_head(&mut stream).await.unwrap();stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").await.unwrap();});
         let flow=engine.execute(draft(url),None,"replay",None).await.unwrap();assert_eq!(flow.response.unwrap().status,204);server.await.unwrap();
         let unused=TcpListener::bind("127.0.0.1:0").await.unwrap();let url=format!("http://{}/blocked?secret=value",unused.local_addr().unwrap());
+        engine.blocking.configure(config("urlContains","/blocked","replay")).unwrap();
+        assert!(engine.blocking.check(&draft(url.clone()),"capture").is_none());
+        assert_blocked(&engine.execute(draft(url.clone()),None,"replay",None).await.unwrap());
         engine.blocking.configure(config("urlContains","/blocked","all")).unwrap();
         assert_blocked(&engine.execute(draft(url.clone()),None,"replay",None).await.unwrap());
         let mut request=draft(url.replace("/blocked?secret=value","/allowed"));request.scripts.enabled=true;request.scripts.before=format!("request.url={};",serde_json::to_string(&url).unwrap());
