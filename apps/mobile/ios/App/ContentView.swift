@@ -47,13 +47,17 @@ struct ContentView: View {
                     Text("开启后需信任本 CA；ECH 或隐藏 SNI 的连接仍不能解密。其他 UDP 保持直连。")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text(tunnel.message).foregroundStyle(.secondary)
+                    if !tunnel.busy && !tunnel.profileLoaded {
+                        Button("重试读取 VPN 配置") { tunnel.loadProfile() }
+                    }
                     if tunnel.configurationRequiresRestart {
                         Text("全局配置已导入。请在系统中完全关闭 HTTP Capture，再重新打开。")
                             .font(.footnote).foregroundStyle(.orange)
                     }
                     Button(tunnel.shouldOfferStop ? "停止抓包" : "启动抓包") {
                         if tunnel.shouldOfferStop { tunnel.stop() } else { tunnel.start() }
-                    }.disabled(tunnel.busy || tunnel.tunnelStopping || (!tunnel.shouldOfferStop && validPort == nil))
+                    }.disabled(tunnel.busy || tunnel.tunnelStopping ||
+                               (!tunnel.shouldOfferStop && (!tunnel.profileLoaded || validPort == nil)))
                 }
                 Section("证书") {
                     Button("导出 CA 公钥证书") { tunnel.exportCertificate() }
@@ -72,7 +76,9 @@ struct ContentView: View {
                 }
                 Section("配置迁移") {
                     Button("导入或导出全局配置") { showingConfiguration = true }
-                        .disabled(tunnel.configurationRequiresRestart || tunnel.configurationBusy ||
+                        .disabled(tunnel.busy || !tunnel.profileLoaded ||
+                                  tunnel.configurationRequiresRestart ||
+                                  tunnel.configurationBusy || tunnel.sessionExporting ||
                                   tunnel.connected || tunnel.tunnelStarting || tunnel.tunnelStopping)
                     Text("与桌面和 Android 共用配置格式；迁移前先停止 VPN。流量记录与证书私钥另行处理。")
                         .font(.footnote).foregroundStyle(.secondary)

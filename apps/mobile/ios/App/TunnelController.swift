@@ -135,6 +135,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var tunnelStarting = false
     @Published private(set) var tunnelStopping = false
     @Published private(set) var busy = true
+    @Published private(set) var profileLoaded = false
     @Published private(set) var configurationBusy = false
     @Published private(set) var configurationRequiresRestart = false
     @Published private(set) var message = "正在读取 VPN 配置…"
@@ -257,6 +258,9 @@ final class TunnelController: ObservableObject {
     }
 
     func loadProfile() {
+        busy = true
+        profileLoaded = false
+        message = "正在读取 VPN 配置…"
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -278,6 +282,7 @@ final class TunnelController: ObservableObject {
                 }
                 self.watchStatus()
                 self.refreshStatus()
+                self.profileLoaded = true
                 self.busy = false
             }
         }
@@ -285,6 +290,10 @@ final class TunnelController: ObservableObject {
 
     func start() {
         if busy || shouldOfferStop || tunnelStopping { return }
+        guard profileLoaded else {
+            message = "VPN 配置读取失败，请重试读取后再启动"
+            return
+        }
         if configurationRequiresRestart {
             message = "配置已导入，请完全关闭并重新打开应用"
             return
@@ -339,12 +348,15 @@ final class TunnelController: ObservableObject {
 
     func beginConfigurationOperation() -> Bool {
         let vpnStatus = manager?.connection.status
-        guard !configurationBusy, !configurationRequiresRestart,
+        guard !busy, profileLoaded, !configurationBusy, !configurationRequiresRestart,
+              !sessionExporting, !sendingManualRequest, !manualSaving,
+              !savedCollectionSaving, !savedDeleteBusy,
+              !blockingSaving, !responseSaving, !trustedCertificatesBusy,
               !connected, !tunnelStarting, !tunnelStopping,
               vpnStatus == nil || vpnStatus == .disconnected || vpnStatus == .invalid else {
             message = configurationRequiresRestart
                 ? "配置已导入，请完全关闭并重新打开应用"
-                : "请先停止 VPN，再迁移配置"
+                : "请先停止 VPN，并等待其他请求、规则或导出操作完成"
             return false
         }
         configurationBusy = true
