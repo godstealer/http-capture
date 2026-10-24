@@ -893,12 +893,18 @@ public final class MainActivity extends Activity {
         String method = request.optString("method");
         String url = request.optString("url");
         if (method.isEmpty() || url.isEmpty()
-                || !method.equals(method.trim()) || !url.equals(url.trim())) {
+                || !method.equals(method.trim().toUpperCase(Locale.ROOT)) || !url.equals(url.trim())) {
             showReplayError("这条记录的方法或 URL 无法无损复制");
             return;
         }
         if (!java.util.Arrays.asList(SEND_ENGINES).contains(request.optString("engine", "auto"))) {
             showReplayError("原请求的发送引擎未内置于移动版，无法无损复制；可手动新建请求");
+            return;
+        }
+        try {
+            validateEditableRequestMetadata(request);
+        } catch (IllegalArgumentException error) {
+            showReplayError(error.getMessage());
             return;
         }
         long bodyLength = bodyReference.optLong("byteLength", -1);
@@ -1338,29 +1344,7 @@ public final class MainActivity extends Activity {
         if (!saved.isNull("grpcDraft") || "grpc".equalsIgnoreCase(saved.optString("requestMode")))
             throw new IllegalArgumentException("此请求是 gRPC 请求，移动 HTTP 编辑器暂不能打开");
         JSONObject request = saved.getJSONObject("draft");
-        JSONArray pseudo = request.optJSONArray("pseudoHeaders");
-        if (pseudo != null && pseudo.length() > 0)
-            throw new IllegalArgumentException("此请求含 HTTP/2 伪头，移动编辑器暂不能无损打开");
-        if (!request.isNull("upstreamProfileId"))
-            throw new IllegalArgumentException("此请求使用上游代理配置，移动编辑器暂不能无损打开");
-        JSONObject scripts = request.optJSONObject("scripts");
-        JSONObject modules = scripts == null ? null : scripts.optJSONObject("modules");
-        if (scripts != null && (scripts.optBoolean("enabled")
-                || !scripts.optString("before").isEmpty()
-                || !scripts.optString("after").isEmpty()
-                || scripts.optJSONObject("variables") != null
-                   && scripts.optJSONObject("variables").length() > 0
-                || modules != null && (!modules.optBoolean("encoding", true)
-                    || !modules.optBoolean("crypto", true)
-                    || !modules.optBoolean("utils", true))))
-            throw new IllegalArgumentException("此请求含脚本配置，移动编辑器暂不能无损打开");
-        JSONObject tls = request.optJSONObject("tls");
-        if (tls != null && (!tls.isNull("clientHelloHex") || !tls.isNull("browserVersion")
-                || !tls.isNull("version") || !"native".equals(tls.optString("preset", "native"))
-                || !tls.isNull("cipherList") || !tls.isNull("sigalgsList")
-                || !tls.isNull("curvesList") || !tls.isNull("grease")
-                || !tls.isNull("permuteExtensions")))
-            throw new IllegalArgumentException("此请求使用自定义 TLS 配置，移动编辑器暂不能无损打开");
+        validateEditableRequestMetadata(request);
         ManualRequestDraft draft = new ManualRequestDraft();
         draft.savedId = saved.getString("id");
         draft.savedName = saved.getString("name");
@@ -1387,6 +1371,32 @@ public final class MainActivity extends Activity {
             draft.bodyMode = 5;
         }
         return draft;
+    }
+
+    static void validateEditableRequestMetadata(JSONObject request) {
+        JSONArray pseudo = request.optJSONArray("pseudoHeaders");
+        if (pseudo != null && pseudo.length() > 0)
+            throw new IllegalArgumentException("此请求含 HTTP/2 伪头，移动编辑器暂不能无损复制");
+        if (!request.isNull("upstreamProfileId"))
+            throw new IllegalArgumentException("此请求使用上游代理配置，移动编辑器暂不能无损复制");
+        JSONObject scripts = request.optJSONObject("scripts");
+        JSONObject modules = scripts == null ? null : scripts.optJSONObject("modules");
+        if (scripts != null && (scripts.optBoolean("enabled")
+                || !scripts.optString("before").isEmpty()
+                || !scripts.optString("after").isEmpty()
+                || scripts.optJSONObject("variables") != null
+                   && scripts.optJSONObject("variables").length() > 0
+                || modules != null && (!modules.optBoolean("encoding", true)
+                    || !modules.optBoolean("crypto", true)
+                    || !modules.optBoolean("utils", true))))
+            throw new IllegalArgumentException("此请求含脚本配置，移动编辑器暂不能无损复制");
+        JSONObject tls = request.optJSONObject("tls");
+        if (tls != null && (!tls.isNull("clientHelloHex") || !tls.isNull("browserVersion")
+                || !tls.isNull("version") || !"native".equals(tls.optString("preset", "native"))
+                || !tls.isNull("cipherList") || !tls.isNull("sigalgsList")
+                || !tls.isNull("curvesList") || !tls.isNull("grease")
+                || !tls.isNull("permuteExtensions")))
+            throw new IllegalArgumentException("此请求使用自定义 TLS 配置，移动编辑器暂不能无损复制");
     }
 
     static void validateSavedTarget(String method, String url) {

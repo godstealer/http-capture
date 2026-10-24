@@ -53,7 +53,7 @@ struct RecordedRequestCopy {
             throw CopyError.invalid("这条记录缺少请求或正文信息，请重新打开详情")
         }
         guard !method.isEmpty, !url.isEmpty,
-              method == method.trimmingCharacters(in: .whitespacesAndNewlines),
+              method == method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
               url == url.trimmingCharacters(in: .whitespacesAndNewlines) else {
             throw CopyError.invalid("这条记录的方法或 URL 无法无损复制")
         }
@@ -69,6 +69,7 @@ struct RecordedRequestCopy {
             throw CopyError.invalid("原请求的发送引擎未内置于移动版，无法无损复制")
         }
         self.engine = engine
+        try EditableRequestMetadata.validate(request)
         guard let rows = request["headers"] as? [[String: Any]] else {
             throw CopyError.invalid("这条记录的请求头不完整")
         }

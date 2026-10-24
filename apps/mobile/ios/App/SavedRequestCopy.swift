@@ -65,31 +65,7 @@ struct SavedRequestCopy {
             || (request["requestMode"] as? String)?.lowercased() == "grpc" {
             throw CopyError.invalid("gRPC 请求暂不能在移动 HTTP 编辑器中打开")
         }
-        if let pseudo = draft["pseudoHeaders"] as? [Any], !pseudo.isEmpty {
-            throw CopyError.invalid("HTTP/2 伪头暂不能在移动编辑器中无损修改")
-        }
-        if let upstream = draft["upstreamProfileId"], !(upstream is NSNull) {
-            throw CopyError.invalid("含上游代理配置的请求暂不能无损修改")
-        }
-        if let scripts = draft["scripts"] as? [String: Any] {
-            let modules = scripts["modules"] as? [String: Any] ?? [:]
-            let active = scripts["enabled"] as? Bool == true
-                || !(scripts["before"] as? String ?? "").isEmpty
-                || !(scripts["after"] as? String ?? "").isEmpty
-                || !(scripts["variables"] as? [String: Any] ?? [:]).isEmpty
-                || modules["encoding"] as? Bool == false
-                || modules["crypto"] as? Bool == false
-                || modules["utils"] as? Bool == false
-            if active { throw CopyError.invalid("含脚本配置的请求暂不能无损修改") }
-        }
-        if let tls = draft["tls"] as? [String: Any] {
-            let custom = ["clientHelloHex", "browserVersion", "version", "cipherList",
-                          "sigalgsList", "curvesList", "grease", "permuteExtensions"]
-                .contains { key in tls[key] != nil && !(tls[key] is NSNull) }
-            if custom || (tls["preset"] as? String ?? "native") != "native" {
-                throw CopyError.invalid("含自定义 TLS 配置的请求暂不能无损修改")
-            }
-        }
+        try EditableRequestMetadata.validate(draft)
         guard let rows = draft["headers"] as? [[String: Any]] else {
             throw CopyError.invalid("保存的请求头不完整")
         }
@@ -168,6 +144,44 @@ struct SavedRequestCopy {
         var errorDescription: String? {
             if case .invalid(let message) = self { return message }
             return nil
+        }
+    }
+}
+
+enum EditableRequestMetadata {
+    enum CopyError: LocalizedError {
+        case invalid(String)
+        var errorDescription: String? {
+            if case .invalid(let reason) = self { return reason }
+            return nil
+        }
+    }
+
+    static func validate(_ draft: [String: Any]) throws {
+        if let pseudo = draft["pseudoHeaders"] as? [Any], !pseudo.isEmpty {
+            throw CopyError.invalid("HTTP/2 伪头暂不能在移动编辑器中无损复制")
+        }
+        if let upstream = draft["upstreamProfileId"], !(upstream is NSNull) {
+            throw CopyError.invalid("含上游代理配置的请求暂不能无损复制")
+        }
+        if let scripts = draft["scripts"] as? [String: Any] {
+            let modules = scripts["modules"] as? [String: Any] ?? [:]
+            let active = scripts["enabled"] as? Bool == true
+                || !(scripts["before"] as? String ?? "").isEmpty
+                || !(scripts["after"] as? String ?? "").isEmpty
+                || !(scripts["variables"] as? [String: Any] ?? [:]).isEmpty
+                || modules["encoding"] as? Bool == false
+                || modules["crypto"] as? Bool == false
+                || modules["utils"] as? Bool == false
+            if active { throw CopyError.invalid("含脚本配置的请求暂不能无损复制") }
+        }
+        if let tls = draft["tls"] as? [String: Any] {
+            let custom = ["clientHelloHex", "browserVersion", "version", "cipherList",
+                          "sigalgsList", "curvesList", "grease", "permuteExtensions"]
+                .contains { key in tls[key] != nil && !(tls[key] is NSNull) }
+            if custom || (tls["preset"] as? String ?? "native") != "native" {
+                throw CopyError.invalid("含自定义 TLS 配置的请求暂不能无损复制")
+            }
         }
     }
 }

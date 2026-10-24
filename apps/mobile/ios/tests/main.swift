@@ -110,6 +110,21 @@ do {
         _ = try RecordedRequestCopy(flow: unsupported)
         preconditionFailure("未内置的发送引擎不能静默降级")
     } catch RecordedRequestCopy.CopyError.invalid(_) { }
+    for (key, value) in [
+        ("pseudoHeaders", [["name": ":authority", "value": "other.test"]] as Any),
+        ("upstreamProfileId", "proxy-profile" as Any),
+        ("scripts", ["enabled": true] as Any),
+        ("tls", ["preset": "chrome"] as Any)
+    ] {
+        var changed = flow
+        var request = changed["request"] as! [String: Any]
+        request[key] = value
+        changed["request"] = request
+        do {
+            _ = try RecordedRequestCopy(flow: changed)
+            preconditionFailure("复制请求不能静默丢失 \(key)")
+        } catch EditableRequestMetadata.CopyError.invalid(_) { }
+    }
     let largestBinary = Data(repeating: 255, count: RequestBodyCodec.maxBodyBytes)
     let largestEncoded = try RequestBodyCodec.compose(mode: .base64,
         text: largestBinary.base64EncodedString(), file: nil, fileName: nil, mimeType: nil)
@@ -141,7 +156,8 @@ do {
         _ = try RecordedRequestCopy(flow: spaced)
         preconditionFailure("无法保留前导空格的请求头不能静默改写")
     } catch RecordedRequestCopy.CopyError.invalid(_) { }
-    for (key, value) in [("method", " POST"), ("url", "https://example.test/ ")] {
+    for (key, value) in [("method", " POST"), ("method", "post"),
+                         ("url", "https://example.test/ ")] {
         var malformed = flow
         var malformedRequest = malformed["request"] as! [String: Any]
         malformedRequest[key] = value

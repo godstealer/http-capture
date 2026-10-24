@@ -592,6 +592,18 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 throw new AssertionError("Lossy saved method or URL was accepted by the editor");
             } catch (IllegalArgumentException expected) { }
         }
+        for (JSONObject metadata : new JSONObject[] {
+                new JSONObject().put("pseudoHeaders", new JSONArray().put(new JSONObject()
+                    .put("name", ":authority").put("value", "other.test"))),
+                new JSONObject().put("upstreamProfileId", "proxy-profile"),
+                new JSONObject().put("scripts", new JSONObject().put("enabled", true)),
+                new JSONObject().put("tls", new JSONObject().put("preset", "chrome"))
+        }) {
+            try {
+                MainActivity.validateEditableRequestMetadata(metadata);
+                throw new AssertionError("A copied request silently lost transport metadata: " + metadata);
+            } catch (IllegalArgumentException expected) { }
+        }
         expectOk(NativeCapture.deleteSavedRequest(id));
         JSONObject missing = new JSONObject(NativeCapture.savedRequest(id));
         if (missing.optBoolean("ok"))
