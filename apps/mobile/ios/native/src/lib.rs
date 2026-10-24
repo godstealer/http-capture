@@ -560,6 +560,93 @@ mod tests {
         assert!(device.write_all(&[0x45, 4, 5]).await.is_ok());
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn packet_device_forwards_tcp_and_returns_ip_packets() {
+        use etherparse::{PacketBuilder, SlicedPacket, TransportSlice};
+        use tokio::net::TcpListener;
+
+        unsafe extern "C" fn output(packet: *const u8, length: usize, context: *mut c_void) {
+            let sender = &*(context as *const mpsc::UnboundedSender<Vec<u8>>);
+            sender.send(std::slice::from_raw_parts(packet, length).to_vec()).unwrap();
+        }
+
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (input, incoming) = mpsc::channel(8);
+        let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
+        let context = Box::into_raw(Box::new(output_sender)) as usize;
+        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let mut args = Args::default();
+        args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
+            .unwrap();
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(tun2proxy::run(device, MTU, args, cancel.clone()));
+
+        let source = [10, 111, 0, 2];
+        let destination = [203, 0, 113, 1];
+        let syn = PacketBuilder::ipv4(source, destination, 64)
+            .tcp(41003, 443, 42, 65535).syn();
+        let mut packet = Vec::with_capacity(syn.size(0));
+        syn.write(&mut packet, &[]).unwrap();
+        input.send(packet).await.unwrap();
+
+        let server_sequence = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Tcp(tcp)) = packet.transport {
+                    if tcp.syn() { break tcp.sequence_number(); }
+                }
+            }
+        }).await.expect("iOS packet callback did not receive SYN-ACK");
+        let ack = PacketBuilder::ipv4(source, destination, 64)
+            .tcp(41003, 443, 43, 65535).ack(server_sequence.wrapping_add(1));
+        let mut packet = Vec::with_capacity(ack.size(0));
+        ack.write(&mut packet, &[]).unwrap();
+        input.send(packet).await.unwrap();
+
+        let (mut upstream, _) = tokio::time::timeout(std::time::Duration::from_secs(5), proxy.accept())
+            .await.expect("TUN did not connect to proxy").unwrap();
+        let mut request = [0_u8; 1024];
+        let head = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let size = upstream.read(&mut request).await.unwrap();
+                assert!(size > 0 && head.len() + size <= 4096, "invalid CONNECT head");
+                head.extend_from_slice(&request[..size]);
+            }
+            head
+        }).await.expect("proxy did not receive CONNECT");
+        assert!(head.starts_with(b"CONNECT 203.0.113.1:443 HTTP/1.1\r\n"));
+        upstream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            .await.unwrap();
+
+        let data = PacketBuilder::ipv4(source, destination, 64)
+            .tcp(41003, 443, 43, 65535).psh().ack(server_sequence.wrapping_add(1));
+        let mut packet = Vec::with_capacity(data.size(5));
+        data.write(&mut packet, b"hello").unwrap();
+        input.send(packet).await.unwrap();
+        let size = tokio::time::timeout(std::time::Duration::from_secs(5), upstream.read(&mut request))
+            .await.expect("proxy did not receive TCP payload").unwrap();
+        assert_eq!(&request[..size], b"hello");
+
+        upstream.write_all(b"world").await.unwrap();
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Tcp(tcp)) = packet.transport {
+                    if !tcp.payload().is_empty() { break tcp.payload().to_vec(); }
+                }
+            }
+        }).await.expect("iOS packet callback did not receive TCP response");
+        assert_eq!(payload, b"world");
+
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await.expect("TUN loop did not stop").unwrap().unwrap();
+        unsafe { drop(Box::from_raw(context as *mut mpsc::UnboundedSender<Vec<u8>>)); }
+    }
+
     #[test]
     fn extension_lifecycle_and_blocking_commands() {
         unsafe extern "C" fn packet(_: *const u8, _: usize, _: *mut c_void) {}
