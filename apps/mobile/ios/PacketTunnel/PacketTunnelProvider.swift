@@ -45,10 +45,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.mtu = 1500
         let ipv4 = NEIPv4Settings(addresses: ["10.111.0.2"], subnetMasks: ["255.255.255.255"])
         ipv4.includedRoutes = [NEIPv4Route.default()]
-        ipv4.excludedRoutes = [NEIPv4Route(destinationAddress: "127.0.0.0", subnetMask: "255.0.0.0")]
+        // Keep loopback, link-local and multicast traffic on the physical
+        // interface. The TUN proxy cannot usefully forward these destinations.
+        ipv4.excludedRoutes = [
+            NEIPv4Route(destinationAddress: "127.0.0.0", subnetMask: "255.0.0.0"),
+            NEIPv4Route(destinationAddress: "169.254.0.0", subnetMask: "255.255.0.0"),
+            NEIPv4Route(destinationAddress: "224.0.0.0", subnetMask: "240.0.0.0")
+        ]
         settings.ipv4Settings = ipv4
         let ipv6 = NEIPv6Settings(addresses: ["fd00:198:18::2"], networkPrefixLengths: [128])
         ipv6.includedRoutes = [NEIPv6Route.default()]
+        ipv6.excludedRoutes = [
+            NEIPv6Route(destinationAddress: "::1", networkPrefixLength: 128),
+            NEIPv6Route(destinationAddress: "fe80::", networkPrefixLength: 10),
+            NEIPv6Route(destinationAddress: "ff00::", networkPrefixLength: 8)
+        ]
         settings.ipv6Settings = ipv6
         let dns = NEDNSSettings(servers: ["10.111.0.1"])
         dns.matchDomains = [""]
