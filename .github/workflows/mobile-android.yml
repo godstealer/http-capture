@@ -36,12 +36,15 @@ jobs:
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/RequestBodyCodec.java \
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/RequestHeaderCodec.java \
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/ResponseBodyCodec.java \
+            apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/RecordedRequestBody.java \
             apps/mobile/android/tests/RequestBodyCodecTest.java \
             apps/mobile/android/tests/RequestHeaderCodecTest.java \
-            apps/mobile/android/tests/ResponseBodyCodecTest.java
+            apps/mobile/android/tests/ResponseBodyCodecTest.java \
+            apps/mobile/android/tests/RecordedRequestBodyTest.java
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RequestBodyCodecTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RequestHeaderCodecTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.ResponseBodyCodecTest
+          java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RecordedRequestBodyTest
       - name: Install native dependencies
         run: |
           sudo apt-get update

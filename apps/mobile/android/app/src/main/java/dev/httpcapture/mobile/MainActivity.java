@@ -36,9 +36,7 @@ import java.io.OutputStream;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.nio.charset.CodingErrorAction;
 import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -851,7 +849,7 @@ public final class MainActivity extends Activity {
             return;
         }
         long bodyLength = bodyReference.optLong("byteLength", -1);
-        if (bodyLength < 0 || bodyLength > 64 * 1024) {
+        if (bodyLength < 0 || bodyLength > RecordedRequestBody.MAX_COPY_BYTES) {
             showReplayError("请求正文超过 64 KiB，当前移动编辑器尚不能安全编辑后重发");
             return;
         }
@@ -863,8 +861,14 @@ public final class MainActivity extends Activity {
                 if (row == null) continue;
                 String name = row.optString("name");
                 if (name.startsWith(":")) continue;
+                String value = row.optString("value");
+                if (!name.equals(name.trim()) || !value.equals(value.trim())
+                        || !RequestHeaderCodec.isHeaderLine(name + ": " + value)) {
+                    showReplayError("请求头包含移动编辑器无法无损表示的字符");
+                    return;
+                }
                 if (row.optBoolean("disabled")) headerText.append("# ");
-                headerText.append(name).append(": ").append(row.optString("value")).append('\n');
+                headerText.append(name).append(": ").append(value).append('\n');
             }
         }
         if (headerText.toString().getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
@@ -888,13 +892,17 @@ public final class MainActivity extends Activity {
                     bytes.write(part, 0, part.length);
                     offset += part.length;
                 }
-                String bodyText = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes.toByteArray())).toString();
-                main.post(() -> openManualRequest(request.optString("method", "GET"),
-                    request.optString("url"), headerText.toString(), bodyText,
-                    request.optString("engine", "auto")));
+                RecordedRequestBody editable = RecordedRequestBody.from(bytes.toByteArray());
+                main.post(() -> {
+                    ManualRequestDraft draft = new ManualRequestDraft();
+                    draft.method = request.optString("method", "GET");
+                    draft.url = request.optString("url");
+                    draft.headers = headerText.toString();
+                    draft.body = editable.value;
+                    draft.bodyMode = editable.mode;
+                    draft.engine = request.optString("engine", "auto");
+                    openManualRequest(draft);
+                });
             } catch (Exception error) {
                 main.post(() -> showReplayError(error.getMessage()));
             }
@@ -908,17 +916,6 @@ public final class MainActivity extends Activity {
 
     private void openManualRequest() {
         openManualRequest(new ManualRequestDraft());
-    }
-
-    private void openManualRequest(String initialMethod, String initialUrl,
-                                   String initialHeaders, String initialBody, String initialEngine) {
-        ManualRequestDraft draft = new ManualRequestDraft();
-        draft.method = initialMethod;
-        draft.url = initialUrl;
-        draft.headers = initialHeaders;
-        draft.body = initialBody;
-        draft.engine = initialEngine;
-        openManualRequest(draft);
     }
 
     private void openManualRequest(ManualRequestDraft draft) {
@@ -1068,9 +1065,10 @@ public final class MainActivity extends Activity {
             if ("h3".equals(draft.engine) && !"https".equalsIgnoreCase(uri.getScheme())) {
                 throw new IllegalArgumentException("HTTP/3 需要 HTTPS URL");
             }
-            if (draft.body.getBytes(StandardCharsets.UTF_8).length > 64 * 1024
+            int bodyTextLimit = draft.bodyMode == 5 ? 128 * 1024 : 64 * 1024;
+            if (draft.body.getBytes(StandardCharsets.UTF_8).length > bodyTextLimit
                     || draft.headers.getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
-                throw new IllegalArgumentException("文本输入最多 64 KiB，请求头最多 16 KiB");
+                throw new IllegalArgumentException("文本最多 64 KiB，Base64 输入最多 128 KiB，请求头最多 16 KiB");
             }
             if (draft.bodyMode == 3 && draft.fileUri == null) {
                 throw new IllegalArgumentException("请先选择要发送的文件");
