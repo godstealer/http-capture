@@ -31,7 +31,7 @@ struct ManualRequestDraft: Identifiable {
 }
 
 struct RecordedRequestCopy {
-    private static let maxEditableCopyBytes = 64 * 1024
+    private static let maxEditableCopyBytes = RequestBodyCodec.maxBodyBytes
     let id: String
     let revision: String
     let byteLength: Int
@@ -58,7 +58,7 @@ struct RecordedRequestCopy {
             throw CopyError.invalid("这条记录的方法或 URL 无法无损复制")
         }
         guard (0...Self.maxEditableCopyBytes).contains(length) else {
-            throw CopyError.invalid("请求正文超过 64 KiB，当前 iOS 编辑器不能安全复制后重发")
+            throw CopyError.invalid("请求正文超过 1 MiB，当前 iOS 编辑器不能复制后重发")
         }
         self.id = id
         self.revision = revision
@@ -105,7 +105,8 @@ struct RecordedRequestCopy {
               let base64 = chunk["bodyBase64"] as? String,
               let part = Data(base64Encoded: base64),
               offset == bytes.count, total == byteLength,
-              !part.isEmpty, bytes.count + part.count <= byteLength else {
+              !part.isEmpty, part.count <= 16 * 1024,
+              bytes.count + part.count <= byteLength else {
             throw CopyError.invalid("请求正文分段不完整或已变化，请重新打开详情")
         }
         bytes.append(part)
@@ -119,10 +120,8 @@ struct RecordedRequestCopy {
 
     func draft() throws -> ManualRequestDraft {
         guard bytes.count == byteLength else { throw CopyError.invalid("请求正文尚未读完") }
-        if let text = String(data: bytes, encoding: .utf8),
-           !text.unicodeScalars.contains(where: { scalar in
-               scalar.value < 0x20 && scalar.value != 0x09 && scalar.value != 0x0A && scalar.value != 0x0D
-           }) {
+        if bytes.count <= RequestBodyCodec.maxTextBytes,
+           let text = ResponseBodyCodec.readableText(bytes) {
             return ManualRequestDraft(method: method, url: url, headers: headers,
                                       body: text, bodyMode: .text, engine: engine)
         }

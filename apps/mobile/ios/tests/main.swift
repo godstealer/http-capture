@@ -129,6 +129,40 @@ do {
     let largestEncoded = try RequestBodyCodec.compose(mode: .base64,
         text: largestBinary.base64EncodedString(), file: nil, fileName: nil, mimeType: nil)
     expect(largestEncoded.bytes == largestBinary, "1 MiB 二进制正文无法通过 Base64 编辑器重发")
+    var largeFlow = flow
+    largeFlow["bodyReferences"] = ["request": ["byteLength": largestBinary.count]]
+    var largeCopy = try RecordedRequestCopy(flow: largeFlow)
+    for offset in stride(from: 0, to: largestBinary.count, by: 16 * 1024) {
+        let end = min(offset + 16 * 1024, largestBinary.count)
+        let chunk = largestBinary.subdata(in: offset..<end)
+        let nextOffset: Any = end == largestBinary.count ? NSNull() as Any : end as Any
+        _ = try largeCopy.append(["offset": offset, "totalBytes": largestBinary.count,
+                                  "bodyBase64": chunk.base64EncodedString(),
+                                  "nextOffset": nextOffset])
+    }
+    let largeDraft = try largeCopy.draft()
+    expect(largeDraft.bodyMode == .base64
+           && Data(base64Encoded: largeDraft.body) == largestBinary,
+           "1 MiB 抓包正文复制后字节改变")
+    let overTextLimit = Data(repeating: 65, count: RequestBodyCodec.maxTextBytes + 1)
+    largeFlow["bodyReferences"] = ["request": ["byteLength": overTextLimit.count]]
+    var textCopy = try RecordedRequestCopy(flow: largeFlow)
+    for offset in stride(from: 0, to: overTextLimit.count, by: 16 * 1024) {
+        let end = min(offset + 16 * 1024, overTextLimit.count)
+        let chunk = overTextLimit.subdata(in: offset..<end)
+        let nextOffset: Any = end == overTextLimit.count ? NSNull() as Any : end as Any
+        _ = try textCopy.append(["offset": offset, "totalBytes": overTextLimit.count,
+                                 "bodyBase64": chunk.base64EncodedString(),
+                                 "nextOffset": nextOffset])
+    }
+    let textDraft = try textCopy.draft()
+    expect(textDraft.bodyMode == .base64,
+           "超过 64 KiB 的可读正文应切换到 Base64 编辑器")
+    largeFlow["bodyReferences"] = ["request": ["byteLength": largestBinary.count + 1]]
+    do {
+        _ = try RecordedRequestCopy(flow: largeFlow)
+        preconditionFailure("超过 1 MiB 的抓包正文不应进入编辑器")
+    } catch RecordedRequestCopy.CopyError.invalid(_) { }
     let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: fileURL) }
     try largestBinary.write(to: fileURL)

@@ -920,7 +920,7 @@ public final class MainActivity extends Activity {
         }
         long bodyLength = bodyReference.optLong("byteLength", -1);
         if (bodyLength < 0 || bodyLength > RecordedRequestBody.MAX_COPY_BYTES) {
-            showReplayError("请求正文超过 64 KiB，当前移动编辑器尚不能安全编辑后重发");
+            showReplayError("请求正文超过 1 MiB，当前移动编辑器不能复制后重发");
             return;
         }
         StringBuilder headerText = new StringBuilder();

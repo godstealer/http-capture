@@ -20,13 +20,17 @@ public final class RecordedRequestBodyTest {
         check(RecordedRequestBody.from(new byte[] {'A', 0, 'B'}).mode == 5,
                 "NUL must use the Base64 editor");
 
+        byte[] largeText = new byte[64 * 1024 + 1];
+        Arrays.fill(largeText, (byte) 'A');
+        check(RecordedRequestBody.from(largeText).mode == 5,
+                "text larger than 64 KiB must use the Base64 editor");
         byte[] maximum = new byte[RecordedRequestBody.MAX_COPY_BYTES];
         maximum[maximum.length - 1] = (byte) 255;
         encoded = RecordedRequestBody.from(maximum);
-        check(encoded.value.length() > 64 * 1024 && encoded.value.length() <= 128 * 1024,
-                "64 KiB binary request must fit the Base64 editor");
+        check(encoded.value.length() > 1024 * 1024 && encoded.value.length() <= 1536 * 1024,
+                "1 MiB binary request must fit the Base64 editor");
         check(Arrays.equals(maximum, Base64.getDecoder().decode(encoded.value)),
-                "64 KiB binary request bytes changed");
+                "1 MiB binary request bytes changed");
         ByteArrayOutputStream chunks = new ByteArrayOutputStream();
         check(RecordedRequestBody.appendChunk(chunks, 0, 4, new byte[] {0, (byte) 255}, 2L) == 2,
                 "first chunk offset");

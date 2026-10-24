@@ -6,7 +6,8 @@ import java.util.Base64;
 
 /** Lossless editor representation of a captured request body. */
 final class RecordedRequestBody {
-    static final int MAX_COPY_BYTES = 64 * 1024;
+    static final int MAX_COPY_BYTES = RequestBodyCodec.MAX_BODY_BYTES;
+    private static final int MAX_TEXT_BYTES = 64 * 1024;
     final String value;
     final int mode;
 
@@ -17,8 +18,8 @@ final class RecordedRequestBody {
 
     static RecordedRequestBody from(byte[] bytes) {
         if (bytes.length > MAX_COPY_BYTES)
-            throw new IllegalArgumentException("请求正文超过 64 KiB，当前移动编辑器尚不能安全编辑后重发");
-        if (ResponseBodyCodec.isReadableUtf8(bytes))
+            throw new IllegalArgumentException("请求正文超过 1 MiB，当前移动编辑器不能复制后重发");
+        if (bytes.length <= MAX_TEXT_BYTES && ResponseBodyCodec.isReadableUtf8(bytes))
             return new RecordedRequestBody(new String(bytes, StandardCharsets.UTF_8), 0);
         return new RecordedRequestBody(Base64.getEncoder().encodeToString(bytes), 5);
     }
