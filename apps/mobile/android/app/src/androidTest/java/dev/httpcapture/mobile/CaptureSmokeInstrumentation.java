@@ -496,6 +496,9 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             throw new AssertionError("Collection filter did not return its saved request");
         if (expectOk(NativeCapture.savedRequests(0, "unmatched", newCollectionId)).getInt("total") != 0)
             throw new AssertionError("Combined collection and text filter returned an unrelated request");
+        if (new JSONObject(NativeCapture.changeSavedCollection(new JSONObject()
+                .put("action", "delete").put("id", newCollectionId).toString())).optBoolean("ok"))
+            throw new AssertionError("Collection containing a request was deleted");
         expectOk(NativeCapture.saveRequest(new JSONObject().put("id", id)
             .put("name", name).put("draft", reopened)
             .put("collectionId", oldCollectionId).toString()));
@@ -511,6 +514,23 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 .put("name", name).put("draft", reopened)
                 .put("newCollectionName", newCollectionName).toString())).optBoolean("ok"))
             throw new AssertionError("Duplicate collection name was accepted");
+        String renamedCollection = newCollectionName + "-renamed";
+        expectOk(NativeCapture.changeSavedCollection(new JSONObject()
+            .put("action", "rename").put("id", newCollectionId)
+            .put("name", renamedCollection).toString()));
+        JSONArray renamedRows = expectOk(NativeCapture.savedCollections()).getJSONArray("collections");
+        boolean renamed = false;
+        for (int i = 0; i < renamedRows.length(); i++) {
+            JSONObject item = renamedRows.getJSONObject(i);
+            if (newCollectionId.equals(item.getString("id"))
+                    && renamedCollection.equals(item.getString("name"))
+                    && item.getInt("count") == 0) renamed = true;
+        }
+        if (!renamed) throw new AssertionError("Empty collection rename was not persisted");
+        expectOk(NativeCapture.changeSavedCollection(new JSONObject()
+            .put("action", "delete").put("id", newCollectionId).toString()));
+        if (new JSONObject(NativeCapture.savedRequests(0, "", newCollectionId)).optBoolean("ok"))
+            throw new AssertionError("Deleted collection is still selectable");
 
         String editableHeaders = MainActivity.savedHeaderText(reopenedHeaders);
         if (!editableHeaders.contains("# X-Disabled: omit")

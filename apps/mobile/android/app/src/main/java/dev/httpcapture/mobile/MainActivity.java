@@ -1139,6 +1139,12 @@ public final class MainActivity extends Activity {
                         android.R.layout.simple_spinner_dropdown_item, collectionNames));
                     collectionPicker.setSelection(selectedCollection);
                     filters.addView(collectionPicker);
+                    Button manageCollection = null;
+                    if (!collectionId.isEmpty()) {
+                        manageCollection = new Button(this);
+                        manageCollection.setText("管理当前集合");
+                        filters.addView(manageCollection);
+                    }
                     EditText searchInput = new EditText(this);
                     searchInput.setSingleLine(true);
                     searchInput.setHint("搜索名称、方法或 URL");
@@ -1161,6 +1167,18 @@ public final class MainActivity extends Activity {
                         (dialog, which) -> showSavedRequests(next));
                     AlertDialog dialog = list.create();
                     dialog.show();
+                    if (manageCollection != null) manageCollection.setOnClickListener(view -> {
+                        dialog.dismiss();
+                        for (int i = 0; i < collections.length(); i++) {
+                            JSONObject item = collections.optJSONObject(i);
+                            if (item != null && collectionId.equals(item.optString("id"))) {
+                                showSavedCollectionManager(collectionId, item.optString("name"),
+                                    item.optInt("count"));
+                                return;
+                            }
+                        }
+                        showSavedRequestError("当前集合已不存在，请重新打开请求库");
+                    });
                     collectionPicker.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
                         @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view,
                                                              int position, long id) {
@@ -1192,6 +1210,79 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception error) {
                 main.post(() -> showSavedRequestError(error.getMessage()));
+            }
+        });
+    }
+
+    private void showSavedCollectionManager(String id, String currentName, int count) {
+        EditText name = new EditText(this);
+        name.setSingleLine(true);
+        name.setText(currentName);
+        int inset = (int) (18 * getResources().getDisplayMetrics().density);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(inset, inset, inset, inset);
+        content.addView(name);
+        TextView hint = new TextView(this);
+        hint.setText(count == 0 ? "空集合可以删除。" : "集合内有 " + count + " 条请求；请先移动或删除它们。");
+        content.addView(hint);
+        AlertDialog manager = new AlertDialog.Builder(this)
+            .setTitle("管理集合")
+            .setView(content)
+            .setNegativeButton("返回", (dialog, which) -> showSavedRequests(0))
+            .setNeutralButton("删除空集合", null)
+            .setPositiveButton("重命名", null)
+            .create();
+        manager.setOnShowListener(ignored -> {
+            manager.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(count == 0);
+            manager.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+                manager.dismiss();
+                new AlertDialog.Builder(this).setTitle("删除空集合？")
+                    .setMessage("删除“" + currentName + "”后无法恢复。")
+                    .setNegativeButton("取消", (dialog, which) -> showSavedRequests(0))
+                    .setPositiveButton("删除", (dialog, which) -> changeSavedCollection("delete", id, null, null))
+                    .show();
+            });
+            manager.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                String nextName = name.getText().toString().trim();
+                if (nextName.isEmpty() || nextName.getBytes(StandardCharsets.UTF_8).length > 512) {
+                    name.setError("集合名称须为 1–512 字节");
+                    return;
+                }
+                if (nextName.equals(currentName)) {
+                    manager.dismiss();
+                    showSavedRequests(0);
+                    return;
+                }
+                manager.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                changeSavedCollection("rename", id, nextName, manager);
+            });
+        });
+        manager.show();
+    }
+
+    private void changeSavedCollection(String action, String id, String name, AlertDialog manager) {
+        worker.execute(() -> {
+            try {
+                JSONObject change = new JSONObject().put("action", action).put("id", id);
+                if (name != null) change.put("name", name);
+                JSONObject reply = parseReply(NativeCapture.changeSavedCollection(change.toString()));
+                if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                main.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (manager != null) manager.dismiss();
+                    if ("delete".equals(action)) savedRequestCollectionId = "";
+                    showSavedRequests(0);
+                });
+            } catch (Exception error) {
+                main.post(() -> {
+                    if (manager != null && manager.isShowing())
+                        manager.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                    if (manager == null) new AlertDialog.Builder(this)
+                        .setTitle("集合操作失败").setMessage(error.getMessage())
+                        .setPositiveButton("返回请求库", (dialog, which) -> showSavedRequests(0)).show();
+                    else showSavedRequestError(error.getMessage());
+                });
             }
         });
     }

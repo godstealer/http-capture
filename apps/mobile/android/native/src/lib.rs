@@ -322,6 +322,42 @@ fn saved_collections() -> Result<serde_json::Value, String> {
     }).collect::<Vec<_>>() }))
 }
 
+fn change_saved_collection(raw: &str) -> Result<serde_json::Value, String> {
+    if raw.len() > 2048 { return Err("Collection change exceeds 2 KiB".into()); }
+    let input: serde_json::Value = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    let action = input.get("action").and_then(|value| value.as_str()).ok_or("Missing collection action")?;
+    let id = input.get("id").and_then(|value| value.as_str()).ok_or("Missing collection ID")?;
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    let store = &capture.runtime.engine.store;
+    let mut library = store.library().map_err(|error| error.to_string())?;
+    let index = library.collections.iter().position(|collection| collection.id == id)
+        .ok_or("Collection not found")?;
+    match action {
+        "rename" => {
+            let name = input.get("name").and_then(|value| value.as_str())
+                .ok_or("Missing collection name")?.trim();
+            if name.is_empty() || name.len() > 512 {
+                return Err("Collection name must be 1–512 bytes".into());
+            }
+            if library.collections.iter().enumerate().any(|(other, collection)|
+                other != index && collection.name.eq_ignore_ascii_case(name)) {
+                return Err("Collection name already exists".into());
+            }
+            library.collections[index].name = name.into();
+        }
+        "delete" => {
+            if library.requests.iter().any(|request| request.collection_id == id) {
+                return Err("Move or delete requests before deleting this collection".into());
+            }
+            library.collections.remove(index);
+        }
+        _ => return Err("Unsupported collection action".into()),
+    }
+    let revision = store.save_library(library).map_err(|error| error.to_string())?;
+    Ok(json!({"id": id, "revision": revision}))
+}
+
 fn saved_requests(offset: usize, query: &str, collection_id: &str) -> Result<serde_json::Value, String> {
     let query = query.trim().to_lowercase();
     if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
@@ -648,6 +684,17 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedCollection
     env: JNIEnv<'_>, _class: JClass<'_>,
 ) -> jstring {
     jni_reply(env, saved_collections())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_changeSavedCollection(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
+        change_saved_collection(&raw)
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]
