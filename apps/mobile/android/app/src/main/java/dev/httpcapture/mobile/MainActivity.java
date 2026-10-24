@@ -1614,9 +1614,7 @@ public final class MainActivity extends Activity {
             String bodyBase64 = replacement.getString("bodyBase64");
             if (bodyBase64.length() > 96 * 1024) return false;
             byte[] bytes = Base64.decode(bodyBase64, Base64.DEFAULT);
-            if (bytes.length > 64 * 1024
-                    || !java.util.Arrays.equals(bytes, new String(bytes, StandardCharsets.UTF_8)
-                        .getBytes(StandardCharsets.UTF_8))) return false;
+            if (bytes.length > 64 * 1024) return false;
             JSONArray headers = replacement.getJSONArray("headers");
             int length = 0;
             for (int i = 0; i < headers.length(); i++) {
@@ -1667,6 +1665,8 @@ public final class MainActivity extends Activity {
         EditText statusCode = null;
         EditText headers = null;
         EditText body = null;
+        EditText binaryBody = null;
+        CheckBox binaryMode = null;
         EditText find = null;
         EditText value = null;
         CheckBox regex = null;
@@ -1709,13 +1709,41 @@ public final class MainActivity extends Activity {
             body.setHint("完整响应正文（UTF-8 文本）");
             body.setMinLines(4);
             body.setGravity(Gravity.TOP);
-            if (editing) body.setText(new String(Base64.decode(
-                original.optJSONObject("replacement").optString("bodyBase64"), Base64.DEFAULT), StandardCharsets.UTF_8));
+            binaryBody = new EditText(this);
+            binaryBody.setHint("完整响应正文（Base64 原始字节，可粘贴）");
+            binaryBody.setMinLines(4);
+            binaryBody.setGravity(Gravity.TOP);
+            binaryMode = new CheckBox(this);
+            binaryMode.setText("按 Base64 输入二进制正文");
+            TextView bodyModeHint = new TextView(this);
+            bodyModeHint.setText("两种格式使用独立输入框；保存时只采用当前显示的内容");
+            if (editing) {
+                String savedBase64 = original.optJSONObject("replacement").optString("bodyBase64");
+                byte[] savedBytes = Base64.decode(savedBase64, Base64.DEFAULT);
+                boolean utf8 = java.util.Arrays.equals(savedBytes,
+                    new String(savedBytes, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8));
+                if (utf8) body.setText(new String(savedBytes, StandardCharsets.UTF_8));
+                binaryBody.setText(savedBase64);
+                binaryMode.setChecked(!utf8);
+            }
+            body.setVisibility(binaryMode.isChecked() ? View.GONE : View.VISIBLE);
+            binaryBody.setVisibility(binaryMode.isChecked() ? View.VISIBLE : View.GONE);
+            EditText textInput = body;
+            EditText base64Input = binaryBody;
+            binaryMode.setOnCheckedChangeListener((button, checked) -> {
+                textInput.setVisibility(checked ? View.GONE : View.VISIBLE);
+                base64Input.setVisibility(checked ? View.VISIBLE : View.GONE);
+            });
+            content.addView(binaryMode);
+            content.addView(bodyModeHint);
             content.addView(body);
+            content.addView(binaryBody);
         }
         final EditText finalStatus = statusCode;
         final EditText finalHeaders = headers;
         final EditText finalBody = body;
+        final EditText finalBinaryBody = binaryBody;
+        final CheckBox finalBinaryMode = binaryMode;
         final EditText finalFind = find;
         final EditText finalValue = value;
         final CheckBox finalRegex = regex;
@@ -1762,12 +1790,21 @@ public final class MainActivity extends Activity {
                     if (responseStatus < 200 || responseStatus > 599) {
                         throw new IllegalArgumentException("响应状态码必须为 200–599");
                     }
-                    String responseBody = finalBody.getText().toString();
                     String headerInput = finalHeaders.getText().toString();
-                    if (responseBody.getBytes(StandardCharsets.UTF_8).length > 64 * 1024
-                            || headerInput.getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
-                        throw new IllegalArgumentException("正文最多 64 KiB，响应头最多 16 KiB");
-                    }
+                    if (headerInput.getBytes(StandardCharsets.UTF_8).length > 16 * 1024)
+                        throw new IllegalArgumentException("响应头最多 16 KiB");
+                    byte[] responseBody;
+                    if (finalBinaryMode.isChecked()) {
+                        String encoded = finalBinaryBody.getText().toString().replaceAll("\\s", "");
+                        if (encoded.length() > 96 * 1024)
+                            throw new IllegalArgumentException("Base64 正文最多对应 64 KiB 原始字节");
+                        try { responseBody = Base64.decode(encoded, Base64.DEFAULT); }
+                        catch (IllegalArgumentException error) {
+                            throw new IllegalArgumentException("正文不是有效的 Base64 编码");
+                        }
+                    } else responseBody = finalBody.getText().toString().getBytes(StandardCharsets.UTF_8);
+                    if (responseBody.length > 64 * 1024)
+                        throw new IllegalArgumentException("响应正文最多 64 KiB");
                     JSONArray responseHeaders = new JSONArray();
                     for (String line : headerInput.split("\\r?\\n")) {
                         if (line.trim().isEmpty()) continue;
@@ -1781,8 +1818,7 @@ public final class MainActivity extends Activity {
                     rule.put("replacement", new JSONObject()
                         .put("status", responseStatus)
                         .put("headers", responseHeaders)
-                        .put("bodyBase64", Base64.encodeToString(
-                            responseBody.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP)));
+                        .put("bodyBase64", Base64.encodeToString(responseBody, Base64.NO_WRAP)));
                 }
                 if (editing) rules.put(editIndex, rule);
                 else rules.put(rule);
