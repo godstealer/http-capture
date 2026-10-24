@@ -198,6 +198,9 @@ final class TunnelController: ObservableObject {
     @Published var captureQuic = UserDefaults.standard.object(forKey: "capture_quic") as? Bool ?? false {
         didSet { UserDefaults.standard.set(captureQuic, forKey: "capture_quic") }
     }
+    @Published var systemProxyHint = UserDefaults.standard.object(forKey: "system_proxy_hint") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(systemProxyHint, forKey: "system_proxy_hint") }
+    }
     @Published var urlFilterInput = ""
 
     private var manager: NETunnelProviderManager?
@@ -280,6 +283,10 @@ final class TunnelController: ObservableObject {
                    let number = (self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["capture_quic"] as? NSNumber {
                     self.captureQuic = number.boolValue
                 }
+                if UserDefaults.standard.object(forKey: "system_proxy_hint") == nil,
+                   let number = (self.manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["system_proxy_hint"] as? NSNumber {
+                    self.systemProxyHint = number.boolValue
+                }
                 self.watchStatus()
                 self.refreshStatus()
                 self.profileLoaded = true
@@ -316,7 +323,10 @@ final class TunnelController: ObservableObject {
         let configuration = NETunnelProviderProtocol()
         configuration.providerBundleIdentifier = "dev.httpcapture.mobile.ios.PacketTunnel"
         configuration.serverAddress = "HTTP Capture"
-        configuration.providerConfiguration = ["port": port, "capture_quic": captureQuic]
+        configuration.providerConfiguration = [
+            "port": port, "capture_quic": captureQuic,
+            "system_proxy_hint": systemProxyHint
+        ]
         profile.protocolConfiguration = configuration
         profile.localizedDescription = "HTTP Capture"
         profile.isEnabled = true

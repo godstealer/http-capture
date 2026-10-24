@@ -30,6 +30,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let port = number.intValue
         let captureQuic = (configuration.providerConfiguration?["capture_quic"] as? NSNumber)?.boolValue ?? false
+        let systemProxyHint = (configuration.providerConfiguration?["system_proxy_hint"] as? NSNumber)?.boolValue ?? true
         lifecycleLock.lock()
         if isStarting || isRunning || isStopping {
             lifecycleLock.unlock()
@@ -64,13 +65,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let dns = NEDNSSettings(servers: ["10.111.0.1"])
         dns.matchDomains = [""]
         settings.dnsSettings = dns
-        let proxy = NEProxySettings()
-        proxy.httpEnabled = true
-        proxy.httpServer = NEProxyServer(address: "127.0.0.1", port: port)
-        proxy.httpsEnabled = true
-        proxy.httpsServer = NEProxyServer(address: "127.0.0.1", port: port)
-        proxy.matchDomains = [""]
-        settings.proxySettings = proxy
+        if systemProxyHint {
+            let proxy = NEProxySettings()
+            proxy.httpEnabled = true
+            proxy.httpServer = NEProxyServer(address: "127.0.0.1", port: port)
+            proxy.httpsEnabled = true
+            proxy.httpsServer = NEProxyServer(address: "127.0.0.1", port: port)
+            proxy.matchDomains = [""]
+            settings.proxySettings = proxy
+        }
 
         // The proxy must be listening before the system advertises it to apps.
         // The packet bridge remains idle until readPackets starts below.

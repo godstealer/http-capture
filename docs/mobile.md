@@ -215,6 +215,8 @@ Android 模拟器冒烟现增加同一端口连续两次启动/停止 VPN，并�
 
 Android 10 及以上可在启动前关闭“向应用公布本机 HTTP 代理”。开关默认保持开启以兼容原行为；关闭时 VPN 仍建立完整路由并由 TUN 转发流量，便于测试不使用系统代理提示的应用及 TUN 来源识别。系统代理只是一项建议，应用可以忽略；开关需要重启 VPN 才会生效。模拟器快速启停回归分别启动开启和关闭两种设置，实际流量与代理公布状态仍待设备验证。依据：[Android `VpnService.Builder.setHttpProxy`](https://developer.android.com/reference/android/net/VpnService.Builder#setHttpProxy(android.net.ProxyInfo))。
 
+iOS 也新增同名开关，默认保留原有 `NEProxySettings`；关闭时 Packet Tunnel 仍配置 IPv4/IPv6 默认路由和虚拟 DNS，并由 Rust TUN 桥转发。宿主将设置保存到 VPN 配置，扩展在下一次启动时读取；旧配置缺少该字段时继续启用系统代理提示。此 Swift 改动仍待 Mac 编译、模拟器和 iPhone 流量验收。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。

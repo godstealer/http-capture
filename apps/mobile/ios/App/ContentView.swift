@@ -46,6 +46,10 @@ struct ContentView: View {
                         .disabled(tunnel.shouldOfferStop || tunnel.busy || tunnel.tunnelStopping)
                     Text("开启后需信任本 CA；ECH 或隐藏 SNI 的连接仍不能解密。其他 UDP 保持直连。")
                         .font(.footnote).foregroundStyle(.secondary)
+                    Toggle("向应用公布本机 HTTP 代理", isOn: $tunnel.systemProxyHint)
+                        .disabled(tunnel.shouldOfferStop || tunnel.busy || tunnel.tunnelStopping)
+                    Text("关闭后仍通过 VPN 转发 IP 流量；更改需停止并重新启动抓包。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Text(tunnel.message).foregroundStyle(.secondary)
                     if !tunnel.busy && !tunnel.profileLoaded {
                         Button("重试读取 VPN 配置") { tunnel.loadProfile() }
