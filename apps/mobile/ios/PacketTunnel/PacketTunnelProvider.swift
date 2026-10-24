@@ -11,6 +11,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var generation: UInt64 = 0
     private let healthQueue = DispatchQueue(label: "dev.httpcapture.mobile.tunnel-health")
     private let shutdownQueue = DispatchQueue(label: "dev.httpcapture.mobile.tunnel-shutdown")
+    private let appMessageQueue = DispatchQueue(label: "dev.httpcapture.mobile.app-message",
+                                                qos: .userInitiated, attributes: .concurrent)
     private var healthTimer: DispatchSourceTimer?
 
     private var running: Bool {
@@ -185,8 +187,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 ["ok": false, "error": "请求命令不是有效的 UTF-8 文本"]))
             return
         }
-        let response = request.withCString { input in consumeResponse(hc_ios_command(input)) }
-        completionHandler?(try? JSONSerialization.data(withJSONObject: response))
+        appMessageQueue.async { [weak self] in
+            guard let self else { completionHandler?(nil); return }
+            let response = request.withCString { input in self.consumeResponse(hc_ios_command(input)) }
+            completionHandler?(try? JSONSerialization.data(withJSONObject: response))
+        }
     }
 
     private func readPackets() {
