@@ -56,3 +56,23 @@ jobs:
           path: ${{ runner.temp }}/http-capture-ios-simulator.zip
           if-no-files-found: error
           retention-days: 7
+      - name: Build unsigned iPhone app and Packet Tunnel
+        run: |
+          xcodebuild \
+            -project apps/mobile/ios/HTTPCaptureMobile.xcodeproj \
+            -scheme HTTPCaptureMobile \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath apps/mobile/ios/build/DerivedData \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Verify iPhone app and extension
+        run: |
+          app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphoneos/HTTPCaptureMobile.app
+          test -f "$app/HTTPCaptureMobile"
+          test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
+          lipo -verify_arch arm64 "$app/HTTPCaptureMobile"
+          lipo -verify_arch arm64 "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
