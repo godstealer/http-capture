@@ -8,7 +8,7 @@ public final class NativeCapture {
     public static native String stop();
     public static native String recent(String cursor, String urlContains);
     public static native String metadata(String id);
-    public static native String savedRequests(int offset, String query);
+    public static native String savedRequests(int offset, String query, String collectionId);
     public static native String savedCollections();
     public static native String savedRequest(String id);
     public static native String deleteSavedRequest(String id);

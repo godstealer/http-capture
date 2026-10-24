@@ -78,6 +78,7 @@ public final class MainActivity extends Activity {
     private String nextCursor = "";
     private String urlFilter = "";
     private String savedRequestQuery = "";
+    private String savedRequestCollectionId = "";
     private final List<String> pageHistory = new ArrayList<>();
     private boolean pageLoading;
     private boolean saveDialogLoading;
@@ -1082,14 +1083,20 @@ public final class MainActivity extends Activity {
 
     private void showSavedRequests() {
         savedRequestQuery = "";
+        savedRequestCollectionId = "";
         showSavedRequests(0);
     }
 
     private void showSavedRequests(int offset) {
         final String query = savedRequestQuery;
+        final String collectionId = savedRequestCollectionId;
         worker.execute(() -> {
             try {
-                JSONObject reply = parseReply(NativeCapture.savedRequests(offset, query));
+                JSONObject collectionReply = parseReply(NativeCapture.savedCollections());
+                if (!collectionReply.optBoolean("ok"))
+                    throw new IllegalStateException(collectionReply.optString("error"));
+                JSONArray collections = collectionReply.getJSONObject("value").getJSONArray("collections");
+                JSONObject reply = parseReply(NativeCapture.savedRequests(offset, query, collectionId));
                 if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                 JSONObject page = reply.getJSONObject("value");
                 JSONArray rows = page.getJSONArray("requests");
@@ -1105,11 +1112,33 @@ public final class MainActivity extends Activity {
                 int total = page.optInt("total");
                 int next = page.isNull("nextOffset") ? -1 : page.getInt("nextOffset");
                 main.post(() -> {
-                    if (isFinishing() || isDestroyed() || !query.equals(savedRequestQuery)) return;
+                    if (isFinishing() || isDestroyed() || !query.equals(savedRequestQuery)
+                            || !collectionId.equals(savedRequestCollectionId)) return;
+                    List<String> collectionNames = new ArrayList<>();
+                    List<String> collectionIds = new ArrayList<>();
+                    collectionNames.add("全部集合");
+                    collectionIds.add("");
+                    int selectedCollection = 0;
+                    for (int i = 0; i < collections.length(); i++) {
+                        JSONObject item = collections.optJSONObject(i);
+                        if (item == null) continue;
+                        String id = item.optString("id");
+                        if (id.isEmpty()) continue;
+                        if (id.equals(collectionId)) selectedCollection = collectionIds.size();
+                        collectionIds.add(id);
+                        collectionNames.add(item.optString("name") + " (" + item.optInt("count") + ")");
+                    }
+                    LinearLayout filters = new LinearLayout(this);
+                    filters.setOrientation(LinearLayout.VERTICAL);
                     LinearLayout search = new LinearLayout(this);
                     search.setOrientation(LinearLayout.HORIZONTAL);
                     int padding = (int) (16 * getResources().getDisplayMetrics().density);
                     search.setPadding(padding, 0, padding, 0);
+                    Spinner collectionPicker = new Spinner(this);
+                    collectionPicker.setAdapter(new ArrayAdapter<>(this,
+                        android.R.layout.simple_spinner_dropdown_item, collectionNames));
+                    collectionPicker.setSelection(selectedCollection);
+                    filters.addView(collectionPicker);
                     EditText searchInput = new EditText(this);
                     searchInput.setSingleLine(true);
                     searchInput.setHint("搜索名称、方法或 URL");
@@ -1118,11 +1147,12 @@ public final class MainActivity extends Activity {
                     Button searchButton = new Button(this);
                     searchButton.setText("搜索");
                     search.addView(searchButton);
+                    filters.addView(search);
                     AlertDialog.Builder list = new AlertDialog.Builder(this)
                         .setTitle("已保存请求 · " + total + " 条（长按删除）")
-                        .setView(search)
+                        .setView(filters)
                         .setNegativeButton("关闭", null);
-                    if (labels.length == 0) list.setMessage(query.isEmpty()
+                    if (labels.length == 0) list.setMessage(query.isEmpty() && collectionId.isEmpty()
                         ? "还没有保存的请求。新建请求后点“保存请求”即可。" : "没有匹配的请求。");
                     else list.setItems(labels, (dialog, which) -> openSavedRequest(ids[which]));
                     if (offset > 0) list.setNeutralButton("上一页",
@@ -1131,6 +1161,17 @@ public final class MainActivity extends Activity {
                         (dialog, which) -> showSavedRequests(next));
                     AlertDialog dialog = list.create();
                     dialog.show();
+                    collectionPicker.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+                        @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                                                             int position, long id) {
+                            String nextId = collectionIds.get(position);
+                            if (nextId.equals(savedRequestCollectionId)) return;
+                            savedRequestCollectionId = nextId;
+                            dialog.dismiss();
+                            showSavedRequests(0);
+                        }
+                        @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+                    });
                     searchButton.setOnClickListener(view -> {
                         String nextQuery = searchInput.getText().toString().trim();
                         if (nextQuery.getBytes(StandardCharsets.UTF_8).length > 256) {

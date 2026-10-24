@@ -322,16 +322,19 @@ fn saved_collections() -> Result<serde_json::Value, String> {
     }).collect::<Vec<_>>() }))
 }
 
-fn saved_requests(offset: usize, query: &str) -> Result<serde_json::Value, String> {
+fn saved_requests(offset: usize, query: &str, collection_id: &str) -> Result<serde_json::Value, String> {
     let query = query.trim().to_lowercase();
     if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
     let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = current.as_ref().ok_or("Capture is not running")?;
     let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
-    let matches = |request: &&SavedRequest| query.is_empty()
-        || request.name.to_lowercase().contains(&query)
-        || request.draft.method.to_lowercase().contains(&query)
-        || request.draft.url.to_lowercase().contains(&query);
+    if !collection_id.is_empty() && !library.collections.iter().any(|collection| collection.id == collection_id) {
+        return Err("Selected collection no longer exists".into());
+    }
+    let matches = |request: &&SavedRequest| (collection_id.is_empty() || request.collection_id == collection_id)
+        && (query.is_empty() || request.name.to_lowercase().contains(&query)
+            || request.draft.method.to_lowercase().contains(&query)
+            || request.draft.url.to_lowercase().contains(&query));
     let total = library.requests.iter().filter(&matches).count();
     let requests: Vec<_> = library.requests.iter().rev().filter(matches).skip(offset).take(100).map(|request| {
         let collection_name = library.collections.iter()
@@ -649,11 +652,12 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedCollection
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedRequests(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, offset: jint, query: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, offset: jint, query: JString<'_>, collection_id: JString<'_>,
 ) -> jstring {
     let result = (|| {
         let query: String = env.get_string(&query).map_err(|error| error.to_string())?.into();
-        saved_requests(offset.max(0) as usize, &query)
+        let collection_id: String = env.get_string(&collection_id).map_err(|error| error.to_string())?.into();
+        saved_requests(offset.max(0) as usize, &query, &collection_id)
     })();
     jni_reply(env, result)
 }

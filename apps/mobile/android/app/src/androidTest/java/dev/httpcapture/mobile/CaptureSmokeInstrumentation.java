@@ -450,13 +450,13 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         JSONObject saved = expectOk(NativeCapture.saveRequest(
             new JSONObject().put("name", name).put("draft", draft).toString()));
         String id = saved.getString("id");
-        JSONObject page = expectOk(NativeCapture.savedRequests(0, ""));
+        JSONObject page = expectOk(NativeCapture.savedRequests(0, "", ""));
         JSONArray rows = page.getJSONArray("requests");
         boolean listed = false;
         for (int i = 0; i < rows.length(); i++)
             if (id.equals(rows.getJSONObject(i).getString("id"))) listed = true;
         if (!listed) throw new AssertionError("Saved request missing from library list");
-        JSONObject filtered = expectOk(NativeCapture.savedRequests(0, name.toUpperCase(java.util.Locale.ROOT)));
+        JSONObject filtered = expectOk(NativeCapture.savedRequests(0, name.toUpperCase(java.util.Locale.ROOT), ""));
         if (filtered.getInt("total") != 1 || !id.equals(filtered.getJSONArray("requests").getJSONObject(0).getString("id")))
             throw new AssertionError("Saved request search did not match the full name");
         JSONObject reopened = expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft");
@@ -490,11 +490,19 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     && item.getInt("count") == 1) collectionListed = true;
         }
         if (!collectionListed) throw new AssertionError("New collection was not listed with its request");
+        JSONObject collectionPage = expectOk(NativeCapture.savedRequests(0, "", newCollectionId));
+        if (collectionPage.getInt("total") != 1
+                || !id.equals(collectionPage.getJSONArray("requests").getJSONObject(0).getString("id")))
+            throw new AssertionError("Collection filter did not return its saved request");
+        if (expectOk(NativeCapture.savedRequests(0, "unmatched", newCollectionId)).getInt("total") != 0)
+            throw new AssertionError("Combined collection and text filter returned an unrelated request");
         expectOk(NativeCapture.saveRequest(new JSONObject().put("id", id)
             .put("name", name).put("draft", reopened)
             .put("collectionId", oldCollectionId).toString()));
         if (!oldCollectionId.equals(expectOk(NativeCapture.savedRequest(id)).getString("collectionId")))
             throw new AssertionError("Saved request did not move back to an existing collection");
+        if (expectOk(NativeCapture.savedRequests(0, "", newCollectionId)).getInt("total") != 0)
+            throw new AssertionError("Collection filter still shows a moved request");
         if (new JSONObject(NativeCapture.saveRequest(new JSONObject().put("id", id)
                 .put("name", name).put("draft", reopened)
                 .put("collectionId", "missing-collection").toString())).optBoolean("ok"))
