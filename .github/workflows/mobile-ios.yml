@@ -46,3 +46,13 @@ jobs:
           test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
           lipo -verify_arch "$simulator_arch" "$app/HTTPCaptureMobile"
           lipo -verify_arch "$simulator_arch" "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
+      - name: Package unsigned simulator app
+        run: |
+          app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/HTTPCaptureMobile.app
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/http-capture-ios-simulator.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: http-capture-ios-simulator
+          path: ${{ runner.temp }}/http-capture-ios-simulator.zip
+          if-no-files-found: error
+          retention-days: 7

@@ -60,6 +60,7 @@ iOS 正文桥接已接受字节偏移，详情页可逐段前后浏览完整请�
 iOS 历史记录已接通内核的 URL 包含过滤；搜索时重置分页游标，后续“加载更多”沿用筛选条件。Rust 桥接测试覆盖命中与未命中请求。模拟器工作流现固定使用 Mac 构建机架构，并校验宿主及扩展可执行文件的架构；仍须实际运行该工作流。
 
 在 macOS 上先安装 Xcode、Rust 和 XcodeGen，然后执行 `cd apps/mobile/ios && xcodegen generate`，用 Xcode 打开生成的 `HTTPCaptureMobile.xcodeproj`，为宿主与扩展选择同一个 Apple Team 及支持 Packet Tunnel 的配置。首次构建会运行 `build-native.sh` 编译对应架构的 Rust 静态库。另有仅手动触发的 **iOS mobile build** 工作流，用 Mac 构建机按宿主架构构建无签名模拟器 App 与 Packet Tunnel 扩展，并检查两个可执行文件的架构；尚未执行，且即使通过也不能代替 iPhone 的签名、VPN 权限和流量验收。只有 Xcode 构建、签名和 iPhone 真机 VPN 测试通过后，iOS 才能算可交付。
+手动 iOS 工作流构建通过后会上传 `http-capture-ios-simulator`，内含完整的无签名模拟器 App 与 Packet Tunnel 扩展；该附件仅用于模拟器和构建检查，不能安装到 iPhone。工作流仍待首次执行。
 
 ## ProxyPin 源码参考（2026-10-24）
 
