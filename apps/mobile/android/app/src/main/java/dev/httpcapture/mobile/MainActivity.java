@@ -1173,6 +1173,7 @@ public final class MainActivity extends Activity {
         draft.savedName = saved.getString("name");
         draft.method = request.getString("method");
         draft.url = request.getString("url");
+        validateSavedTarget(draft.method, draft.url);
         draft.engine = request.optString("engine", "auto");
         if (!java.util.Arrays.asList(SEND_ENGINES).contains(draft.engine))
             throw new IllegalArgumentException("此请求使用移动版尚不支持的发送引擎");
@@ -1192,6 +1193,11 @@ public final class MainActivity extends Activity {
             draft.bodyMode = 5;
         }
         return draft;
+    }
+
+    static void validateSavedTarget(String method, String url) {
+        if (!method.equals(method.trim().toUpperCase(Locale.ROOT)) || !url.equals(url.trim()))
+            throw new IllegalArgumentException("此请求的方法或 URL 会被移动编辑器改写，暂不能无损修改");
     }
 
     static String savedHeaderText(JSONArray rows) throws Exception {

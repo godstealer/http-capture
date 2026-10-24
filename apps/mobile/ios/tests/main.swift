@@ -229,6 +229,18 @@ do {
         _ = try SavedRequestCopy(lossySaved)
         preconditionFailure("已保存请求头的前导空格不能被静默删除")
     } catch SavedRequestCopy.CopyError.invalid(_) { }
+    for (key, target) in [("method", "post"), ("url", "https://example.test/saved ")] {
+        var changedRequest = savedValue["request"] as! [String: Any]
+        var changedDraft = changedRequest["draft"] as! [String: Any]
+        changedDraft[key] = target
+        changedRequest["draft"] = changedDraft
+        do {
+            _ = try SavedRequestCopy(["request": changedRequest,
+                "totalBytes": NSNumber(value: savedBody.count),
+                "readToken": NSNumber(value: UInt64(7))])
+            preconditionFailure("已保存请求的方法或 URL 不能被静默改写")
+        } catch SavedRequestCopy.CopyError.invalid(_) { }
+    }
     print("iOS request and response body codecs: PASS")
 } catch {
     fatalError(error.localizedDescription)

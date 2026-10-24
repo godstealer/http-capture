@@ -41,6 +41,10 @@ struct SavedRequestCopy {
               (0...RequestBodyCodec.maxBodyBytes).contains(count) else {
             throw CopyError.invalid("保存的请求信息不完整或正文超过 1 MiB")
         }
+        guard method == method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+              url == url.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw CopyError.invalid("此请求的方法或 URL 会被移动编辑器改写，暂不能无损修改")
+        }
         if request["grpcDraft"] is [String: Any]
             || (request["requestMode"] as? String)?.lowercased() == "grpc" {
             throw CopyError.invalid("gRPC 请求暂不能在移动 HTTP 编辑器中打开")

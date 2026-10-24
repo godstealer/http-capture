@@ -455,6 +455,15 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         } catch (IllegalArgumentException expected) {
             // Keeping the original request untouched is safer than silently trimming its value.
         }
+        for (String[] target : new String[][] {
+                {"post", "https://example.com/"},
+                {"POST", "https://example.com/ "}
+        }) {
+            try {
+                MainActivity.validateSavedTarget(target[0], target[1]);
+                throw new AssertionError("Lossy saved method or URL was accepted by the editor");
+            } catch (IllegalArgumentException expected) { }
+        }
         expectOk(NativeCapture.deleteSavedRequest(id));
         JSONObject missing = new JSONObject(NativeCapture.savedRequest(id));
         if (missing.optBoolean("ok"))
