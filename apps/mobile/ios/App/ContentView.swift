@@ -440,7 +440,12 @@ private struct ManualRequestView: View {
                     Text("文件与最终正文最多 1 MiB（Multipart 包含边界），文本输入最多 64 KiB。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                if tunnel.sendingManualRequest { ProgressView("正在分段发送请求…") }
+                if tunnel.sendingManualRequest {
+                    ProgressView("正在发送请求…")
+                    if tunnel.canCancelManualUpload {
+                        Button("取消正文上传", role: .cancel) { tunnel.cancelManualUpload() }
+                    }
+                }
                 if let inputError { Text(inputError).foregroundStyle(.red) }
                 Text(tunnel.message).font(.footnote).foregroundStyle(.secondary)
             }

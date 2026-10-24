@@ -151,6 +151,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var responseRules: [ResponseRule] = []
     @Published private(set) var responseSaving = false
     @Published private(set) var sendingManualRequest = false
+    @Published private(set) var canCancelManualUpload = false
     @Published var port = UserDefaults.standard.object(forKey: "capture_port") as? Int ?? 8899 {
         didSet { UserDefaults.standard.set(port, forKey: "capture_port") }
     }
@@ -168,6 +169,8 @@ final class TunnelController: ObservableObject {
     private var nextRequestPollID: UInt64 = 0
     private var detailGeneration: UInt64 = 0
     private var replayGeneration: UInt64 = 0
+    private var manualSendGeneration: UInt64 = 0
+    private var manualUploadToken: UInt64?
     private var bodyOffsetHistory: [Int] = []
     private var responseConfig: [String: Any] = [:]
     private var responseVersion = ""
@@ -749,13 +752,18 @@ final class TunnelController: ObservableObject {
         }
         var draft: [String: Any] = ["method": method, "url": url, "engine": engine.rawValue,
                                     "headers": headerRows, "bodyBase64": ""]
+        manualSendGeneration &+= 1
+        let generation = manualSendGeneration
         sendingManualRequest = true
+        canCancelManualUpload = false
+        manualUploadToken = nil
         message = "正在发送请求…"
         if body.bytes.count <= 48 * 1024 {
             draft["bodyBase64"] = body.bytes.base64EncodedString()
             let direct: [String: Any] = ["method": "send_request", "request": draft]
             if let data = try? JSONSerialization.data(withJSONObject: direct), data.count <= 128 * 1024 {
-                send(direct, onFailure: { [weak self] in self?.sendingManualRequest = false }) {
+                send(direct, onFailure: { [weak self] in self?.sendingManualRequest = false },
+                     accept: { [weak self] in self?.manualSendGeneration == generation }) {
                     [weak self] value in self?.finishManualRequest(value)
                 }
                 return
@@ -769,24 +777,68 @@ final class TunnelController: ObservableObject {
             message = "请求头超过 VPN 扩展消息上限 128 KiB"
             return
         }
-        send(begin, onFailure: { [weak self] in self?.sendingManualRequest = false }) { [weak self] value in
+        send(begin, onFailure: { [weak self] in self?.sendingManualRequest = false },
+             accept: { [weak self] in self?.manualSendGeneration == generation }) { [weak self] value in
             guard let self else { return }
-            guard let reply = value as? [String: Any],
-                  let token = (reply["token"] as? NSNumber)?.uint64Value,
-                  (reply["nextOffset"] as? NSNumber)?.intValue == 0 else {
+            let reply = value as? [String: Any]
+            guard let token = (reply?["token"] as? NSNumber)?.uint64Value,
+                  (reply?["nextOffset"] as? NSNumber)?.intValue == 0 else {
+                if let token = (reply?["token"] as? NSNumber)?.uint64Value {
+                    self.cancelUploadToken(token)
+                }
                 self.sendingManualRequest = false
                 self.message = "VPN 扩展没有创建请求上传会话"
                 return
             }
-            self.appendManualBody(body.bytes, token: token, offset: 0)
+            self.manualUploadToken = token
+            self.canCancelManualUpload = true
+            self.appendManualBody(body.bytes, token: token, offset: 0, generation: generation)
         }
     }
 
-    private func appendManualBody(_ body: Data, token: UInt64, offset: Int) {
+    func cancelManualUpload() {
+        guard sendingManualRequest, canCancelManualUpload,
+              let token = manualUploadToken else { return }
+        manualSendGeneration &+= 1
+        sendingManualRequest = false
+        canCancelManualUpload = false
+        manualUploadToken = nil
+        cancelUploadToken(token)
+        message = "已取消正文上传；请求尚未提交"
+    }
+
+    private func cancelUploadToken(_ token: UInt64) {
+        guard let session = manager?.connection as? NETunnelProviderSession,
+              let data = try? JSONSerialization.data(withJSONObject:
+                ["method": "cancel_request_upload", "token": token]) else { return }
+        try? session.sendProviderMessage(data) { _ in }
+    }
+
+    private func failManualUpload(_ token: UInt64) {
+        sendingManualRequest = false
+        canCancelManualUpload = false
+        manualUploadToken = nil
+        cancelUploadToken(token)
+    }
+
+    private func abandonManualSend() {
         guard sendingManualRequest else { return }
+        let token = manualUploadToken
+        manualSendGeneration &+= 1
+        sendingManualRequest = false
+        canCancelManualUpload = false
+        manualUploadToken = nil
+        if let token { cancelUploadToken(token) }
+    }
+
+    private func appendManualBody(_ body: Data, token: UInt64, offset: Int,
+                                  generation: UInt64) {
+        guard sendingManualRequest, manualSendGeneration == generation else { return }
         if offset == body.count {
+            canCancelManualUpload = false
             send(["method": "commit_request_upload", "token": token],
-                 onFailure: { [weak self] in self?.sendingManualRequest = false }) {
+                 onFailure: { [weak self] in self?.failManualUpload(token) },
+                 accept: { [weak self] in self?.manualSendGeneration == generation }) {
                 [weak self] value in self?.finishManualRequest(value)
             }
             return
@@ -795,21 +847,23 @@ final class TunnelController: ObservableObject {
         let command: [String: Any] = ["method": "append_request_upload", "token": token,
                                       "offset": offset,
                                       "bodyBase64": body.subdata(in: offset..<end).base64EncodedString()]
-        send(command, onFailure: { [weak self] in self?.sendingManualRequest = false }) { [weak self] value in
+        send(command, onFailure: { [weak self] in self?.failManualUpload(token) },
+             accept: { [weak self] in self?.manualSendGeneration == generation }) { [weak self] value in
             guard let self else { return }
             guard let result = value as? [String: Any],
                   (result["nextOffset"] as? NSNumber)?.intValue == end else {
-                self.sendingManualRequest = false
+                self.failManualUpload(token)
                 self.message = "请求正文上传位置不一致，请重试"
-                self.send(["method": "cancel_request_upload", "token": token]) { _ in }
                 return
             }
-            self.appendManualBody(body, token: token, offset: end)
+            self.appendManualBody(body, token: token, offset: end, generation: generation)
         }
     }
 
     private func finishManualRequest(_ value: Any?) {
         sendingManualRequest = false
+        canCancelManualUpload = false
+        manualUploadToken = nil
         guard let result = value as? [String: Any] else {
             message = "VPN 扩展没有返回发送结果"
             return
@@ -886,6 +940,7 @@ final class TunnelController: ObservableObject {
     }
 
     private func send(_ command: [String: Any], onFailure: (() -> Void)? = nil,
+                      accept: (() -> Bool)? = nil,
                       completion: @escaping (Any?) -> Void) {
         guard let session = manager?.connection as? NETunnelProviderSession,
               let data = try? JSONSerialization.data(withJSONObject: command) else {
@@ -897,6 +952,7 @@ final class TunnelController: ObservableObject {
             try session.sendProviderMessage(data) { [weak self] response in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    guard accept?() ?? true else { return }
                     guard let response,
                           let object = (try? JSONSerialization.jsonObject(with: response)) as? [String: Any] else {
                         self.message = "VPN 扩展没有返回结果"
@@ -940,6 +996,7 @@ final class TunnelController: ObservableObject {
             message = "VPN 抓包运行中"
             refreshRequests()
         case .connecting, .reasserting:
+            abandonManualSend()
             if tunnelStopping {
                 connected = false
                 message = "正在停止 VPN…"
@@ -955,6 +1012,7 @@ final class TunnelController: ObservableObject {
             requestPageLoading = false
             message = "正在建立 VPN…"
         case .disconnecting:
+            abandonManualSend()
             connected = false
             tunnelStarting = false
             tunnelStopping = true
@@ -965,6 +1023,7 @@ final class TunnelController: ObservableObject {
             requestPageLoading = false
             message = "正在停止 VPN…"
         default:
+            abandonManualSend()
             connected = false
             tunnelStarting = false
             tunnelStopping = false
