@@ -251,6 +251,8 @@ final class TunnelController: ObservableObject {
     private var responseVersion = ""
     private var rawDetail = ""
     private var statusObserver: NSObjectProtocol?
+    private var stopRequested = false
+    private var statusGeneration: UInt64 = 0
 
     var shouldOfferStop: Bool { connected || tunnelStarting }
 
@@ -344,6 +346,7 @@ final class TunnelController: ObservableObject {
                     self.manager = profile
                     self.watchStatus()
                     do {
+                        self.stopRequested = false
                         try profile.connection.startVPNTunnel()
                         self.tunnelStarting = true
                         self.tunnelStopping = false
@@ -383,6 +386,7 @@ final class TunnelController: ObservableObject {
 
     func stop() {
         guard shouldOfferStop, !tunnelStopping else { return }
+        stopRequested = true
         tunnelStarting = false
         tunnelStopping = true
         manager?.connection.stopVPNTunnel()
@@ -1746,6 +1750,7 @@ final class TunnelController: ObservableObject {
     }
 
     private func refreshStatus() {
+        statusGeneration &+= 1
         switch manager?.connection.status {
         case .connected:
             if sessionExportOffline { abandonSessionExport() }
@@ -1794,6 +1799,10 @@ final class TunnelController: ObservableObject {
             message = "正在停止 VPN…"
         default:
             let wasActive = connected || tunnelStarting || tunnelStopping
+            let unexpectedDisconnect = (wasActive && !stopRequested) ||
+                (!wasActive && message == "VPN 意外断开")
+            let previousDisconnectMessage = !wasActive && message.hasPrefix("VPN 意外断开：") ? message : nil
+            stopRequested = false
             if !sessionExportOffline { abandonSessionExport() }
             if !manualSendOffline { abandonManualSend() }
             if wasActive { resetSavedRequestUI() }
@@ -1805,7 +1814,22 @@ final class TunnelController: ObservableObject {
             cursor = nil
             requestPageCursors = [nil]
             requestPageLoading = false
-            if !manualSendOffline && !sessionExportOffline { message = "VPN 未启动" }
+            if !manualSendOffline && !sessionExportOffline {
+                message = unexpectedDisconnect ? "VPN 意外断开" : (previousDisconnectMessage ?? "VPN 未启动")
+                if unexpectedDisconnect, let connection = manager?.connection {
+                    let generation = statusGeneration
+                    connection.fetchLastDisconnectError { [weak self] error in
+                        Task { @MainActor [weak self] in
+                            guard let self,
+                                  self.statusGeneration == generation,
+                                  (self.manager?.connection.status == .disconnected ||
+                                   self.manager?.connection.status == .invalid),
+                                  self.message == "VPN 意外断开" else { return }
+                            if let error { self.message = "VPN 意外断开：\(error.localizedDescription)" }
+                        }
+                    }
+                }
+            }
             clearDetail()
             refreshRequests()
         }

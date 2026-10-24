@@ -219,6 +219,8 @@ Android 10 及以上可在启动前关闭“向应用公布本机 HTTP 代理”
 
 iOS 也新增同名开关，默认保留原有 `NEProxySettings`；关闭时 Packet Tunnel 仍配置 IPv4/IPv6 默认路由和虚拟 DNS，并由 Rust TUN 桥转发。宿主将设置保存到 VPN 配置，扩展在下一次启动时读取；旧配置缺少该字段时继续启用系统代理提示。此 Swift 改动仍待 Mac 编译、模拟器和 iPhone 流量验收。
 
+iOS 宿主现在区分用户主动停止与启动失败、意外断开；后者通过 `NEVPNConnection.fetchLastDisconnectError` 尝试显示系统或 Packet Tunnel 返回的原因，迟到的错误回调不会覆盖新状态。系统未提供具体错误时显示“VPN 意外断开”。该 Swift 改动仍待 Mac 编译，并需在设备上触发启动失败、运行时断开及主动停止分别验收。依据：[Apple 断开错误接口](https://developer.apple.com/documentation/networkextension/nevpnconnection/fetchlastdisconnecterror%28completionhandler%3A%29)。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。
