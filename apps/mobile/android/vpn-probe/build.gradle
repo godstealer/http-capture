@@ -1,0 +1,18 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'dev.httpcapture.probe'
+    compileSdk 33
+
+    defaultConfig {
+        applicationId 'dev.httpcapture.probe'
+        minSdk 26
+        targetSdk 33
+        versionCode 1
+        versionName '0.1.0-test'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

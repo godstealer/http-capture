@@ -2,6 +2,7 @@ package dev.httpcapture.mobile;
 
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Bundle;
@@ -89,6 +90,21 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 throw new AssertionError("VPN did not establish: " + CaptureVpnService.message());
             }
             expectOk(NativeCapture.tunnelStatus());
+            Intent probe = new Intent("dev.httpcapture.probe.RUN");
+            probe.setComponent(new ComponentName("dev.httpcapture.probe",
+                    "dev.httpcapture.probe.ProbeReceiver"));
+            getTargetContext().sendBroadcast(probe);
+            long trafficDeadline = System.currentTimeMillis() + 20_000;
+            boolean captured = false;
+            while (System.currentTimeMillis() < trafficDeadline) {
+                JSONObject page = expectOk(NativeCapture.recent("", "vpn-smoke"));
+                if (page.getJSONArray("requests").length() > 0) {
+                    captured = true;
+                    break;
+                }
+                Thread.sleep(200);
+            }
+            if (!captured) throw new AssertionError("VPN raw TCP request did not enter capture");
         } finally {
             Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
             stop.setAction(CaptureVpnService.ACTION_STOP);

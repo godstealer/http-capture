@@ -4,4 +4,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = 'HttpCaptureMobile'
-include ':app'
+include ':app', ':vpn-probe'

@@ -1,0 +1,36 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="dev.httpcapture.probe"
+4    android:versionCode="1"
+5    android:versionName="0.1.0-test" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="26"
+9        android:targetSdkVersion="33" />
+10
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:3:5-67
+11-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:3:22-64
+12
+13    <application
+13-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:4:5-10:19
+14        android:debuggable="true"
+15        android:extractNativeLibs="false"
+16        android:label="HTTP Capture VPN probe" >
+16-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:4:18-56
+17        <receiver
+17-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:5:9-9:20
+18            android:name="dev.httpcapture.probe.ProbeReceiver"
+18-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:5:19-48
+19            android:exported="true" >
+19-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:5:49-72
+20            <intent-filter>
+20-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:6:13-8:29
+21                <action android:name="dev.httpcapture.probe.RUN" />
+21-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:7:17-68
+21-->E:\PycharmProjects\http-capture\apps\mobile\android\vpn-probe\src\main\AndroidManifest.xml:7:25-65
+22            </intent-filter>
+23        </receiver>
+24    </application>
+25
+26</manifest>

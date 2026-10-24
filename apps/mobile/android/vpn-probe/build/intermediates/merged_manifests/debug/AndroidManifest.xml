@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.httpcapture.probe"
+    android:versionCode="1"
+    android:versionName="0.1.0-test" >
+
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="33" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:debuggable="true"
+        android:extractNativeLibs="false"
+        android:label="HTTP Capture VPN probe" >
+        <receiver
+            android:name="dev.httpcapture.probe.ProbeReceiver"
+            android:exported="true" >
+            <intent-filter>
+                <action android:name="dev.httpcapture.probe.RUN" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

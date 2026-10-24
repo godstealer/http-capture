@@ -3,12 +3,25 @@ set -euo pipefail
 
 app=apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
 test_app=apps/mobile/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+probe_app=apps/mobile/android/vpn-probe/build/outputs/apk/debug/vpn-probe-debug.apk
 test -f "$app"
 test -f "$test_app"
+test -f "$probe_app"
 adb install -r "$app"
 adb install -r "$test_app"
+adb install -r "$probe_app"
 
-if ! output="$(timeout 120s adb shell am instrument -w \
+origin_log="$(mktemp)"
+python3 -m http.server 18080 --bind 127.0.0.1 >"$origin_log" 2>&1 &
+origin_pid=$!
+trap 'kill "$origin_pid" 2>/dev/null || true; rm -f "$origin_log"' EXIT
+for _ in $(seq 1 20); do
+  if curl --noproxy '*' -s -o /dev/null http://127.0.0.1:18080/; then break; fi
+  sleep 1
+done
+kill -0 "$origin_pid"
+
+if ! output="$(timeout 150s adb shell am instrument -w \
   dev.httpcapture.mobile.test/dev.httpcapture.mobile.CaptureSmokeInstrumentation 2>&1)"; then
   printf '%s\n' "$output"
   adb logcat -d -t 200 '*:E' || true
@@ -20,6 +33,12 @@ if ! grep -Fq 'smokeStatus=ok' <<<"$output" ||
   adb logcat -d -t 200 '*:E' || true
   exit 1
 fi
+if ! grep -Fq 'GET /vpn-smoke' "$origin_log"; then
+  cat "$origin_log"
+  echo 'VPN raw TCP request did not reach the origin' >&2
+  exit 1
+fi
+echo 'VPN raw TCP request reached the origin and capture record'
 
 adb shell am start -W -n dev.httpcapture.mobile/.MainActivity
 sleep 3
