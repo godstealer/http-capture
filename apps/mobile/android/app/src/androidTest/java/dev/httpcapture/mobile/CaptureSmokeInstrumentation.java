@@ -253,6 +253,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             }
             if (!foundOffline || !capturedID.equals(expectOk(metadata(capturedID)).optString("id")))
                 throw new AssertionError("Captured flow is not readable after VPN stops");
+            runSavedRequestSmoke();
         } finally {
             if (CaptureVpnService.isManaged()) {
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
@@ -496,19 +497,19 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             .put("engine", "auto").put("headers", headers)
             .put("bodyBase64", Base64.encodeToString(body, Base64.NO_WRAP));
         String name = "mobile-saved-smoke-" + System.nanoTime();
-        JSONObject saved = expectOk(NativeCapture.saveRequest(
+        JSONObject saved = expectOk(saveRequest(
             new JSONObject().put("name", name).put("draft", draft).toString()));
         String id = saved.getString("id");
-        JSONObject page = expectOk(NativeCapture.savedRequests(0, "", ""));
+        JSONObject page = expectOk(savedRequests(0, "", ""));
         JSONArray rows = page.getJSONArray("requests");
         boolean listed = false;
         for (int i = 0; i < rows.length(); i++)
             if (id.equals(rows.getJSONObject(i).getString("id"))) listed = true;
         if (!listed) throw new AssertionError("Saved request missing from library list");
-        JSONObject filtered = expectOk(NativeCapture.savedRequests(0, name.toUpperCase(java.util.Locale.ROOT), ""));
+        JSONObject filtered = expectOk(savedRequests(0, name.toUpperCase(java.util.Locale.ROOT), ""));
         if (filtered.getInt("total") != 1 || !id.equals(filtered.getJSONArray("requests").getJSONObject(0).getString("id")))
             throw new AssertionError("Saved request search did not match the full name");
-        JSONObject reopened = expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft");
+        JSONObject reopened = expectOk(savedRequest(id)).getJSONObject("draft");
         JSONArray reopenedHeaders = reopened.getJSONArray("headers");
         if (reopenedHeaders.length() != 3
                 || !"first".equals(reopenedHeaders.getJSONObject(0).getString("value"))
@@ -517,20 +518,20 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 || !Arrays.equals(body, Base64.decode(reopened.getString("bodyBase64"), Base64.DEFAULT)))
             throw new AssertionError("Saved request changed headers or binary body");
         reopened.put("url", "https://example.com/mobile-saved-updated");
-        JSONObject updated = expectOk(NativeCapture.saveRequest(new JSONObject()
+        JSONObject updated = expectOk(saveRequest(new JSONObject()
             .put("id", id).put("name", name).put("draft", reopened).toString()));
         if (!id.equals(updated.getString("id")) || !"https://example.com/mobile-saved-updated"
-                .equals(expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft").getString("url")))
+                .equals(expectOk(savedRequest(id)).getJSONObject("draft").getString("url")))
             throw new AssertionError("Saved request update was not persisted");
-        String oldCollectionId = expectOk(NativeCapture.savedRequest(id)).getString("collectionId");
+        String oldCollectionId = expectOk(savedRequest(id)).getString("collectionId");
         String newCollectionName = "mobile-collection-smoke-" + System.nanoTime();
-        expectOk(NativeCapture.saveRequest(new JSONObject().put("id", id)
+        expectOk(saveRequest(new JSONObject().put("id", id)
             .put("name", name).put("draft", reopened)
             .put("newCollectionName", newCollectionName).toString()));
-        String newCollectionId = expectOk(NativeCapture.savedRequest(id)).getString("collectionId");
+        String newCollectionId = expectOk(savedRequest(id)).getString("collectionId");
         if (newCollectionId.equals(oldCollectionId))
             throw new AssertionError("Saved request was not moved into the new collection");
-        JSONArray collections = expectOk(NativeCapture.savedCollections()).getJSONArray("collections");
+        JSONArray collections = expectOk(savedCollections()).getJSONArray("collections");
         boolean collectionListed = false;
         for (int i = 0; i < collections.length(); i++) {
             JSONObject item = collections.getJSONObject(i);
@@ -539,35 +540,35 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     && item.getInt("count") == 1) collectionListed = true;
         }
         if (!collectionListed) throw new AssertionError("New collection was not listed with its request");
-        JSONObject collectionPage = expectOk(NativeCapture.savedRequests(0, "", newCollectionId));
+        JSONObject collectionPage = expectOk(savedRequests(0, "", newCollectionId));
         if (collectionPage.getInt("total") != 1
                 || !id.equals(collectionPage.getJSONArray("requests").getJSONObject(0).getString("id")))
             throw new AssertionError("Collection filter did not return its saved request");
-        if (expectOk(NativeCapture.savedRequests(0, "unmatched", newCollectionId)).getInt("total") != 0)
+        if (expectOk(savedRequests(0, "unmatched", newCollectionId)).getInt("total") != 0)
             throw new AssertionError("Combined collection and text filter returned an unrelated request");
-        if (new JSONObject(NativeCapture.changeSavedCollection(new JSONObject()
+        if (new JSONObject(changeSavedCollection(new JSONObject()
                 .put("action", "delete").put("id", newCollectionId).toString())).optBoolean("ok"))
             throw new AssertionError("Collection containing a request was deleted");
-        expectOk(NativeCapture.saveRequest(new JSONObject().put("id", id)
+        expectOk(saveRequest(new JSONObject().put("id", id)
             .put("name", name).put("draft", reopened)
             .put("collectionId", oldCollectionId).toString()));
-        if (!oldCollectionId.equals(expectOk(NativeCapture.savedRequest(id)).getString("collectionId")))
+        if (!oldCollectionId.equals(expectOk(savedRequest(id)).getString("collectionId")))
             throw new AssertionError("Saved request did not move back to an existing collection");
-        if (expectOk(NativeCapture.savedRequests(0, "", newCollectionId)).getInt("total") != 0)
+        if (expectOk(savedRequests(0, "", newCollectionId)).getInt("total") != 0)
             throw new AssertionError("Collection filter still shows a moved request");
-        if (new JSONObject(NativeCapture.saveRequest(new JSONObject().put("id", id)
+        if (new JSONObject(saveRequest(new JSONObject().put("id", id)
                 .put("name", name).put("draft", reopened)
                 .put("collectionId", "missing-collection").toString())).optBoolean("ok"))
             throw new AssertionError("Unknown collection was accepted");
-        if (new JSONObject(NativeCapture.saveRequest(new JSONObject().put("id", id)
+        if (new JSONObject(saveRequest(new JSONObject().put("id", id)
                 .put("name", name).put("draft", reopened)
                 .put("newCollectionName", newCollectionName).toString())).optBoolean("ok"))
             throw new AssertionError("Duplicate collection name was accepted");
         String renamedCollection = newCollectionName + "-renamed";
-        expectOk(NativeCapture.changeSavedCollection(new JSONObject()
+        expectOk(changeSavedCollection(new JSONObject()
             .put("action", "rename").put("id", newCollectionId)
             .put("name", renamedCollection).toString()));
-        JSONArray renamedRows = expectOk(NativeCapture.savedCollections()).getJSONArray("collections");
+        JSONArray renamedRows = expectOk(savedCollections()).getJSONArray("collections");
         boolean renamed = false;
         for (int i = 0; i < renamedRows.length(); i++) {
             JSONObject item = renamedRows.getJSONObject(i);
@@ -576,9 +577,9 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     && item.getInt("count") == 0) renamed = true;
         }
         if (!renamed) throw new AssertionError("Empty collection rename was not persisted");
-        expectOk(NativeCapture.changeSavedCollection(new JSONObject()
+        expectOk(changeSavedCollection(new JSONObject()
             .put("action", "delete").put("id", newCollectionId).toString()));
-        if (new JSONObject(NativeCapture.savedRequests(0, "", newCollectionId)).optBoolean("ok"))
+        if (new JSONObject(savedRequests(0, "", newCollectionId)).optBoolean("ok"))
             throw new AssertionError("Deleted collection is still selectable");
 
         String editableHeaders = MainActivity.savedHeaderText(reopenedHeaders);
@@ -614,8 +615,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 throw new AssertionError("A copied request silently lost transport metadata: " + metadata);
             } catch (IllegalArgumentException expected) { }
         }
-        expectOk(NativeCapture.deleteSavedRequest(id));
-        JSONObject missing = new JSONObject(NativeCapture.savedRequest(id));
+        expectOk(deleteSavedRequest(id));
+        JSONObject missing = new JSONObject(savedRequest(id));
         if (missing.optBoolean("ok"))
             throw new AssertionError("Deleted request is still present in the library");
     }
@@ -807,6 +808,31 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
 
     private String metadata(String id) {
         return NativeCapture.metadata(getTargetContext().getFilesDir().getAbsolutePath(), id);
+    }
+
+    private String savedCollections() {
+        return NativeCapture.savedCollections(getTargetContext().getFilesDir().getAbsolutePath());
+    }
+
+    private String savedRequests(int offset, String query, String collectionId) {
+        return NativeCapture.savedRequests(getTargetContext().getFilesDir().getAbsolutePath(),
+            offset, query, collectionId);
+    }
+
+    private String savedRequest(String id) {
+        return NativeCapture.savedRequest(getTargetContext().getFilesDir().getAbsolutePath(), id);
+    }
+
+    private String saveRequest(String json) {
+        return NativeCapture.saveRequest(getTargetContext().getFilesDir().getAbsolutePath(), json);
+    }
+
+    private String deleteSavedRequest(String id) {
+        return NativeCapture.deleteSavedRequest(getTargetContext().getFilesDir().getAbsolutePath(), id);
+    }
+
+    private String changeSavedCollection(String json) {
+        return NativeCapture.changeSavedCollection(getTargetContext().getFilesDir().getAbsolutePath(), json);
     }
 
     private static JSONObject expectOk(String reply) throws Exception {

@@ -188,8 +188,8 @@ public final class MainActivity extends Activity {
         exportSessionButton.setEnabled(true);
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
-        manualRequest.setEnabled(false);
-        savedRequestsButton.setEnabled(false);
+        manualRequest.setEnabled(true);
+        savedRequestsButton.setEnabled(true);
 
         TextView hint = new TextView(this);
         hint.setText("首次启动需要授权系统 VPN；HTTPS 正文还需要目标 App 信任本 CA。普通 UDP 直连且不记录；开启 HTTP/3 后，UDP/443 会尝试进入本机解密入口，不支持 ECH/隐藏 SNI。");
@@ -566,8 +566,8 @@ public final class MainActivity extends Activity {
             exportSessionButton.setEnabled(true);
             blockingRules.setEnabled(false);
             responseRewriteRules.setEnabled(false);
-            manualRequest.setEnabled(false);
-            savedRequestsButton.setEnabled(false);
+            manualRequest.setEnabled(true);
+            savedRequestsButton.setEnabled(true);
             status.setText("正在停止 VPN…");
             waitForVpnStop();
             return;
@@ -584,8 +584,8 @@ public final class MainActivity extends Activity {
                 exportSessionButton.setEnabled(true);
                 blockingRules.setEnabled(false);
                 responseRewriteRules.setEnabled(false);
-                manualRequest.setEnabled(false);
-                savedRequestsButton.setEnabled(false);
+                manualRequest.setEnabled(true);
+                savedRequestsButton.setEnabled(true);
                 loadSelectedPage();
             });
         });
@@ -604,8 +604,8 @@ public final class MainActivity extends Activity {
         exportSessionButton.setEnabled(true);
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
-        manualRequest.setEnabled(false);
-        savedRequestsButton.setEnabled(false);
+        manualRequest.setEnabled(true);
+        savedRequestsButton.setEnabled(true);
         loadSelectedPage();
     }
 
@@ -641,8 +641,8 @@ public final class MainActivity extends Activity {
                         exportSessionButton.setEnabled(true);
                         blockingRules.setEnabled(false);
                         responseRewriteRules.setEnabled(false);
-                        manualRequest.setEnabled(false);
-                        savedRequestsButton.setEnabled(false);
+                        manualRequest.setEnabled(true);
+                        savedRequestsButton.setEnabled(true);
                         waitForVpnStop();
                         return;
                     }
@@ -723,7 +723,6 @@ public final class MainActivity extends Activity {
         contentLayout.setOrientation(LinearLayout.VERTICAL);
         Button edit = new Button(this);
         edit.setText("复制到新请求");
-        edit.setEnabled(running);
         contentLayout.addView(edit);
         Button raw = new Button(this);
         raw.setText("查看原始详情");
@@ -750,7 +749,6 @@ public final class MainActivity extends Activity {
         }
         AlertDialog shown = dialog.show();
         edit.setOnClickListener(view -> {
-            if (!running) return;
             shown.dismiss();
             editRecordedRequest(flow);
         });
@@ -1086,6 +1084,7 @@ public final class MainActivity extends Activity {
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
         dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(running);
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
                 copyManualInputs(draft, method, url, headers, body, engine, bodyMode);
                 if (sendManualRequest(draft)) dialog.dismiss();
@@ -1120,11 +1119,13 @@ public final class MainActivity extends Activity {
         final String collectionId = savedRequestCollectionId;
         worker.execute(() -> {
             try {
-                JSONObject collectionReply = parseReply(NativeCapture.savedCollections());
+                JSONObject collectionReply = parseReply(NativeCapture.savedCollections(
+                    getFilesDir().getAbsolutePath()));
                 if (!collectionReply.optBoolean("ok"))
                     throw new IllegalStateException(collectionReply.optString("error"));
                 JSONArray collections = collectionReply.getJSONObject("value").getJSONArray("collections");
-                JSONObject reply = parseReply(NativeCapture.savedRequests(offset, query, collectionId));
+                JSONObject reply = parseReply(NativeCapture.savedRequests(
+                    getFilesDir().getAbsolutePath(), offset, query, collectionId));
                 if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                 JSONObject page = reply.getJSONObject("value");
                 JSONArray rows = page.getJSONArray("requests");
@@ -1294,7 +1295,8 @@ public final class MainActivity extends Activity {
             try {
                 JSONObject change = new JSONObject().put("action", action).put("id", id);
                 if (name != null) change.put("name", name);
-                JSONObject reply = parseReply(NativeCapture.changeSavedCollection(change.toString()));
+                JSONObject reply = parseReply(NativeCapture.changeSavedCollection(
+                    getFilesDir().getAbsolutePath(), change.toString()));
                 if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                 main.post(() -> {
                     if (isFinishing() || isDestroyed()) return;
@@ -1318,7 +1320,8 @@ public final class MainActivity extends Activity {
     private void openSavedRequest(String id) {
         worker.execute(() -> {
             try {
-                JSONObject reply = parseReply(NativeCapture.savedRequest(id));
+                JSONObject reply = parseReply(NativeCapture.savedRequest(
+                    getFilesDir().getAbsolutePath(), id));
                 if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                 ManualRequestDraft draft = manualDraftFromSaved(reply.getJSONObject("value"));
                 main.post(() -> {
@@ -1336,7 +1339,8 @@ public final class MainActivity extends Activity {
             .setNegativeButton("取消", (dialog, which) -> showSavedRequests(returnOffset))
             .setPositiveButton("删除", (dialog, which) -> worker.execute(() -> {
                 try {
-                    JSONObject reply = parseReply(NativeCapture.deleteSavedRequest(id));
+                    JSONObject reply = parseReply(NativeCapture.deleteSavedRequest(
+                        getFilesDir().getAbsolutePath(), id));
                     if (!reply.optBoolean("ok"))
                         throw new IllegalStateException(reply.optString("error"));
                     main.post(() -> {
@@ -1444,7 +1448,8 @@ public final class MainActivity extends Activity {
         saveDialogLoading = true;
         worker.execute(() -> {
             try {
-                JSONObject reply = parseReply(NativeCapture.savedCollections());
+                JSONObject reply = parseReply(NativeCapture.savedCollections(
+                    getFilesDir().getAbsolutePath()));
                 if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                 JSONArray collections = reply.getJSONObject("value").getJSONArray("collections");
                 main.post(() -> {
@@ -1546,7 +1551,8 @@ public final class MainActivity extends Activity {
                         if (draft.savedId != null) input.put("id", draft.savedId);
                         if (collectionIndex == createIndex) input.put("newCollectionName", newName);
                         else if (!collectionId.isEmpty()) input.put("collectionId", collectionId);
-                        JSONObject reply = parseReply(NativeCapture.saveRequest(input.toString()));
+                        JSONObject reply = parseReply(NativeCapture.saveRequest(
+                            getFilesDir().getAbsolutePath(), input.toString()));
                         if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                         main.post(() -> {
                             if (isFinishing() || isDestroyed()) return;
@@ -1625,6 +1631,10 @@ public final class MainActivity extends Activity {
     }
 
     private boolean sendManualRequest(ManualRequestDraft draft) {
+        if (!running) {
+            status.setText("请先启动代理，再发送请求；当前仍可保存草稿");
+            return false;
+        }
         String requestMethod = draft.method.trim().toUpperCase(Locale.ROOT);
         String requestUrl = draft.url.trim();
         try {

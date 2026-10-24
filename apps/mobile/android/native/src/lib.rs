@@ -330,24 +330,20 @@ struct SaveMobileRequest {
     draft: RequestDraft,
 }
 
-fn saved_collections() -> Result<serde_json::Value, String> {
-    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+fn saved_collections(data_dir: &Path) -> Result<serde_json::Value, String> {
+    let library = session_store(data_dir)?.library().map_err(|error| error.to_string())?;
     Ok(json!({"collections": library.collections.iter().map(|collection| {
         let count = library.requests.iter().filter(|request| request.collection_id == collection.id).count();
         json!({"id": collection.id, "name": collection.name, "count": count})
     }).collect::<Vec<_>>() }))
 }
 
-fn change_saved_collection(raw: &str) -> Result<serde_json::Value, String> {
+fn change_saved_collection(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
     if raw.len() > 2048 { return Err("Collection change exceeds 2 KiB".into()); }
     let input: serde_json::Value = serde_json::from_str(raw).map_err(|error| error.to_string())?;
     let action = input.get("action").and_then(|value| value.as_str()).ok_or("Missing collection action")?;
     let id = input.get("id").and_then(|value| value.as_str()).ok_or("Missing collection ID")?;
-    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let store = &capture.runtime.engine.store;
+    let store = session_store(data_dir)?;
     let mut library = store.library().map_err(|error| error.to_string())?;
     let index = library.collections.iter().position(|collection| collection.id == id)
         .ok_or("Collection not found")?;
@@ -376,12 +372,10 @@ fn change_saved_collection(raw: &str) -> Result<serde_json::Value, String> {
     Ok(json!({"id": id, "revision": revision}))
 }
 
-fn saved_requests(offset: usize, query: &str, collection_id: &str) -> Result<serde_json::Value, String> {
+fn saved_requests(data_dir: &Path, offset: usize, query: &str, collection_id: &str) -> Result<serde_json::Value, String> {
     let query = query.trim().to_lowercase();
     if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
-    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    let library = session_store(data_dir)?.library().map_err(|error| error.to_string())?;
     if !collection_id.is_empty() && !library.collections.iter().any(|collection| collection.id == collection_id) {
         return Err("Selected collection no longer exists".into());
     }
@@ -402,10 +396,8 @@ fn saved_requests(offset: usize, query: &str, collection_id: &str) -> Result<ser
         "requests": requests}))
 }
 
-fn saved_request(id: &str) -> Result<serde_json::Value, String> {
-    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+fn saved_request(data_dir: &Path, id: &str) -> Result<serde_json::Value, String> {
+    let library = session_store(data_dir)?.library().map_err(|error| error.to_string())?;
     let request = library.requests.iter().find(|request| request.id == id)
         .ok_or("Saved request not found")?;
     if request.draft.body_base64.len() > (1024 * 1024 + 2) / 3 * 4 {
@@ -414,10 +406,8 @@ fn saved_request(id: &str) -> Result<serde_json::Value, String> {
     serde_json::to_value(request).map_err(|error| error.to_string())
 }
 
-fn delete_saved_request(id: &str) -> Result<serde_json::Value, String> {
-    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let store = &capture.runtime.engine.store;
+fn delete_saved_request(data_dir: &Path, id: &str) -> Result<serde_json::Value, String> {
+    let store = session_store(data_dir)?;
     let mut library = store.library().map_err(|error| error.to_string())?;
     let index = library.requests.iter().position(|request| request.id == id)
         .ok_or("Saved request not found")?;
@@ -426,7 +416,7 @@ fn delete_saved_request(id: &str) -> Result<serde_json::Value, String> {
     Ok(json!({"id": id, "revision": revision}))
 }
 
-fn save_request(raw: &str) -> Result<serde_json::Value, String> {
+fn save_request(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
     if raw.len() > 2 * 1024 * 1024 { return Err("Saved request exceeds 2 MiB".into()); }
     let input: SaveMobileRequest = serde_json::from_str(raw).map_err(|error| error.to_string())?;
     let name = input.name.trim();
@@ -435,9 +425,7 @@ fn save_request(raw: &str) -> Result<serde_json::Value, String> {
         return Err("Request body exceeds the 1 MiB mobile limit".into());
     }
     capture_core::http1::validate_draft(&input.draft).map_err(|error| error.to_string())?;
-    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let store = &capture.runtime.engine.store;
+    let store = session_store(data_dir)?;
     let mut library = store.library().map_err(|error| error.to_string())?;
     if input.collection_id.is_some() && input.new_collection_name.is_some() {
         return Err("Choose an existing collection or create a new one".into());
@@ -709,63 +697,72 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_metadata(
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedCollections(
-    env: JNIEnv<'_>, _class: JClass<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>,
 ) -> jstring {
-    jni_reply(env, saved_collections())
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        saved_collections(Path::new(&data_dir))
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_changeSavedCollection(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, raw: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
-        change_saved_collection(&raw)
+        change_saved_collection(Path::new(&data_dir), &raw)
     })();
     jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedRequests(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, offset: jint, query: JString<'_>, collection_id: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, offset: jint, query: JString<'_>, collection_id: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let query: String = env.get_string(&query).map_err(|error| error.to_string())?.into();
         let collection_id: String = env.get_string(&collection_id).map_err(|error| error.to_string())?.into();
-        saved_requests(offset.max(0) as usize, &query, &collection_id)
+        saved_requests(Path::new(&data_dir), offset.max(0) as usize, &query, &collection_id)
     })();
     jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedRequest(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, id: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, id: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let id: String = env.get_string(&id).map_err(|error| error.to_string())?.into();
-        saved_request(&id)
+        saved_request(Path::new(&data_dir), &id)
     })();
     jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_deleteSavedRequest(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, id: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, id: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let id: String = env.get_string(&id).map_err(|error| error.to_string())?.into();
-        delete_saved_request(&id)
+        delete_saved_request(Path::new(&data_dir), &id)
     })();
     jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_saveRequest(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, raw: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
-        save_request(&raw)
+        save_request(Path::new(&data_dir), &raw)
     })();
     jni_reply(env, result)
 }
@@ -1020,5 +1017,40 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&destination).unwrap()).unwrap();
         assert_eq!(session["format"], "http-capture-session");
         assert_eq!(session["flows"][0]["id"], "offline-flow");
+    }
+
+    #[test]
+    fn saved_request_library_works_without_capture() {
+        let _guard = SERIAL.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let raw = json!({"name": "offline request", "draft": {
+            "method": "GET", "url": "https://example.test/offline",
+            "headers": [], "bodyBase64": ""
+        }}).to_string();
+        let created = save_request(dir.path(), &raw).unwrap();
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(saved_requests(dir.path(), 0, "OFFLINE", "").unwrap()["total"], 1);
+        assert_eq!(saved_request(dir.path(), id).unwrap()["draft"]["url"],
+            "https://example.test/offline");
+        let collections = saved_collections(dir.path()).unwrap();
+        assert_eq!(collections["collections"][0]["count"], 1);
+        let collection_id = collections["collections"][0]["id"].as_str().unwrap().to_owned();
+
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap().local_addr().unwrap().port();
+        start(dir.path(), port).unwrap();
+        assert_eq!(saved_requests(dir.path(), 0, "offline", "").unwrap()["total"], 1);
+        stop().unwrap();
+        assert_eq!(delete_saved_request(dir.path(), id).unwrap()["id"], id);
+        assert_eq!(saved_requests(dir.path(), 0, "offline", "").unwrap()["total"], 0);
+        change_saved_collection(dir.path(), &json!({
+            "action": "rename", "id": collection_id, "name": "offline collection"
+        }).to_string()).unwrap();
+        assert_eq!(saved_collections(dir.path()).unwrap()["collections"][0]["name"],
+            "offline collection");
+        change_saved_collection(dir.path(), &json!({
+            "action": "delete", "id": collection_id
+        }).to_string()).unwrap();
+        assert!(saved_collections(dir.path()).unwrap()["collections"].as_array().unwrap().is_empty());
     }
 }

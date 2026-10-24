@@ -8,11 +8,13 @@
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，121,204,878 字节，SHA-256 `e4ea99c851ff21687f53dfbd2c14cc4a48a133be7f102be690da0c8ddff63aa8`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，121,208,286 字节，SHA-256 `e9754fa2578d675096576a0f95a62fa2bb8e4a9dd3f4cbb9116346afc1eb4686`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
-Android 停止抓包后现在还能搜索、翻页、打开历史详情并按段查看请求与响应正文；重启应用后也会自动加载本地记录。离线读取在应用进程内复用同一个存储实例，使详情给出的正文修订令牌在后续分段读取时仍有效；若记录确实变化，原有版本校验继续生效。停止时“复制到新请求”不可用，需先启动代理。Rust 测试覆盖停抓后的列表、详情、正文和会话导出，Android 应用与 instrumentation 源码已编译，双架构 APK 已重建；设备界面交互仍待验收。
+Android 停止抓包后现在还能搜索、翻页、打开历史详情并按段查看请求与响应正文；重启应用后也会自动加载本地记录。离线读取在应用进程内复用同一个存储实例，使详情给出的正文修订令牌在后续分段读取时仍有效；若记录确实变化，原有版本校验继续生效。Rust 测试覆盖停抓后的列表、详情、正文和会话导出，Android 应用与 instrumentation 源码已编译，双架构 APK 已重建；设备界面交互仍待验收。
+
+Android 请求库也可在停抓状态下打开：新建或从抓包记录复制的请求可先编辑、保存到集合，已有请求可搜索、修改、移动和删除，集合可重命名或删除空集合。发送按钮在代理未运行时禁用，启动后可重新打开请求发送。Rust 测试覆盖离线保存、检索、删除以及运行状态切换；设备测试增加停抓后再次执行请求库操作，Java 与双架构 APK 离线编译通过，触屏交互仍待设备验收。
 
 2026-10-24 首次远端构建：同一提交的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40053342564)前端、Linux、macOS 和 Windows 全部通过；[Android 构建](https://github.com/godstealer/http-capture/actions/runs/40053342578)在 SDK 安装阶段因 action 默认请求已移除的 `tools` 包而失败，未编译 APK；[iOS 构建](https://github.com/godstealer/http-capture/actions/runs/40053342628)通过 Swift 测试、Xcode 工程生成和无签名模拟器 App/Packet Tunnel 编译，随后因 `lipo` 校验命令参数顺序错误而中止，尚未编译 iPhone 目标或上传附件。两处工作流脚本随后一并修复并完成重跑。
 

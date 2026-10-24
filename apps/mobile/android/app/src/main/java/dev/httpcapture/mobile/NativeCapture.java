@@ -9,12 +9,12 @@ public final class NativeCapture {
     public static native String recent(String dataDir, String cursor, String urlContains);
     public static native String exportSession(String dataDir, String path);
     public static native String metadata(String dataDir, String id);
-    public static native String savedRequests(int offset, String query, String collectionId);
-    public static native String savedCollections();
-    public static native String changeSavedCollection(String changeJson);
-    public static native String savedRequest(String id);
-    public static native String deleteSavedRequest(String id);
-    public static native String saveRequest(String requestJson);
+    public static native String savedRequests(String dataDir, int offset, String query, String collectionId);
+    public static native String savedCollections(String dataDir);
+    public static native String changeSavedCollection(String dataDir, String changeJson);
+    public static native String savedRequest(String dataDir, String id);
+    public static native String deleteSavedRequest(String dataDir, String id);
+    public static native String saveRequest(String dataDir, String requestJson);
     public static native String certificate();
     public static native String certificates();
     public static native String importCertificate(String importJson);
