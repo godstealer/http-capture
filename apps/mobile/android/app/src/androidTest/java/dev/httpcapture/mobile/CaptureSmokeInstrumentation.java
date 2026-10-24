@@ -254,6 +254,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (!foundOffline || !capturedID.equals(expectOk(metadata(capturedID)).optString("id")))
                 throw new AssertionError("Captured flow is not readable after VPN stops");
             runSavedRequestSmoke();
+            runOfflineRulesSmoke();
         } finally {
             if (CaptureVpnService.isManaged()) {
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
@@ -267,6 +268,47 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (CaptureVpnService.isManaged()) {
                 throw new AssertionError("VPN did not stop: " + CaptureVpnService.message());
             }
+        }
+    }
+
+    private void runOfflineRulesSmoke() throws Exception {
+        String dataDir = getTargetContext().getFilesDir().getAbsolutePath();
+        JSONObject originalBlocking = expectOk(NativeCapture.blocking(dataDir));
+        JSONObject blocking = new JSONObject().put("enabled", true).put("scope", "capture")
+            .put("rules", new JSONArray().put(new JSONObject()
+                .put("id", "offline-smoke").put("enabled", true)
+                .put("matchType", "urlContains").put("pattern", "/offline-smoke")
+                .put("method", "")));
+        try {
+            expectOk(NativeCapture.configureBlocking(dataDir, blocking.toString()));
+            JSONObject saved = expectOk(NativeCapture.blocking(dataDir));
+            if (!"offline-smoke".equals(saved.getJSONArray("rules").getJSONObject(0).getString("id")))
+                throw new AssertionError("Offline blocking rule did not persist");
+        } finally {
+            expectOk(NativeCapture.configureBlocking(dataDir, originalBlocking.toString()));
+        }
+
+        JSONObject originalRewrite = expectOk(NativeCapture.responseRewrite(dataDir));
+        JSONObject config = new JSONObject().put("enabled", true).put("scope", "capture")
+            .put("rules", new JSONArray().put(new JSONObject()
+                .put("id", "offline-rewrite-smoke").put("name", "offline smoke")
+                .put("enabled", true).put("matchType", "urlContains")
+                .put("pattern", "/offline-rewrite-smoke").put("action", "replace")
+                .put("replacement", new JSONObject().put("status", 202)
+                    .put("headers", new JSONArray()).put("bodyBase64", "b2s="))));
+        try {
+            JSONObject update = new JSONObject().put("expectedVersion", originalRewrite.getString("version"))
+                .put("config", config);
+            expectOk(NativeCapture.configureResponseRewrite(dataDir, update.toString()));
+            JSONObject saved = expectOk(NativeCapture.responseRewrite(dataDir));
+            if (!"offline-rewrite-smoke".equals(saved.getJSONObject("config")
+                    .getJSONArray("rules").getJSONObject(0).getString("id")))
+                throw new AssertionError("Offline response rewrite did not persist");
+        } finally {
+            JSONObject current = expectOk(NativeCapture.responseRewrite(dataDir));
+            JSONObject restore = new JSONObject().put("expectedVersion", current.getString("version"))
+                .put("config", originalRewrite.getJSONObject("config"));
+            expectOk(NativeCapture.configureResponseRewrite(dataDir, restore.toString()));
         }
     }
 
@@ -330,14 +372,14 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
     }
 
     private void runVpnTlsSmoke() throws Exception {
-        JSONObject previousBlocking = expectOk(NativeCapture.blocking());
+        JSONObject previousBlocking = expectOk(NativeCapture.blocking(getTargetContext().getFilesDir().getAbsolutePath()));
         try {
             JSONObject rule = new JSONObject().put("id", "vpn-tls-smoke")
                     .put("enabled", true).put("matchType", "urlContains")
                     .put("pattern", "/vpn-tls-smoke").put("method", "GET");
             JSONObject config = new JSONObject().put("enabled", true)
                     .put("scope", "capture").put("rules", new JSONArray().put(rule));
-            expectOk(NativeCapture.configureBlocking(config.toString()));
+            expectOk(NativeCapture.configureBlocking(getTargetContext().getFilesDir().getAbsolutePath(), config.toString()));
             Set<String> previousIDs = new HashSet<>();
             JSONArray previous = expectOk(recent("", "vpn-tls-smoke"))
                     .getJSONArray("requests");
@@ -366,7 +408,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             }
             throw new AssertionError("VPN TLS interception failed: " + lastState);
         } finally {
-            expectOk(NativeCapture.configureBlocking(previousBlocking.toString()));
+            expectOk(NativeCapture.configureBlocking(getTargetContext().getFilesDir().getAbsolutePath(), previousBlocking.toString()));
         }
     }
 
@@ -622,7 +664,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
     }
 
     private void runBinaryResponseRewriteSmoke(int proxyPort) throws Exception {
-        JSONObject original = expectOk(NativeCapture.responseRewrite());
+        JSONObject original = expectOk(NativeCapture.responseRewrite(getTargetContext().getFilesDir().getAbsolutePath()));
         byte[] binary = {0, (byte) 255, 65};
         JSONObject replacement = new JSONObject().put("status", 201)
                 .put("headers", new JSONArray().put(new JSONObject()
@@ -637,7 +679,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 .put("rules", new JSONArray().put(rule));
         JSONObject update = new JSONObject().put("config", config)
                 .put("expectedVersion", original.getString("version"));
-        expectOk(NativeCapture.configureResponseRewrite(update.toString()));
+        expectOk(NativeCapture.configureResponseRewrite(getTargetContext().getFilesDir().getAbsolutePath(), update.toString()));
         try (ServerSocket origin = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
             AtomicReference<Throwable> originError = new AtomicReference<>();
             Thread server = new Thread(() -> {
@@ -690,10 +732,10 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 if (originError.get() != null) throw new AssertionError("rewrite origin failed", originError.get());
             }
         } finally {
-            JSONObject current = expectOk(NativeCapture.responseRewrite());
+            JSONObject current = expectOk(NativeCapture.responseRewrite(getTargetContext().getFilesDir().getAbsolutePath()));
             JSONObject restore = new JSONObject().put("config", original.getJSONObject("config"))
                     .put("expectedVersion", current.getString("version"));
-            expectOk(NativeCapture.configureResponseRewrite(restore.toString()));
+            expectOk(NativeCapture.configureResponseRewrite(getTargetContext().getFilesDir().getAbsolutePath(), restore.toString()));
         }
     }
 
@@ -730,7 +772,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
     }
 
     private void runTlsSmoke(int proxyPort, String certificate) throws Exception {
-        JSONObject previousBlocking = expectOk(NativeCapture.blocking());
+        JSONObject previousBlocking = expectOk(NativeCapture.blocking(getTargetContext().getFilesDir().getAbsolutePath()));
         try (ServerSocket reservation = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
             int unusedOriginPort = reservation.getLocalPort();
             reservation.close();
@@ -741,7 +783,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     .put("pattern", path).put("method", "GET");
             JSONObject blocking = new JSONObject().put("enabled", true)
                     .put("scope", "capture").put("rules", new JSONArray().put(rule));
-            expectOk(NativeCapture.configureBlocking(blocking.toString()));
+            expectOk(NativeCapture.configureBlocking(getTargetContext().getFilesDir().getAbsolutePath(), blocking.toString()));
             try {
                 CertificateFactory parser = CertificateFactory.getInstance("X.509");
                 KeyStore roots = KeyStore.getInstance(KeyStore.getDefaultType());
@@ -797,7 +839,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     throw new AssertionError("decrypted TLS request was not recorded");
                 }
             } finally {
-                expectOk(NativeCapture.configureBlocking(previousBlocking.toString()));
+                expectOk(NativeCapture.configureBlocking(getTargetContext().getFilesDir().getAbsolutePath(), previousBlocking.toString()));
             }
         }
     }

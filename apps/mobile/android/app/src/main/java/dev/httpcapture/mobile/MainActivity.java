@@ -186,8 +186,8 @@ public final class MainActivity extends Activity {
         stop.setEnabled(false);
         exportCa.setEnabled(false);
         exportSessionButton.setEnabled(true);
-        blockingRules.setEnabled(false);
-        responseRewriteRules.setEnabled(false);
+        blockingRules.setEnabled(true);
+        responseRewriteRules.setEnabled(true);
         manualRequest.setEnabled(true);
         savedRequestsButton.setEnabled(true);
 
@@ -564,8 +564,8 @@ public final class MainActivity extends Activity {
             setAppSelectionEnabled(false);
             exportCa.setEnabled(false);
             exportSessionButton.setEnabled(true);
-            blockingRules.setEnabled(false);
-            responseRewriteRules.setEnabled(false);
+            blockingRules.setEnabled(true);
+            responseRewriteRules.setEnabled(true);
             manualRequest.setEnabled(true);
             savedRequestsButton.setEnabled(true);
             status.setText("正在停止 VPN…");
@@ -582,8 +582,8 @@ public final class MainActivity extends Activity {
                 setAppSelectionEnabled(true);
                 exportCa.setEnabled(false);
                 exportSessionButton.setEnabled(true);
-                blockingRules.setEnabled(false);
-                responseRewriteRules.setEnabled(false);
+                blockingRules.setEnabled(true);
+                responseRewriteRules.setEnabled(true);
                 manualRequest.setEnabled(true);
                 savedRequestsButton.setEnabled(true);
                 loadSelectedPage();
@@ -602,8 +602,8 @@ public final class MainActivity extends Activity {
         stop.setEnabled(false);
         exportCa.setEnabled(false);
         exportSessionButton.setEnabled(true);
-        blockingRules.setEnabled(false);
-        responseRewriteRules.setEnabled(false);
+        blockingRules.setEnabled(true);
+        responseRewriteRules.setEnabled(true);
         manualRequest.setEnabled(true);
         savedRequestsButton.setEnabled(true);
         loadSelectedPage();
@@ -639,8 +639,8 @@ public final class MainActivity extends Activity {
                         stop.setEnabled(false);
                         exportCa.setEnabled(false);
                         exportSessionButton.setEnabled(true);
-                        blockingRules.setEnabled(false);
-                        responseRewriteRules.setEnabled(false);
+                        blockingRules.setEnabled(true);
+                        responseRewriteRules.setEnabled(true);
                         manualRequest.setEnabled(true);
                         savedRequestsButton.setEnabled(true);
                         waitForVpnStop();
@@ -1812,7 +1812,7 @@ public final class MainActivity extends Activity {
 
     private void loadBlocking() {
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.blocking());
+            JSONObject reply = parseReply(NativeCapture.blocking(getFilesDir().getAbsolutePath()));
             main.post(() -> {
                 if (reply.optBoolean("ok")) {
                     JSONObject config = reply.optJSONObject("value");
@@ -1826,7 +1826,8 @@ public final class MainActivity extends Activity {
 
     private void saveBlocking(JSONObject config) {
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.configureBlocking(config.toString()));
+            JSONObject reply = parseReply(NativeCapture.configureBlocking(
+                getFilesDir().getAbsolutePath(), config.toString()));
             main.post(() -> {
                 if (reply.optBoolean("ok")) {
                     JSONObject saved = reply.optJSONObject("value");
@@ -2037,7 +2038,7 @@ public final class MainActivity extends Activity {
 
     private void loadResponseRewrite() {
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.responseRewrite());
+            JSONObject reply = parseReply(NativeCapture.responseRewrite(getFilesDir().getAbsolutePath()));
             main.post(() -> {
                 JSONObject snapshot = reply.optJSONObject("value");
                 if (reply.optBoolean("ok") && snapshot != null) showResponseRewrite(snapshot);
@@ -2056,7 +2057,8 @@ public final class MainActivity extends Activity {
                 JSONObject update = new JSONObject()
                     .put("config", snapshot.getJSONObject("config"))
                     .put("expectedVersion", snapshot.getString("version"));
-                JSONObject reply = parseReply(NativeCapture.configureResponseRewrite(update.toString()));
+                JSONObject reply = parseReply(NativeCapture.configureResponseRewrite(
+                    getFilesDir().getAbsolutePath(), update.toString()));
                 main.post(() -> {
                     JSONObject saved = reply.optJSONObject("value");
                     if (reply.optBoolean("ok") && saved != null) {

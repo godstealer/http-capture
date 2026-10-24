@@ -20,11 +20,11 @@ public final class NativeCapture {
     public static native String importCertificate(String importJson);
     public static native String changeCertificate(String changeJson);
     public static native String bodyPreview(String dataDir, String id, String variant, String revision, long offset);
-    public static native String blocking();
-    public static native String responseRewrite();
-    public static native String configureResponseRewrite(String updateJson);
+    public static native String blocking(String dataDir);
+    public static native String responseRewrite(String dataDir);
+    public static native String configureResponseRewrite(String dataDir, String updateJson);
     public static native String status();
-    public static native String configureBlocking(String configJson);
+    public static native String configureBlocking(String dataDir, String configJson);
     public static native String sendRequest(String requestJson);
     public static native String startTunnel(int tunFd, boolean captureQuic);
     public static native String stopTunnel();

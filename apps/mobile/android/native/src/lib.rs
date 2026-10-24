@@ -260,17 +260,21 @@ fn session_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, Str
     if let Some(active) = current.as_ref() {
         Ok(active.runtime.engine.store.clone())
     } else {
-        let path = data_dir.join("sessions.db");
-        let mut offline = OFFLINE_STORE.get_or_init(|| Mutex::new(None))
-            .lock().map_err(|_| "Offline history is unavailable")?;
-        if let Some((opened_path, store)) = offline.as_ref() {
-            if opened_path == &path { return Ok(store.clone()); }
-        }
-        let store = Arc::new(capture_core::store::Store::open(&path)
-            .map_err(|error| format!("{error:#}"))?);
-        *offline = Some((path, store.clone()));
-        Ok(store)
+        offline_store(data_dir)
     }
+}
+
+fn offline_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, String> {
+    let path = data_dir.join("sessions.db");
+    let mut offline = OFFLINE_STORE.get_or_init(|| Mutex::new(None))
+        .lock().map_err(|_| "Offline history is unavailable")?;
+    if let Some((opened_path, store)) = offline.as_ref() {
+        if opened_path == &path { return Ok(store.clone()); }
+    }
+    let store = Arc::new(capture_core::store::Store::open(&path)
+        .map_err(|error| format!("{error:#}"))?);
+    *offline = Some((path, store.clone()));
+    Ok(store)
 }
 
 fn recent(data_dir: &Path, cursor: &str, url_contains: &str) -> Result<serde_json::Value, String> {
@@ -522,13 +526,17 @@ fn body_preview(
     serde_json::to_value(chunk).map_err(|error| error.to_string())
 }
 
-fn blocking() -> Result<serde_json::Value, String> {
+fn blocking(data_dir: &Path) -> Result<serde_json::Value, String> {
     let current = capture()
         .lock()
         .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    serde_json::to_value(capture.runtime.engine.blocking.snapshot())
-        .map_err(|error| error.to_string())
+    let config = if let Some(capture) = current.as_ref() {
+        capture.runtime.engine.blocking.snapshot()
+    } else {
+        capture_core::blocking::Blocking::open(offline_store(data_dir)?)
+            .map_err(|error| format!("{error:#}"))?.snapshot()
+    };
+    serde_json::to_value(config).map_err(|error| error.to_string())
 }
 
 fn status() -> Result<serde_json::Value, String> {
@@ -540,33 +548,39 @@ fn status() -> Result<serde_json::Value, String> {
         .map_err(|error| error.to_string())
 }
 
-fn configure_blocking(raw: &str) -> Result<serde_json::Value, String> {
+fn configure_blocking(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
     let config: capture_core::blocking::Config =
         serde_json::from_str(raw).map_err(|error| error.to_string())?;
     let current = capture()
         .lock()
         .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    capture
-        .runtime
-        .engine
-        .blocking
-        .configure(config)
-        .map_err(|error| format!("{error:#}"))?;
-    serde_json::to_value(capture.runtime.engine.blocking.snapshot())
-        .map_err(|error| error.to_string())
+    let snapshot = if let Some(capture) = current.as_ref() {
+        capture.runtime.engine.blocking.configure(config)
+            .map_err(|error| format!("{error:#}"))?;
+        capture.runtime.engine.blocking.snapshot()
+    } else {
+        let blocking = capture_core::blocking::Blocking::open(offline_store(data_dir)?)
+            .map_err(|error| format!("{error:#}"))?;
+        blocking.configure(config).map_err(|error| format!("{error:#}"))?;
+        blocking.snapshot()
+    };
+    serde_json::to_value(snapshot).map_err(|error| error.to_string())
 }
 
-fn response_rewrite() -> Result<serde_json::Value, String> {
+fn response_rewrite(data_dir: &Path) -> Result<serde_json::Value, String> {
     let current = capture()
         .lock()
         .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    serde_json::to_value(capture.runtime.engine.response_rewrite.snapshot())
-        .map_err(|error| error.to_string())
+    let snapshot = if let Some(capture) = current.as_ref() {
+        capture.runtime.engine.response_rewrite.snapshot()
+    } else {
+        capture_core::response_rewrite::ResponseRewrite::open(offline_store(data_dir)?)
+            .map_err(|error| format!("{error:#}"))?.snapshot()
+    };
+    serde_json::to_value(snapshot).map_err(|error| error.to_string())
 }
 
-fn configure_response_rewrite(raw: &str) -> Result<serde_json::Value, String> {
+fn configure_response_rewrite(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Update {
@@ -577,13 +591,15 @@ fn configure_response_rewrite(raw: &str) -> Result<serde_json::Value, String> {
     let current = capture()
         .lock()
         .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    serde_json::to_value(
+    let snapshot = if let Some(capture) = current.as_ref() {
         capture.runtime.engine.response_rewrite
             .configure(update.config, &update.expected_version)
-            .map_err(|error| format!("{error:#}"))?,
-    )
-    .map_err(|error| error.to_string())
+    } else {
+        capture_core::response_rewrite::ResponseRewrite::open(offline_store(data_dir)?)
+            .map_err(|error| format!("{error:#}"))?
+            .configure(update.config, &update.expected_version)
+    }.map_err(|error| format!("{error:#}"))?;
+    serde_json::to_value(snapshot).map_err(|error| error.to_string())
 }
 
 fn send_request(raw: &str) -> Result<serde_json::Value, String> {
@@ -836,29 +852,41 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_bodyPreview(
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_blocking(
-    env: JNIEnv<'_>,
+    mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
 ) -> jstring {
-    jni_reply(env, blocking())
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        blocking(Path::new(&data_dir))
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_responseRewrite(
-    env: JNIEnv<'_>,
+    mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
 ) -> jstring {
-    jni_reply(env, response_rewrite())
+    let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
+        response_rewrite(Path::new(&data_dir))
+    })();
+    jni_reply(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_configureResponseRewrite(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
     raw: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
-        configure_response_rewrite(&raw)
+        configure_response_rewrite(Path::new(&data_dir), &raw)
     })();
     jni_reply(env, result)
 }
@@ -875,14 +903,16 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_status(
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_configureBlocking(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
     raw: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let raw: String = env
             .get_string(&raw)
             .map_err(|error| error.to_string())?
             .into();
-        configure_blocking(&raw)
+        configure_blocking(Path::new(&data_dir), &raw)
     })();
     jni_reply(env, result)
 }
@@ -956,10 +986,7 @@ mod tests {
     fn response_rewrite_roundtrip_rejects_stale_version() {
         let _guard = SERIAL.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap().local_addr().unwrap().port();
-        start(dir.path(), port).unwrap();
-        let initial = response_rewrite().unwrap();
+        let initial = response_rewrite(dir.path()).unwrap();
         let update = serde_json::json!({
             "expectedVersion": initial["version"],
             "config": {"enabled": true, "scope": "capture", "rules": [{
@@ -968,10 +995,37 @@ mod tests {
                 "replacement": {"status": 201, "headers": [], "bodyBase64": "b2s="}
             }]}
         });
-        let saved = configure_response_rewrite(&update.to_string()).unwrap();
+        let saved = configure_response_rewrite(dir.path(), &update.to_string()).unwrap();
         assert_ne!(saved["version"], initial["version"]);
-        assert_eq!(response_rewrite().unwrap()["config"]["rules"][0]["replacement"]["status"], 201);
-        assert!(configure_response_rewrite(&update.to_string()).is_err());
+        assert!(configure_response_rewrite(dir.path(), &update.to_string()).is_err());
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap().local_addr().unwrap().port();
+        start(dir.path(), port).unwrap();
+        assert_eq!(response_rewrite(dir.path()).unwrap()["config"]["rules"][0]["replacement"]["status"], 201);
+        let running_update = serde_json::json!({
+            "expectedVersion": saved["version"], "config": {"enabled": false, "rules": []}
+        });
+        configure_response_rewrite(dir.path(), &running_update.to_string()).unwrap();
+        stop().unwrap();
+        assert_eq!(response_rewrite(dir.path()).unwrap()["config"]["enabled"], false);
+    }
+
+    #[test]
+    fn blocking_rules_can_be_edited_offline_and_loaded_on_start() {
+        let _guard = SERIAL.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let config = serde_json::json!({
+            "enabled": true, "scope": "capture", "rules": [{
+                "id": "offline-block", "enabled": true, "matchType": "host",
+                "pattern": "blocked.example", "method": ""
+            }]
+        });
+        configure_blocking(dir.path(), &config.to_string()).unwrap();
+        assert_eq!(blocking(dir.path()).unwrap()["rules"][0]["id"], "offline-block");
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap().local_addr().unwrap().port();
+        start(dir.path(), port).unwrap();
+        assert_eq!(blocking(dir.path()).unwrap()["rules"][0]["id"], "offline-block");
         stop().unwrap();
     }
 
