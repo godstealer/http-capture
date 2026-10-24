@@ -1018,6 +1018,7 @@ mod tests {
             20_000 - (16 * 1024 - 1)
         );
         assert_eq!(second_chunk["offset"], 16 * 1024 - 1);
+
         assert!(second_chunk["nextOffset"].is_null());
         assert!(command(&serde_json::json!({
             "method":"body_preview","id":id,"variant":"response",
@@ -1030,6 +1031,41 @@ mod tests {
         let missing = command(r#"{"method":"recent","urlContains":"/unmatched-path"}"#).unwrap();
         assert!(missing["requests"].as_array().unwrap().is_empty());
         origin_task.join().unwrap();
+
+        // Packet Tunnel dispatches app messages on a concurrent queue. A
+        // pending replay must not hold the global capture lock and stall a
+        // status message until the upstream server replies.
+        let slow_origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let slow_port = slow_origin.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let slow_server = std::thread::spawn(move || {
+            let (mut stream, _) = slow_origin.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut request = [0_u8; 1024];
+            let count = stream.read(&mut request).unwrap();
+            assert!(request[..count].starts_with(b"GET /slow HTTP/1.1"));
+            accepted_tx.send(()).unwrap();
+            release_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let slow_replay = std::thread::spawn(move || command(&serde_json::json!({
+            "method":"send_request","request":{
+                "engine":"native","method":"GET",
+                "url":format!("http://127.0.0.1:{slow_port}/slow"),
+                "headers":[],"bodyBase64":""
+            }
+        }).to_string()));
+        accepted_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let status_started = std::time::Instant::now();
+        let status_result = command(r#"{"method":"status"}"#);
+        let status_elapsed = status_started.elapsed();
+        release_tx.send(()).unwrap();
+        assert!(status_result.is_ok(), "{status_result:?}");
+        assert!(status_elapsed < std::time::Duration::from_secs(4),
+            "status waited for replay upstream: {status_elapsed:?}");
+        assert_eq!(slow_replay.join().unwrap().unwrap()["status"], 200);
+        slow_server.join().unwrap();
 
         // The packet adapter always sends CONNECT, including for plain HTTP.
         // Verify that the transparent listener returns exact replacement bytes.
