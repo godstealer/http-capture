@@ -8,7 +8,7 @@
 
 已单独下载 Android CI 附件并检查 APK：大小 108,143,866 字节，SHA-256 为 `b2dfda0858935fd66192588990ffd3be122e748771ea4d3abf6474fbfcb29131`，包内同时有 arm64-v8a 和 x86_64 的 `libhttp_capture_android.so`。APK 含 Android 签名块；此项检查未代替 `apksigner` 或真机安装验证。
 
-Android 新增模拟器冒烟测试：在 API 33 x86_64 模拟器安装构建的 APK 和独立测试 APK，在应用进程内经 JNI 启动回环代理，让本机 HTTP 服务返回固定内容，再检查响应、持久化请求记录和导出的 CA 公钥证书，最后停止代理并启动主界面。[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40058540465) 的模拟器测试已通过（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`、主界面启动成功）。此项验证尚未覆盖 VPN 权限、TUN 转发和真机行为；后续已添加系统 VPN 授权与隧道生命周期测试，待新一轮 CI 验证。
+Android 新增模拟器冒烟测试：在 API 33 x86_64 模拟器安装构建的 APK 和独立测试 APK，在应用进程内经 JNI 启动回环代理，让本机 HTTP 服务返回固定内容，再检查响应、持久化请求记录和导出的 CA 公钥证书，最后停止代理并启动主界面。[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40058540465) 的模拟器测试已通过（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`、主界面启动成功）。后续[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40062698192) 已通过系统 VPN 授权、隧道建立、状态读取、停止清理和主界面启动测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`）；对应[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40062698108) 四项全绿。模拟器尚未验证另一个应用的真实 HTTP 流量经过 TUN 并进入记录，也不能替代真机 HTTPS、证书信任、切网、UDP/QUIC 和长期运行验收。
 
 ## Android 当前代码
 
