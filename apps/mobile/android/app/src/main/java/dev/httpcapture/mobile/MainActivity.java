@@ -1084,7 +1084,6 @@ public final class MainActivity extends Activity {
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
         dialog.setOnShowListener(ignored -> {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(running);
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
                 copyManualInputs(draft, method, url, headers, body, engine, bodyMode);
                 if (sendManualRequest(draft)) dialog.dismiss();
@@ -1631,10 +1630,6 @@ public final class MainActivity extends Activity {
     }
 
     private boolean sendManualRequest(ManualRequestDraft draft) {
-        if (!running) {
-            status.setText("请先启动代理，再发送请求；当前仍可保存草稿");
-            return false;
-        }
         String requestMethod = draft.method.trim().toUpperCase(Locale.ROOT);
         String requestUrl = draft.url.trim();
         try {
@@ -1678,7 +1673,8 @@ public final class MainActivity extends Activity {
                         .put("engine", draft.engine)
                         .put("headers", preparedHeaders)
                         .put("bodyBase64", Base64.encodeToString(requestBody.bytes, Base64.NO_WRAP));
-                    JSONObject reply = parseReply(NativeCapture.sendRequest(request.toString()));
+                    JSONObject reply = parseReply(NativeCapture.sendRequest(
+                        getFilesDir().getAbsolutePath(), request.toString()));
                     main.post(() -> {
                         if (!reply.optBoolean("ok")) {
                             status.setText("发送失败：" + reply.optString("error"));
@@ -1690,7 +1686,8 @@ public final class MainActivity extends Activity {
                         status.setText(value.isNull("error")
                             ? "已发送，响应状态 " + value.optString("status", "未知")
                             : "请求失败：" + value.optString("error"));
-                        poll();
+                        if (running) poll();
+                        else loadSelectedPage();
                         showFlowDetail(value.optString("id"));
                     });
                 } catch (Exception error) {

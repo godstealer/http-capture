@@ -257,6 +257,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 throw new AssertionError("Captured flow is not readable after VPN stops");
             runSavedRequestSmoke();
             runOfflineRulesSmoke();
+            runOfflineManualSendSmoke();
             String offlineCa = new JSONObject(NativeCapture.certificate(
                 getTargetContext().getFilesDir().getAbsolutePath())).getString("value");
             if (!runningCa.equals(offlineCa))
@@ -316,6 +317,37 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             JSONObject restore = new JSONObject().put("expectedVersion", current.getString("version"))
                 .put("config", originalRewrite.getJSONObject("config"));
             expectOk(NativeCapture.configureResponseRewrite(dataDir, restore.toString()));
+        }
+    }
+
+    private void runOfflineManualSendSmoke() throws Exception {
+        try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            server.setSoTimeout(10_000);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread origin = new Thread(() -> {
+                try (Socket socket = server.accept()) {
+                    socket.setSoTimeout(10_000);
+                    byte[] buffer = new byte[2048];
+                    int count = socket.getInputStream().read(buffer);
+                    if (count <= 0 || !new String(buffer, 0, count, StandardCharsets.US_ASCII)
+                            .contains("GET /offline-send"))
+                        throw new AssertionError("Offline request did not reach origin");
+                    socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
+                        + "Connection: close\r\n\r\nok").getBytes(StandardCharsets.US_ASCII));
+                } catch (Throwable error) { failure.set(error); }
+            }, "offline-send-origin");
+            origin.start();
+            JSONObject request = new JSONObject().put("engine", "native").put("method", "GET")
+                .put("url", "http://127.0.0.1:" + server.getLocalPort() + "/offline-send")
+                .put("headers", new JSONArray()).put("bodyBase64", "");
+            JSONObject sent = expectOk(NativeCapture.sendRequest(
+                getTargetContext().getFilesDir().getAbsolutePath(), request.toString()));
+            origin.join(10_000);
+            if (origin.isAlive() || failure.get() != null)
+                throw new AssertionError("Offline origin failed", failure.get());
+            if (sent.optInt("status") != 200 || !sent.optString("id").equals(
+                    expectOk(metadata(sent.getString("id"))).optString("id")))
+                throw new AssertionError("Offline replay response was not saved: " + sent);
         }
     }
 

@@ -653,18 +653,25 @@ fn configure_response_rewrite(data_dir: &Path, raw: &str) -> Result<serde_json::
     serde_json::to_value(snapshot).map_err(|error| error.to_string())
 }
 
-fn send_request(raw: &str) -> Result<serde_json::Value, String> {
+fn send_request(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
     let request: RequestDraft = serde_json::from_str(raw).map_err(|error| error.to_string())?;
-    let (runtime, handle) = {
+    let active = {
         let current = capture()
             .lock()
             .map_err(|_| "Capture state is unavailable")?;
-        let capture = current.as_ref().ok_or("Capture is not running")?;
-        (capture.runtime.clone(), capture.executor.handle().clone())
+        current.as_ref().map(|capture|
+            (capture.runtime.engine.clone(), capture.executor.handle().clone()))
     };
-    let flow = handle
-        .block_on(runtime.engine.replay(request, None, None))
-        .map_err(|error| format!("{error:#}"))?;
+    let flow = if let Some((engine, handle)) = active {
+        handle.block_on(engine.replay(request, None, None))
+    } else {
+        let executor = tokio::runtime::Builder::new_multi_thread()
+            .enable_all().build().map_err(|error| error.to_string())?;
+        let engine = Engine::open(data_dir).map_err(|error| format!("{error:#}"))?;
+        let result = executor.block_on(engine.replay(request, None, None));
+        executor.shutdown_background();
+        result
+    }.map_err(|error| format!("{error:#}"))?;
     Ok(serde_json::json!({
         "id": flow.id,
         "status": flow.response.as_ref().map(|response| response.status),
@@ -983,14 +990,16 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_configureBlocki
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_sendRequest(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
     raw: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let raw: String = env
             .get_string(&raw)
             .map_err(|error| error.to_string())?
             .into();
-        send_request(&raw)
+        send_request(Path::new(&data_dir), &raw)
     })();
     jni_reply(env, result)
 }
@@ -1119,6 +1128,35 @@ mod tests {
         stop().unwrap();
         assert_eq!(certificate(dir.path()).unwrap(), ca);
         assert_eq!(certificates(dir.path()).unwrap()["entries"][0]["enabled"], true);
+    }
+
+    #[test]
+    fn sends_manual_request_and_saves_response_without_capture() {
+        use std::io::{Read, Write};
+        let _guard = SERIAL.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/offline-send", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            let mut input = [0; 1024];
+            let length = socket.read(&mut input).unwrap();
+            assert!(String::from_utf8_lossy(&input[..length]).contains("GET /offline-send"));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let request = serde_json::json!({
+            "engine": "native", "method": "GET", "url": url,
+            "headers": [], "bodyBase64": ""
+        });
+        let result = send_request(dir.path(), &request.to_string()).unwrap();
+        server.join().unwrap();
+        assert_eq!(result["status"], 200);
+        assert!(result["error"].is_null());
+        let page = recent(dir.path(), "", "offline-send").unwrap();
+        assert_eq!(page["requests"][0]["id"], result["id"]);
+        assert_eq!(page["requests"][0]["status"], 200);
+        assert!(capture().lock().unwrap().is_none());
     }
 
     #[test]
