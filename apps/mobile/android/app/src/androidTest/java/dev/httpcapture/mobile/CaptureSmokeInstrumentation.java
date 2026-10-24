@@ -442,6 +442,19 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         if (!id.equals(updated.getString("id")) || !"https://example.com/mobile-saved-updated"
                 .equals(expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft").getString("url")))
             throw new AssertionError("Saved request update was not persisted");
+
+        String editableHeaders = MainActivity.savedHeaderText(reopenedHeaders);
+        if (!editableHeaders.contains("# X-Disabled: omit")
+                || RequestHeaderCodec.parse(editableHeaders).size() != 3)
+            throw new AssertionError("Saved request headers are not editable without loss");
+        JSONArray lossy = new JSONArray().put(new JSONObject()
+                .put("name", "X-Whitespace").put("value", " leading"));
+        try {
+            MainActivity.savedHeaderText(lossy);
+            throw new AssertionError("Lossy saved header was accepted by the editor");
+        } catch (IllegalArgumentException expected) {
+            // Keeping the original request untouched is safer than silently trimming its value.
+        }
     }
 
     private void runBinaryResponseRewriteSmoke(int proxyPort) throws Exception {

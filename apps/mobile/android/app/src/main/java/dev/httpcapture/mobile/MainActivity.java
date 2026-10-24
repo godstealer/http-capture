@@ -1125,11 +1125,15 @@ public final class MainActivity extends Activity {
         if (!request.isNull("upstreamProfileId"))
             throw new IllegalArgumentException("此请求使用上游代理配置，移动编辑器暂不能无损打开");
         JSONObject scripts = request.optJSONObject("scripts");
+        JSONObject modules = scripts == null ? null : scripts.optJSONObject("modules");
         if (scripts != null && (scripts.optBoolean("enabled")
                 || !scripts.optString("before").isEmpty()
                 || !scripts.optString("after").isEmpty()
                 || scripts.optJSONObject("variables") != null
-                   && scripts.optJSONObject("variables").length() > 0))
+                   && scripts.optJSONObject("variables").length() > 0
+                || modules != null && (!modules.optBoolean("encoding", true)
+                    || !modules.optBoolean("crypto", true)
+                    || !modules.optBoolean("utils", true))))
             throw new IllegalArgumentException("此请求含脚本配置，移动编辑器暂不能无损打开");
         JSONObject tls = request.optJSONObject("tls");
         if (tls != null && (!tls.isNull("clientHelloHex") || !tls.isNull("browserVersion")
@@ -1147,14 +1151,7 @@ public final class MainActivity extends Activity {
         if (!java.util.Arrays.asList(SEND_ENGINES).contains(draft.engine))
             throw new IllegalArgumentException("此请求使用移动版尚不支持的发送引擎");
         JSONArray rows = request.getJSONArray("headers");
-        StringBuilder text = new StringBuilder();
-        for (int i = 0; i < rows.length(); i++) {
-            JSONObject row = rows.getJSONObject(i);
-            if (i > 0) text.append('\n');
-            if (row.optBoolean("disabled")) text.append("# ");
-            text.append(row.getString("name")).append(": ").append(row.getString("value"));
-        }
-        draft.headers = text.toString();
+        draft.headers = savedHeaderText(rows);
         String encoded = request.optString("bodyBase64", "");
         if (encoded.length() > ((RequestBodyCodec.MAX_BODY_BYTES + 2) / 3) * 4)
             throw new IllegalArgumentException("请求正文超过移动编辑器的 1 MiB 限制");
@@ -1169,6 +1166,27 @@ public final class MainActivity extends Activity {
             draft.bodyMode = 5;
         }
         return draft;
+    }
+
+    static String savedHeaderText(JSONArray rows) throws Exception {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i);
+            String name = row.getString("name");
+            String value = row.getString("value");
+            boolean disabled = row.optBoolean("disabled");
+            String line = (disabled ? "# " : "") + name + ": " + value;
+            List<RequestHeaderCodec.Header> parsed = RequestHeaderCodec.parse(line);
+            if (parsed.size() != 1 || !name.equals(parsed.get(0).name)
+                    || !value.equals(parsed.get(0).value)
+                    || disabled != parsed.get(0).disabled)
+                throw new IllegalArgumentException("此请求头不能无损还原到移动编辑器");
+            if (i > 0) text.append('\n');
+            text.append(line);
+        }
+        if (text.toString().getBytes(StandardCharsets.UTF_8).length > 16 * 1024)
+            throw new IllegalArgumentException("请求头超过移动编辑器的 16 KiB 限制");
+        return text.toString();
     }
 
     private void showSavedRequestError(String reason) {
