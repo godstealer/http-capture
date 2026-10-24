@@ -278,6 +278,7 @@ public final class MainActivity extends Activity {
                 } else {
                     start.setEnabled(true);
                     setAppSelectionEnabled(true);
+                    loadSelectedPage();
                 }
             });
         });
@@ -298,8 +299,8 @@ public final class MainActivity extends Activity {
     }
 
     private void updatePagingControls() {
-        previousPage.setEnabled(running && !pageLoading && !pageHistory.isEmpty());
-        nextPage.setEnabled(running && !pageLoading && !nextCursor.isEmpty());
+        previousPage.setEnabled(!pageLoading && !pageHistory.isEmpty());
+        nextPage.setEnabled(!pageLoading && !nextCursor.isEmpty());
         pageInfo.setText("第 " + (pageHistory.size() + 1) + " 页");
     }
 
@@ -316,12 +317,11 @@ public final class MainActivity extends Activity {
         nextCursor = "";
         pageHistory.clear();
         lastRowsJson = "";
-        if (running) loadSelectedPage();
-        else updatePagingControls();
+        loadSelectedPage();
     }
 
     private void loadNextPage() {
-        if (!running || pageLoading || nextCursor.isEmpty()) return;
+        if (pageLoading || nextCursor.isEmpty()) return;
         pageHistory.add(pageCursor);
         pageCursor = nextCursor;
         nextCursor = "";
@@ -329,7 +329,7 @@ public final class MainActivity extends Activity {
     }
 
     private void loadPreviousPage() {
-        if (!running || pageLoading || pageHistory.isEmpty()) return;
+        if (pageLoading || pageHistory.isEmpty()) return;
         pageCursor = pageHistory.remove(pageHistory.size() - 1);
         nextCursor = "";
         loadSelectedPage();
@@ -342,10 +342,11 @@ public final class MainActivity extends Activity {
         final String cursor = pageCursor;
         final String filter = urlFilter;
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.recent(cursor, filter));
+            JSONObject reply = parseReply(NativeCapture.recent(
+                getFilesDir().getAbsolutePath(), cursor, filter));
             main.post(() -> {
                 pageLoading = false;
-                if (!running || !cursor.equals(pageCursor) || !filter.equals(urlFilter)) return;
+                if (!cursor.equals(pageCursor) || !filter.equals(urlFilter)) return;
                 if (reply.optBoolean("ok")) {
                     JSONObject value = reply.optJSONObject("value");
                     if (value != null) {
@@ -585,6 +586,7 @@ public final class MainActivity extends Activity {
                 responseRewriteRules.setEnabled(false);
                 manualRequest.setEnabled(false);
                 savedRequestsButton.setEnabled(false);
+                loadSelectedPage();
             });
         });
     }
@@ -604,7 +606,7 @@ public final class MainActivity extends Activity {
         responseRewriteRules.setEnabled(false);
         manualRequest.setEnabled(false);
         savedRequestsButton.setEnabled(false);
-        updatePagingControls();
+        loadSelectedPage();
     }
 
     private void poll() {
@@ -613,7 +615,8 @@ public final class MainActivity extends Activity {
         final String cursor = pageCursor;
         final String filter = urlFilter;
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.recent(cursor, filter));
+            JSONObject reply = parseReply(NativeCapture.recent(
+                getFilesDir().getAbsolutePath(), cursor, filter));
             main.post(() -> {
                 pollPending = false;
                 if (!running) return;
@@ -702,7 +705,8 @@ public final class MainActivity extends Activity {
 
     private void showFlowDetail(String id) {
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.metadata(id));
+            JSONObject reply = parseReply(NativeCapture.metadata(
+                getFilesDir().getAbsolutePath(), id));
             main.post(() -> {
                 if (!reply.optBoolean("ok")) {
                     status.setText("读取详情失败：" + reply.optString("error"));
@@ -719,6 +723,7 @@ public final class MainActivity extends Activity {
         contentLayout.setOrientation(LinearLayout.VERTICAL);
         Button edit = new Button(this);
         edit.setText("复制到新请求");
+        edit.setEnabled(running);
         contentLayout.addView(edit);
         Button raw = new Button(this);
         raw.setText("查看原始详情");
@@ -745,6 +750,7 @@ public final class MainActivity extends Activity {
         }
         AlertDialog shown = dialog.show();
         edit.setOnClickListener(view -> {
+            if (!running) return;
             shown.dismiss();
             editRecordedRequest(flow);
         });
@@ -835,7 +841,8 @@ public final class MainActivity extends Activity {
         String id = flow.optString("id");
         String bodyRevision = flow.optString("bodyRevision");
         worker.execute(() -> {
-            JSONObject reply = parseReply(NativeCapture.bodyPreview(id, variant, bodyRevision, offset));
+            JSONObject reply = parseReply(NativeCapture.bodyPreview(
+                getFilesDir().getAbsolutePath(), id, variant, bodyRevision, offset));
             main.post(() -> {
                 if (!reply.optBoolean("ok")) {
                     status.setText("读取正文失败：" + reply.optString("error"));
@@ -947,7 +954,8 @@ public final class MainActivity extends Activity {
                 long offset = 0;
                 while (offset < bodyLength) {
                     JSONObject reply = parseReply(NativeCapture.bodyPreview(
-                        flow.optString("id"), "request", flow.optString("bodyRevision"), offset));
+                        getFilesDir().getAbsolutePath(), flow.optString("id"), "request",
+                        flow.optString("bodyRevision"), offset));
                     if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                     JSONObject chunk = reply.optJSONObject("value");
                     if (chunk == null || !chunk.has("nextOffset"))

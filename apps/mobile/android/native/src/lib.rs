@@ -10,7 +10,7 @@ use jni::{
     JavaVM,
 };
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
 use serde::Deserialize;
@@ -58,6 +58,7 @@ struct MobileCapture {
 }
 
 static CAPTURE: OnceLock<Mutex<Option<MobileCapture>>> = OnceLock::new();
+static OFFLINE_STORE: OnceLock<Mutex<Option<(PathBuf, Arc<capture_core::store::Store>)>>> = OnceLock::new();
 
 fn capture() -> &'static Mutex<Option<MobileCapture>> {
     CAPTURE.get_or_init(|| Mutex::new(None))
@@ -254,22 +255,33 @@ fn tunnel_status() -> Result<serde_json::Value, String> {
     outcome
 }
 
-fn recent(cursor: &str, url_contains: &str) -> Result<serde_json::Value, String> {
+fn session_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, String> {
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    if let Some(active) = current.as_ref() {
+        Ok(active.runtime.engine.store.clone())
+    } else {
+        let path = data_dir.join("sessions.db");
+        let mut offline = OFFLINE_STORE.get_or_init(|| Mutex::new(None))
+            .lock().map_err(|_| "Offline history is unavailable")?;
+        if let Some((opened_path, store)) = offline.as_ref() {
+            if opened_path == &path { return Ok(store.clone()); }
+        }
+        let store = Arc::new(capture_core::store::Store::open(&path)
+            .map_err(|error| format!("{error:#}"))?);
+        *offline = Some((path, store.clone()));
+        Ok(store)
+    }
+}
+
+fn recent(data_dir: &Path, cursor: &str, url_contains: &str) -> Result<serde_json::Value, String> {
     let cursor = if cursor.is_empty() {
         None
     } else {
         Some(cursor.parse::<i64>().map_err(|_| "Invalid page cursor")?)
     };
-    let current = capture()
-        .lock()
-        .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
+    let store = session_store(data_dir)?;
     serde_json::to_value(
-        capture
-            .runtime
-            .engine
-            .store
-            .mcp_list_requests(McpRequestFilter {
+        store.mcp_list_requests(McpRequestFilter {
                 cursor,
                 url_contains: if url_contains.is_empty() {
                     None
@@ -285,15 +297,7 @@ fn recent(cursor: &str, url_contains: &str) -> Result<serde_json::Value, String>
 }
 
 fn export_session(data_dir: &Path, path: &Path) -> Result<serde_json::Value, String> {
-    let store = {
-        let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-        if let Some(active) = current.as_ref() {
-            active.runtime.engine.store.clone()
-        } else {
-            std::sync::Arc::new(capture_core::store::Store::open(&data_dir.join("sessions.db"))
-                .map_err(|error| format!("{error:#}"))?)
-        }
-    };
+    let store = session_store(data_dir)?;
     let result = (|| {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
             .open(path).map_err(|error| error.to_string())?;
@@ -305,15 +309,8 @@ fn export_session(data_dir: &Path, path: &Path) -> Result<serde_json::Value, Str
     result
 }
 
-fn metadata(id: &str) -> Result<serde_json::Value, String> {
-    let current = capture()
-        .lock()
-        .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let record = capture
-        .runtime
-        .engine
-        .store
+fn metadata(data_dir: &Path, id: &str) -> Result<serde_json::Value, String> {
+    let record = session_store(data_dir)?
         .metadata(id, None)
         .map_err(|error| format!("{error:#}"))?
         .ok_or("Recorded flow not found")?;
@@ -524,19 +521,13 @@ fn change_certificate(raw: &str) -> Result<serde_json::Value, String> {
 }
 
 fn body_preview(
+    data_dir: &Path,
     id: &str,
     variant: &str,
     revision: &str,
     offset: u64,
 ) -> Result<serde_json::Value, String> {
-    let current = capture()
-        .lock()
-        .map_err(|_| "Capture state is unavailable")?;
-    let capture = current.as_ref().ok_or("Capture is not running")?;
-    let mut chunk = capture
-        .runtime
-        .engine
-        .store
+    let mut chunk = session_store(data_dir)?
         .read_body_at_revision(id, variant, revision, offset, 16 * 1024)
         .map_err(|error| format!("{error:#}"))?;
     chunk.align_utf8_boundary().map_err(|error| error.to_string())?;
@@ -667,10 +658,12 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_stop(
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_recent(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
     cursor: JString<'_>,
     url_contains: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let cursor: String = env
             .get_string(&cursor)
             .map_err(|error| error.to_string())?
@@ -679,7 +672,7 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_recent(
             .get_string(&url_contains)
             .map_err(|error| error.to_string())?
             .into();
-        recent(&cursor, &url_contains)
+        recent(Path::new(&data_dir), &cursor, &url_contains)
     })();
     jni_reply(env, result)
 }
@@ -700,14 +693,16 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_exportSession(
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_metadata(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
     id: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let id: String = env
             .get_string(&id)
             .map_err(|error| error.to_string())?
             .into();
-        metadata(&id)
+        metadata(Path::new(&data_dir), &id)
     })();
     jni_reply(env, result)
 }
@@ -816,12 +811,14 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_changeCertifica
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_bodyPreview(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
+    data_dir: JString<'_>,
     id: JString<'_>,
     variant: JString<'_>,
     revision: JString<'_>,
     offset: jlong,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let id: String = env
             .get_string(&id)
             .map_err(|error| error.to_string())?
@@ -835,7 +832,7 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_bodyPreview(
             .map_err(|error| error.to_string())?
             .into();
         let offset = u64::try_from(offset).map_err(|_| "Invalid body offset")?;
-        body_preview(&id, &variant, &revision, offset)
+        body_preview(Path::new(&data_dir), &id, &variant, &revision, offset)
     })();
     jni_reply(env, result)
 }
@@ -990,12 +987,31 @@ mod tests {
             "id": "offline-flow", "parentId": null, "startedAt": 1,
             "durationMs": 2, "source": "capture", "request": {
                 "method": "GET", "url": "https://example.test/offline",
-                "headers": [], "bodyBase64": ""
+                "headers": [], "bodyBase64": "eHl6"
             },
             "response": null, "error": null, "rawRequestHeadBase64": null, "notes": []
         })).unwrap();
         store.insert(&flow).unwrap();
         drop(store);
+
+        let page = recent(dir.path(), "", "offline").unwrap();
+        assert_eq!(page["requests"][0]["id"], "offline-flow");
+        let detail = metadata(dir.path(), "offline-flow").unwrap();
+        assert_eq!(detail["id"], "offline-flow");
+        let chunk = body_preview(dir.path(), "offline-flow", "request",
+            detail["bodyRevision"].as_str().unwrap(), 0).unwrap();
+        assert_eq!(chunk["bodyBase64"], "eHl6");
+
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap().local_addr().unwrap().port();
+        start(dir.path(), port).unwrap();
+        let running_detail = metadata(dir.path(), "offline-flow").unwrap();
+        assert_eq!(body_preview(dir.path(), "offline-flow", "request",
+            running_detail["bodyRevision"].as_str().unwrap(), 0).unwrap()["bodyBase64"], "eHl6");
+        stop().unwrap();
+        let stopped_detail = metadata(dir.path(), "offline-flow").unwrap();
+        assert_eq!(body_preview(dir.path(), "offline-flow", "request",
+            stopped_detail["bodyRevision"].as_str().unwrap(), 0).unwrap()["bodyBase64"], "eHl6");
 
         let destination = dir.path().join("saved-session.json");
         let result = export_session(dir.path(), &destination).unwrap();

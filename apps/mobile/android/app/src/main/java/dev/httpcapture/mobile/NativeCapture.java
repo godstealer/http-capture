@@ -6,9 +6,9 @@ public final class NativeCapture {
     private NativeCapture() {}
     public static native String start(String dataDir, int port);
     public static native String stop();
-    public static native String recent(String cursor, String urlContains);
+    public static native String recent(String dataDir, String cursor, String urlContains);
     public static native String exportSession(String dataDir, String path);
-    public static native String metadata(String id);
+    public static native String metadata(String dataDir, String id);
     public static native String savedRequests(int offset, String query, String collectionId);
     public static native String savedCollections();
     public static native String changeSavedCollection(String changeJson);
@@ -19,7 +19,7 @@ public final class NativeCapture {
     public static native String certificates();
     public static native String importCertificate(String importJson);
     public static native String changeCertificate(String changeJson);
-    public static native String bodyPreview(String id, String variant, String revision, long offset);
+    public static native String bodyPreview(String dataDir, String id, String variant, String revision, long offset);
     public static native String blocking();
     public static native String responseRewrite();
     public static native String configureResponseRewrite(String updateJson);

@@ -79,11 +79,11 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
 
                 String selectedPath = "vpn-selected-smoke";
                 Set<String> previous = new HashSet<>();
-                JSONArray old = expectOk(NativeCapture.recent("", selectedPath)).getJSONArray("requests");
+                JSONArray old = expectOk(recent("", selectedPath)).getJSONArray("requests");
                 for (int index = 0; index < old.length(); index++)
                     previous.add(old.getJSONObject(index).getString("id"));
                 Set<String> previousExcluded = new HashSet<>();
-                JSONArray oldExcluded = expectOk(NativeCapture.recent("", "vpn-excluded-smoke"))
+                JSONArray oldExcluded = expectOk(recent("", "vpn-excluded-smoke"))
                         .getJSONArray("requests");
                 for (int index = 0; index < oldExcluded.length(); index++)
                     previousExcluded.add(oldExcluded.getJSONObject(index).getString("id"));
@@ -97,7 +97,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     if (excluded.getInputStream().read() != 'H')
                         throw new AssertionError("Excluded app request did not reach origin");
                 }
-                JSONArray excluded = expectOk(NativeCapture.recent("", "vpn-excluded-smoke"))
+                JSONArray excluded = expectOk(recent("", "vpn-excluded-smoke"))
                         .getJSONArray("requests");
                 for (int index = 0; index < excluded.length(); index++) {
                     if (!previousExcluded.contains(excluded.getJSONObject(index).getString("id")))
@@ -112,7 +112,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 deadline = System.currentTimeMillis() + 20_000;
                 boolean captured = false;
                 while (System.currentTimeMillis() < deadline) {
-                    JSONArray rows = expectOk(NativeCapture.recent("", selectedPath))
+                    JSONArray rows = expectOk(recent("", selectedPath))
                             .getJSONArray("requests");
                     for (int index = 0; index < rows.length(); index++) {
                         JSONObject row = rows.getJSONObject(index);
@@ -189,7 +189,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             }
             expectOk(NativeCapture.tunnelStatus());
             Set<String> previousIDs = new HashSet<>();
-            JSONArray previous = expectOk(NativeCapture.recent("", "vpn-smoke")).getJSONArray("requests");
+            JSONArray previous = expectOk(recent("", "vpn-smoke")).getJSONArray("requests");
             for (int i = 0; i < previous.length(); i++) {
                 previousIDs.add(previous.getJSONObject(i).optString("id"));
             }
@@ -202,7 +202,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             String capturedID = null;
             String lastState = "请求尚未出现";
             while (System.currentTimeMillis() < trafficDeadline) {
-                JSONObject page = expectOk(NativeCapture.recent("", "vpn-smoke"));
+                JSONObject page = expectOk(recent("", "vpn-smoke"));
                 JSONArray requests = page.getJSONArray("requests");
                 for (int i = 0; i < requests.length(); i++) {
                     JSONObject summary = requests.getJSONObject(i);
@@ -221,7 +221,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 Thread.sleep(200);
             }
             if (!captured) throw new AssertionError("VPN raw TCP request did not finish: " + lastState);
-            JSONObject flow = expectOk(NativeCapture.metadata(capturedID));
+            JSONObject flow = expectOk(metadata(capturedID));
             JSONObject origin = flow.optJSONObject("trafficOrigin");
             JSONObject application = origin == null ? null : origin.optJSONObject("application");
             if (application == null || application.optInt("uid", -1) < 0) {
@@ -245,6 +245,14 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             runVpnTlsSmoke();
             stopVpnFromNotification();
             verifySessionExport(capturedID);
+            JSONArray offlineRows = expectOk(recent("", "vpn-smoke")).getJSONArray("requests");
+            boolean foundOffline = false;
+            for (int index = 0; index < offlineRows.length(); index++) {
+                if (capturedID.equals(offlineRows.getJSONObject(index).optString("id")))
+                    foundOffline = true;
+            }
+            if (!foundOffline || !capturedID.equals(expectOk(metadata(capturedID)).optString("id")))
+                throw new AssertionError("Captured flow is not readable after VPN stops");
         } finally {
             if (CaptureVpnService.isManaged()) {
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
@@ -330,7 +338,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     .put("scope", "capture").put("rules", new JSONArray().put(rule));
             expectOk(NativeCapture.configureBlocking(config.toString()));
             Set<String> previousIDs = new HashSet<>();
-            JSONArray previous = expectOk(NativeCapture.recent("", "vpn-tls-smoke"))
+            JSONArray previous = expectOk(recent("", "vpn-tls-smoke"))
                     .getJSONArray("requests");
             for (int i = 0; i < previous.length(); i++) {
                 previousIDs.add(previous.getJSONObject(i).optString("id"));
@@ -343,7 +351,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             long deadline = System.currentTimeMillis() + 30_000;
             String lastState = "TLS 请求尚未出现";
             while (System.currentTimeMillis() < deadline) {
-                JSONArray page = expectOk(NativeCapture.recent("", "vpn-tls-smoke"))
+                JSONArray page = expectOk(recent("", "vpn-tls-smoke"))
                         .getJSONArray("requests");
                 for (int i = 0; i < page.length(); i++) {
                     JSONObject summary = page.getJSONObject(i);
@@ -459,7 +467,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 long deadline = System.currentTimeMillis() + 10_000;
                 boolean recorded = false;
                 while (System.currentTimeMillis() < deadline) {
-                    JSONObject page = expectOk(NativeCapture.recent("", "mobile-smoke"));
+                    JSONObject page = expectOk(recent("", "mobile-smoke"));
                     JSONArray requests = page.getJSONArray("requests");
                     if (requests.length() > 0) {
                         recorded = true;
@@ -783,7 +791,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                         }
                     }
                 }
-                JSONArray captured = expectOk(NativeCapture.recent("", path)).getJSONArray("requests");
+                JSONArray captured = expectOk(recent("", path)).getJSONArray("requests");
                 if (captured.length() == 0 || !"blocked".equals(captured.getJSONObject(0).optString("state"))) {
                     throw new AssertionError("decrypted TLS request was not recorded");
                 }
@@ -791,6 +799,14 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 expectOk(NativeCapture.configureBlocking(previousBlocking.toString()));
             }
         }
+    }
+
+    private String recent(String cursor, String filter) {
+        return NativeCapture.recent(getTargetContext().getFilesDir().getAbsolutePath(), cursor, filter);
+    }
+
+    private String metadata(String id) {
+        return NativeCapture.metadata(getTargetContext().getFilesDir().getAbsolutePath(), id);
     }
 
     private static JSONObject expectOk(String reply) throws Exception {
