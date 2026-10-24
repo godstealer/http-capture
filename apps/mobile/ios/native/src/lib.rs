@@ -574,6 +574,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn packet_device_forwards_tcp_and_returns_ip_packets() {
+        packet_device_forwards_tcp(false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn packet_device_forwards_ipv6_tcp_and_returns_ip_packets() {
+        packet_device_forwards_tcp(true).await;
+    }
+
+    async fn packet_device_forwards_tcp(ipv6: bool) {
         use etherparse::{PacketBuilder, SlicedPacket, TransportSlice};
         use tokio::net::TcpListener;
 
@@ -590,13 +599,21 @@ mod tests {
         let mut args = Args::default();
         args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
             .unwrap();
+        args.ipv6_enabled = ipv6;
         let cancel = CancellationToken::new();
         let task = tokio::spawn(tun2proxy::run(device, MTU, args, cancel.clone()));
 
         let source = [10, 111, 0, 2];
         let destination = [203, 0, 113, 1];
-        let syn = PacketBuilder::ipv4(source, destination, 64)
-            .tcp(41003, 443, 42, 65535).syn();
+        let source_v6 = "fd00:198:18::2".parse::<std::net::Ipv6Addr>().unwrap().octets();
+        let destination_v6 = "2001:db8::1".parse::<std::net::Ipv6Addr>().unwrap().octets();
+        let syn = if ipv6 {
+            PacketBuilder::ipv6(source_v6, destination_v6, 64)
+                .tcp(41003, 443, 42, 65535).syn()
+        } else {
+            PacketBuilder::ipv4(source, destination, 64)
+                .tcp(41003, 443, 42, 65535).syn()
+        };
         let mut packet = Vec::with_capacity(syn.size(0));
         syn.write(&mut packet, &[]).unwrap();
         input.send(packet).await.unwrap();
@@ -610,8 +627,13 @@ mod tests {
                 }
             }
         }).await.expect("iOS packet callback did not receive SYN-ACK");
-        let ack = PacketBuilder::ipv4(source, destination, 64)
-            .tcp(41003, 443, 43, 65535).ack(server_sequence.wrapping_add(1));
+        let ack = if ipv6 {
+            PacketBuilder::ipv6(source_v6, destination_v6, 64)
+                .tcp(41003, 443, 43, 65535).ack(server_sequence.wrapping_add(1))
+        } else {
+            PacketBuilder::ipv4(source, destination, 64)
+                .tcp(41003, 443, 43, 65535).ack(server_sequence.wrapping_add(1))
+        };
         let mut packet = Vec::with_capacity(ack.size(0));
         ack.write(&mut packet, &[]).unwrap();
         input.send(packet).await.unwrap();
@@ -628,12 +650,22 @@ mod tests {
             }
             head
         }).await.expect("proxy did not receive CONNECT");
-        assert!(head.starts_with(b"CONNECT 203.0.113.1:443 HTTP/1.1\r\n"));
+        let expected_connect = if ipv6 {
+            b"CONNECT [2001:db8::1]:443 HTTP/1.1\r\n".as_slice()
+        } else {
+            b"CONNECT 203.0.113.1:443 HTTP/1.1\r\n".as_slice()
+        };
+        assert!(head.starts_with(expected_connect), "{}", String::from_utf8_lossy(&head));
         upstream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
             .await.unwrap();
 
-        let data = PacketBuilder::ipv4(source, destination, 64)
-            .tcp(41003, 443, 43, 65535).psh().ack(server_sequence.wrapping_add(1));
+        let data = if ipv6 {
+            PacketBuilder::ipv6(source_v6, destination_v6, 64)
+                .tcp(41003, 443, 43, 65535).psh().ack(server_sequence.wrapping_add(1))
+        } else {
+            PacketBuilder::ipv4(source, destination, 64)
+                .tcp(41003, 443, 43, 65535).psh().ack(server_sequence.wrapping_add(1))
+        };
         let mut packet = Vec::with_capacity(data.size(5));
         data.write(&mut packet, b"hello").unwrap();
         input.send(packet).await.unwrap();
@@ -1104,6 +1136,37 @@ mod tests {
         tls_client.read_exact(&mut response).unwrap();
         assert_eq!(&response, b"RAW");
         tls_task.join().unwrap();
+
+        // The extension's transparent listener must also decrypt a real TLS
+        // request and apply its HTTP rule after the client trusts its CA.
+        let ca = command(r#"{"method":"certificate"}"#).unwrap();
+        let ca = ca.as_str().unwrap();
+        assert!(ca.contains("BEGIN CERTIFICATE") && !ca.contains("PRIVATE KEY"));
+        let der = STANDARD.decode(ca.lines().filter(|line| !line.starts_with("-----"))
+            .collect::<String>()).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(der.into()).unwrap();
+        let blocked = command(r#"{"method":"configure_blocking","config":{"enabled":true,"scope":"capture","rules":[{"id":"ios-tls-smoke","enabled":true,"matchType":"urlContains","pattern":"/ios-tls-smoke","method":"GET"}]}}"#).unwrap();
+        assert_eq!(blocked["rules"][0]["pattern"], "/ios-tls-smoke");
+        let unavailable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let unavailable_address = unavailable.local_addr().unwrap();
+        drop(unavailable);
+        let mut tls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots).with_no_client_auth();
+        tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let client = rustls::ClientConnection::new(Arc::new(tls_config),
+            rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap()).unwrap();
+        let tunnel = tunnel_to(bridge_address, unavailable_address).into_inner();
+        tunnel.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        let mut tls = rustls::StreamOwned::new(client, tunnel);
+        tls.write_all(format!("GET /ios-tls-smoke HTTP/1.1\r\nHost: {unavailable_address}\r\nConnection: close\r\n\r\n").as_bytes()).unwrap();
+        let mut tls_response = String::new();
+        tls.read_to_string(&mut tls_response).unwrap();
+        assert!(tls_response.starts_with("HTTP/1.1 403"), "{tls_response}");
+        assert!(tls_response.contains("X-HTTP-Capture-Blocked: ios-tls-smoke"));
+        let recorded = command(r#"{"method":"recent","urlContains":"/ios-tls-smoke"}"#).unwrap();
+        assert_eq!(recorded["requests"][0]["state"], "blocked");
+        assert_eq!(recorded["requests"][0]["status"], 403);
 
         let upload_origin = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let upload_port = upload_origin.local_addr().unwrap().port();
