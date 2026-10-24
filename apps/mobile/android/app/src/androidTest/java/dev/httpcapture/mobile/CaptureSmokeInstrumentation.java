@@ -50,6 +50,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             runBodyBoundarySmoke();
             runVpnLifecycleSmoke();
             runSelectedAppSmoke();
+            runVpnQuickRestartSmoke();
             runVpnStartupFailureSmoke();
             runPortableConfigurationSmoke();
             result.putString("smokeStatus", "ok");
@@ -85,6 +86,54 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             throw new AssertionError("VPN failure was overwritten: " + CaptureVpnService.message());
         try (ServerSocket available = new ServerSocket(port, 1,
                 InetAddress.getByName("127.0.0.1"))) { }
+    }
+
+    private void runVpnQuickRestartSmoke() throws Exception {
+        final int port;
+        try (ServerSocket reservation = new ServerSocket(0, 1,
+                InetAddress.getByName("127.0.0.1"))) {
+            port = reservation.getLocalPort();
+        }
+        try {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                Intent start = new Intent(getTargetContext(), CaptureVpnService.class);
+                start.setAction(CaptureVpnService.ACTION_START);
+                start.putExtra(CaptureVpnService.EXTRA_PORT, port);
+                getTargetContext().startForegroundService(start);
+                long deadline = System.currentTimeMillis() + 30_000;
+                while (System.currentTimeMillis() < deadline && !CaptureVpnService.isActive()) {
+                    if (!CaptureVpnService.isManaged() &&
+                            CaptureVpnService.message().startsWith("VPN 启动失败"))
+                        throw new AssertionError("VPN restart failed: " + CaptureVpnService.message());
+                    Thread.sleep(100);
+                }
+                if (!CaptureVpnService.isActive())
+                    throw new AssertionError("VPN restart timed out: " + CaptureVpnService.message());
+                expectOk(NativeCapture.tunnelStatus());
+
+                Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
+                stop.setAction(CaptureVpnService.ACTION_STOP);
+                getTargetContext().startService(stop);
+                deadline = System.currentTimeMillis() + 30_000;
+                while (System.currentTimeMillis() < deadline &&
+                        (CaptureVpnService.isManaged() || CaptureVpnService.isStopping()))
+                    Thread.sleep(100);
+                if (CaptureVpnService.isManaged() || CaptureVpnService.isStopping())
+                    throw new AssertionError("VPN restart cleanup timed out: "
+                            + CaptureVpnService.message());
+                try (ServerSocket released = new ServerSocket(port, 1,
+                        InetAddress.getByName("127.0.0.1"))) { }
+            }
+        } finally {
+            if (CaptureVpnService.isManaged()) {
+                Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
+                stop.setAction(CaptureVpnService.ACTION_STOP);
+                getTargetContext().startService(stop);
+                long deadline = System.currentTimeMillis() + 30_000;
+                while (System.currentTimeMillis() < deadline && CaptureVpnService.isManaged())
+                    Thread.sleep(100);
+            }
+        }
     }
 
     private void runPortableConfigurationSmoke() throws Exception {

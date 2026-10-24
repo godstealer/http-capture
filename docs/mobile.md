@@ -211,6 +211,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 
 2026-10-25：Android 切网时显式停止旧 TUN，即使旧转发任务已因失联而返回网络错误，完成桥与 QUIC 清理后仍允许在新网络建立新任务；真正的停止超时和任务异常仍返回错误。arm64-v8a、x86_64 原生库及调试 APK 本地重编通过；断网后恢复仍待设备实测。
 
+Android 模拟器冒烟现增加同一端口连续两次启动/停止 VPN，并在每次停止后检查回环代理端口已释放，覆盖快速重启时的资源清理。测试 APK 已在本地编译通过；当前 Windows 无可运行模拟器或连接设备，执行结果须等集中推送后的 Android CI。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。
