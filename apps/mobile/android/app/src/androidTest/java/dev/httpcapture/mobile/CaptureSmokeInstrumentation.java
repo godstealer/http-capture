@@ -237,6 +237,17 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (probeUID < 0 || application.getInt("uid") != probeUID) {
                 throw new AssertionError("VPN source UID differs from probe UID: " + origin + " / " + probeUID);
             }
+            JSONArray sourceRows = expectOk(recent("", "vpn-smoke")).getJSONArray("requests");
+            boolean sourceInList = false;
+            for (int index = 0; index < sourceRows.length(); index++) {
+                JSONObject summary = sourceRows.getJSONObject(index);
+                if (!capturedID.equals(summary.optString("id"))) continue;
+                if (summary.optInt("originUid", -1) != probeUID)
+                    throw new AssertionError("VPN source UID was missing from the request list: " + summary);
+                sourceInList = true;
+                break;
+            }
+            if (!sourceInList) throw new AssertionError("Captured request disappeared before list source check");
             verifySessionExport(capturedID);
             Intent udpProbe = new Intent("dev.httpcapture.probe.RUN_UDP");
             udpProbe.setComponent(new ComponentName("dev.httpcapture.probe",
