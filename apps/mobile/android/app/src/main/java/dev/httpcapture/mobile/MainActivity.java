@@ -688,7 +688,8 @@ public final class MainActivity extends Activity {
             row.setClickable(true);
             row.setOnClickListener(view -> showFlowDetail(id));
             row.setBackgroundResource(android.R.drawable.list_selector_background);
-            String originLabel = summary.optString("originLabel", "");
+            String originLabel = summary.isNull("originLabel")
+                ? "" : summary.optString("originLabel", "");
             int originUid = summary.optInt("originUid", -1);
             String origin = originLabel.isEmpty()
                 ? (originUid >= 0 ? " · UID " + originUid : "")
