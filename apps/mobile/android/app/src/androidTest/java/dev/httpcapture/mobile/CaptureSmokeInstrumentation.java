@@ -2,10 +2,13 @@ package dev.httpcapture.mobile;
 
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.app.Notification;
+import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Bundle;
+import android.service.notification.StatusBarNotification;
 import android.util.Base64;
 import android.view.accessibility.AccessibilityNodeInfo;
 
@@ -237,10 +240,13 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     "dev.httpcapture.probe.ProbeReceiver"));
             getTargetContext().sendBroadcast(udpProbe);
             runVpnTlsSmoke();
+            stopVpnFromNotification();
         } finally {
-            Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
-            stop.setAction(CaptureVpnService.ACTION_STOP);
-            getTargetContext().startService(stop);
+            if (CaptureVpnService.isManaged()) {
+                Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
+                stop.setAction(CaptureVpnService.ACTION_STOP);
+                getTargetContext().startService(stop);
+            }
             long deadline = System.currentTimeMillis() + 30_000;
             while (System.currentTimeMillis() < deadline && CaptureVpnService.isManaged()) {
                 Thread.sleep(200);
@@ -249,6 +255,28 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 throw new AssertionError("VPN did not stop: " + CaptureVpnService.message());
             }
         }
+    }
+
+    private void stopVpnFromNotification() throws Exception {
+        NotificationManager manager = getTargetContext().getSystemService(NotificationManager.class);
+        Notification.Action stop = null;
+        for (StatusBarNotification posted : manager.getActiveNotifications()) {
+            if (!getTargetContext().getPackageName().equals(posted.getPackageName())) continue;
+            Notification.Action[] actions = posted.getNotification().actions;
+            if (actions == null) continue;
+            for (Notification.Action action : actions) {
+                if ("停止抓包".contentEquals(action.title)) stop = action;
+            }
+        }
+        if (stop == null || stop.actionIntent == null)
+            throw new AssertionError("VPN foreground notification has no stop action");
+        stop.actionIntent.send();
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadline && CaptureVpnService.isManaged())
+            Thread.sleep(200);
+        if (CaptureVpnService.isManaged())
+            throw new AssertionError("VPN notification stop did not finish cleanup: "
+                + CaptureVpnService.message());
     }
 
     private void runVpnTlsSmoke() throws Exception {

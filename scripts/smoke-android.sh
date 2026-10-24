@@ -10,6 +10,7 @@ test -f "$probe_app"
 adb install -r "$app"
 adb install -r "$test_app"
 adb install -r "$probe_app"
+adb shell pm grant dev.httpcapture.mobile android.permission.POST_NOTIFICATIONS
 
 origin_log="$(mktemp)"
 udp_log="$(mktemp)"
