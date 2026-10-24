@@ -92,9 +92,9 @@ struct ContentView: View {
                         Button("刷新") { tunnel.refreshRequests() }
                         Spacer()
                         Button("新建请求") { showingManualRequest = true }
-                            .disabled(!tunnel.connected)
+                            .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping)
                         Button("已保存") { showingSavedRequests = true }
-                            .disabled(!tunnel.connected)
+                            .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping)
                     }
                     .buttonStyle(.borderless)
                     ForEach(tunnel.requests) { request in
@@ -159,7 +159,7 @@ struct ContentView: View {
                                 Button("返回请求详情") { tunnel.showMetadataSummary() }
                             }
                             Button("复制到新请求") { tunnel.copySelectedRequest() }
-                                .disabled(!tunnel.connected || tunnel.replayLoading)
+                                .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping || tunnel.replayLoading)
                             if tunnel.replayLoading { ProgressView("正在读取完整请求正文…") }
                             if let error = tunnel.replayError {
                                 Text(error).font(.footnote).foregroundStyle(.red)
@@ -621,6 +621,10 @@ private struct ManualRequestView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("保存请求") {
+                    if !tunnel.connected {
+                        Text("停抓时可以编辑和保存请求；发送需要先启动 VPN。首次使用请先启动一次 VPN 创建共享请求库。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     TextField("请求名称（留空自动生成）", text: $requestName)
                     Picker("保存到集合", selection: $selectedCollectionID) {
                         Text("我的请求（自动创建）").tag("")
@@ -658,7 +662,7 @@ private struct ManualRequestView: View {
                         } catch {
                             inputError = error.localizedDescription
                         }
-                    }.disabled(tunnel.sendingManualRequest)
+                    }.disabled(tunnel.tunnelStarting || tunnel.tunnelStopping || tunnel.sendingManualRequest)
                 }
                 if tunnel.sendingManualRequest {
                     ProgressView(tunnel.manualActivityText)
@@ -694,7 +698,7 @@ private struct ManualRequestView: View {
                         } catch {
                             inputError = error.localizedDescription
                         }
-                    }.disabled(tunnel.sendingManualRequest)
+                    }.disabled(!tunnel.connected || tunnel.sendingManualRequest)
                 }
             }
             .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.item]) { result in

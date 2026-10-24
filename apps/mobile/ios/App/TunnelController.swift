@@ -271,6 +271,10 @@ final class TunnelController: ObservableObject {
 
     func start() {
         if busy || shouldOfferStop || tunnelStopping { return }
+        if manualSaving || savedCollectionSaving || savedDeleteBusy {
+            message = "请等待离线请求库保存完成后再启动 VPN"
+            return
+        }
         guard (1...65535).contains(port) else {
             message = "端口必须在 1 到 65535 之间"
             return
@@ -767,7 +771,7 @@ final class TunnelController: ObservableObject {
     }
 
     func loadSavedCollections() {
-        guard connected else { return }
+        guard !tunnelStarting, !tunnelStopping else { return }
         if savedCollectionLoading || savedCollectionSaving {
             savedCollectionRefreshPending = true
             return
@@ -802,7 +806,7 @@ final class TunnelController: ObservableObject {
     }
 
     func changeSavedCollection(action: String, id: String, name: String? = nil) {
-        guard connected, !savedCollectionSaving, !savedCollectionLoading,
+        guard !tunnelStarting, !tunnelStopping, !savedCollectionSaving, !savedCollectionLoading,
               !savedRequestLoading, !savedDeleteBusy,
               ["rename", "delete"].contains(action) else { return }
         var request: [String: Any] = ["method": "change_saved_collection", "action": action, "id": id]
@@ -833,7 +837,7 @@ final class TunnelController: ObservableObject {
     }
 
     func loadSavedRequests(offset: Int = 0, query: String? = nil, collectionID: String? = nil) {
-        guard connected, !savedDeleteBusy, offset >= 0 else { return }
+        guard !tunnelStarting, !tunnelStopping, !savedDeleteBusy, offset >= 0 else { return }
         if savedRequestLoading {
             if offset == 0 && query == nil && collectionID == nil { savedListRefreshPending = true }
             return
@@ -882,7 +886,8 @@ final class TunnelController: ObservableObject {
     }
 
     func deleteSavedRequest(_ id: String) {
-        guard connected, !savedDeleteBusy, !savedRequestLoading, !savedOpenLoading else { return }
+        guard !tunnelStarting, !tunnelStopping, !savedDeleteBusy,
+              !savedRequestLoading, !savedOpenLoading else { return }
         savedListGeneration &+= 1
         let generation = savedListGeneration
         savedDeleteBusy = true
@@ -904,7 +909,7 @@ final class TunnelController: ObservableObject {
     }
 
     func openSavedRequest(_ id: String) {
-        guard connected, !savedOpenLoading else { return }
+        guard !tunnelStarting, !tunnelStopping, !savedOpenLoading else { return }
         savedOpenGeneration &+= 1
         let generation = savedOpenGeneration
         pendingSavedCopy = nil
@@ -1058,7 +1063,7 @@ final class TunnelController: ObservableObject {
     func saveManualRequest(id: String?, name: String, method: String, url: String,
                            engine: ManualSendEngine, headers: String, body: PreparedRequestBody,
                            collectionID: String? = nil, newCollectionName: String? = nil) {
-        guard connected, !sendingManualRequest else { return }
+        guard !tunnelStarting, !tunnelStopping, !sendingManualRequest else { return }
         let selectedCollection = collectionID?.isEmpty == false ? collectionID : nil
         let createdCollection = newCollectionName?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard selectedCollection == nil || createdCollection == nil else {
@@ -1112,13 +1117,14 @@ final class TunnelController: ObservableObject {
         canCancelManualUpload = false
         manualUploadToken = nil
         message = "正在保存请求…"
-        if body.bytes.count <= 48 * 1024 {
+        if !connected || body.bytes.count <= 48 * 1024 {
             draft["bodyBase64"] = body.bytes.base64EncodedString()
             var direct: [String: Any] = ["method": "save_request", "name": name, "request": draft]
             if let id { direct["id"] = id }
             if let selectedCollection { direct["collectionId"] = selectedCollection }
             if let createdCollection { direct["newCollectionName"] = createdCollection }
-            if let data = try? JSONSerialization.data(withJSONObject: direct), data.count <= 128 * 1024 {
+            if let data = try? JSONSerialization.data(withJSONObject: direct),
+               data.count <= (connected ? 128 * 1024 : 2 * 1024 * 1024) {
                 send(direct, onFailure: { [weak self] in self?.failManualSave() },
                      accept: { [weak self] in self?.manualSendGeneration == generation }) {
                     [weak self] value in self?.finishManualRequest(value)
@@ -1238,7 +1244,7 @@ final class TunnelController: ObservableObject {
         if manualSaving {
             manualSaving = false
             guard let result = value as? [String: Any], result["id"] as? String != nil else {
-                message = "VPN 扩展没有返回保存结果"
+                message = "请求库没有返回保存结果"
                 return
             }
             message = "请求已保存"
@@ -1592,7 +1598,10 @@ final class TunnelController: ObservableObject {
         }
         if !connected {
             guard let method = command["method"] as? String,
-                  ["recent", "metadata", "body_preview"].contains(method) else {
+                  ["recent", "metadata", "body_preview", "list_saved_collections",
+                   "change_saved_collection", "list_saved_requests", "save_request",
+                   "delete_saved_request", "open_saved_request", "saved_request_body"].contains(method),
+                  !tunnelStarting, !tunnelStopping else {
                 message = "请先启动 VPN"
                 onFailure?()
                 return

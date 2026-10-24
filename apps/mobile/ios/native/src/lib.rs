@@ -6,6 +6,7 @@ use capture_core::store::{Collection, SavedRequest};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::collections::HashMap;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -25,7 +26,8 @@ const MAX_UPLOAD_BODY: usize = 1024 * 1024;
 const MAX_UPLOAD_CHUNK: usize = 16 * 1024;
 static UPLOAD_IDS: AtomicU64 = AtomicU64::new(1);
 const SESSION_EXPORT_CHUNK: usize = 32 * 1024;
-static OFFLINE_STORE: OnceLock<Mutex<Option<(PathBuf, Arc<capture_core::store::Store>)>>> = OnceLock::new();
+static OFFLINE_STORE: OnceLock<Mutex<HashMap<PathBuf, Arc<capture_core::store::Store>>>> = OnceLock::new();
+static OFFLINE_SAVED_READ: OnceLock<Mutex<Option<SavedRead>>> = OnceLock::new();
 
 struct RequestUpload {
     token: u64,
@@ -285,15 +287,20 @@ fn replay_request(draft: RequestDraft) -> Result<serde_json::Value, String> {
 
 fn save_request(id: Option<&str>, name: &str, draft: RequestDraft,
                 collection_id: Option<&str>, new_collection_name: Option<&str>) -> Result<serde_json::Value, String> {
+    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = guard.as_ref().ok_or("Capture is not running")?;
+    save_request_in(&capture.runtime.engine.store, id, name, draft, collection_id, new_collection_name)
+}
+
+fn save_request_in(store: &capture_core::store::Store, id: Option<&str>, name: &str,
+                   draft: RequestDraft, collection_id: Option<&str>,
+                   new_collection_name: Option<&str>) -> Result<serde_json::Value, String> {
     let name = name.trim();
     if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
     if draft.body_base64.len() > MAX_UPLOAD_BODY.div_ceil(3) * 4 {
         return Err("Request body exceeds 1 MiB".into());
     }
     capture_core::http1::validate_draft(&draft).map_err(|error| error.to_string())?;
-    let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
-    let capture = guard.as_ref().ok_or("Capture is not running")?;
-    let store = &capture.runtime.engine.store;
     let mut library = store.library().map_err(|error| error.to_string())?;
     if collection_id.is_some() && new_collection_name.is_some() {
         return Err("Choose an existing collection or create a new one".into());
@@ -347,7 +354,11 @@ fn save_request(id: Option<&str>, name: &str, draft: RequestDraft,
 fn list_saved_collections() -> Result<serde_json::Value, String> {
     let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_ref().ok_or("Capture is not running")?;
-    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    list_saved_collections_in(&capture.runtime.engine.store)
+}
+
+fn list_saved_collections_in(store: &capture_core::store::Store) -> Result<serde_json::Value, String> {
+    let library = store.library().map_err(|error| error.to_string())?;
     Ok(serde_json::json!({"collections": library.collections.iter().map(|collection| {
         let count = library.requests.iter().filter(|request| request.collection_id == collection.id).count();
         serde_json::json!({"id": collection.id, "name": collection.name, "count": count})
@@ -357,7 +368,11 @@ fn list_saved_collections() -> Result<serde_json::Value, String> {
 fn change_saved_collection(action: &str, id: &str, name: Option<&str>) -> Result<serde_json::Value, String> {
     let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_ref().ok_or("Capture is not running")?;
-    let store = &capture.runtime.engine.store;
+    change_saved_collection_in(&capture.runtime.engine.store, action, id, name)
+}
+
+fn change_saved_collection_in(store: &capture_core::store::Store, action: &str, id: &str,
+                              name: Option<&str>) -> Result<serde_json::Value, String> {
     let mut library = store.library().map_err(|error| error.to_string())?;
     let index = library.collections.iter().position(|collection| collection.id == id)
         .ok_or("Collection not found")?;
@@ -386,11 +401,16 @@ fn change_saved_collection(action: &str, id: &str, name: Option<&str>) -> Result
 }
 
 fn list_saved_requests(offset: usize, query: &str, collection_id: &str) -> Result<serde_json::Value, String> {
-    let query = query.trim().to_lowercase();
-    if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
     let guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_ref().ok_or("Capture is not running")?;
-    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    list_saved_requests_in(&capture.runtime.engine.store, offset, query, collection_id)
+}
+
+fn list_saved_requests_in(store: &capture_core::store::Store, offset: usize, query: &str,
+                          collection_id: &str) -> Result<serde_json::Value, String> {
+    let query = query.trim().to_lowercase();
+    if query.len() > 256 { return Err("Saved request search is limited to 256 bytes".into()); }
+    let library = store.library().map_err(|error| error.to_string())?;
     if !collection_id.is_empty() && !library.collections.iter().any(|collection| collection.id == collection_id) {
         return Err("Selected collection no longer exists".into());
     }
@@ -416,22 +436,33 @@ fn list_saved_requests(offset: usize, query: &str, collection_id: &str) -> Resul
 fn delete_saved_request(id: &str) -> Result<serde_json::Value, String> {
     let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_mut().ok_or("Capture is not running")?;
-    let store = &capture.runtime.engine.store;
+    let result = delete_saved_request_in(&capture.runtime.engine.store, id)?;
+    if capture.saved_read.as_ref().is_some_and(|read| read.id == id) {
+        capture.saved_read = None;
+    }
+    Ok(result)
+}
+
+fn delete_saved_request_in(store: &capture_core::store::Store, id: &str)
+    -> Result<serde_json::Value, String> {
     let mut library = store.library().map_err(|error| error.to_string())?;
     let index = library.requests.iter().position(|request| request.id == id)
         .ok_or("Saved request not found")?;
     library.requests.remove(index);
     let revision = store.save_library(library).map_err(|error| error.to_string())?;
-    if capture.saved_read.as_ref().is_some_and(|read| read.id == id) {
-        capture.saved_read = None;
-    }
     Ok(serde_json::json!({"id":id,"revision":revision}))
 }
 
 fn open_saved_request(id: &str) -> Result<serde_json::Value, String> {
     let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_mut().ok_or("Capture is not running")?;
-    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    open_saved_request_in(&capture.runtime.engine.store, &mut capture.saved_read, id)
+}
+
+fn open_saved_request_in(store: &capture_core::store::Store,
+                         saved_read: &mut Option<SavedRead>, id: &str)
+    -> Result<serde_json::Value, String> {
+    let library = store.library().map_err(|error| error.to_string())?;
     let request = library.requests.iter().find(|request| request.id == id)
         .ok_or("Saved request not found")?;
     if request.draft.body_base64.len() > MAX_UPLOAD_BODY.div_ceil(3) * 4 {
@@ -442,11 +473,11 @@ fn open_saved_request(id: &str) -> Result<serde_json::Value, String> {
     let mut value = serde_json::to_value(request).map_err(|error| error.to_string())?;
     value["draft"]["bodyBase64"] = serde_json::json!("");
     let token = UPLOAD_IDS.fetch_add(1, Ordering::Relaxed);
-    capture.saved_read = Some(SavedRead { id: id.to_owned(), token,
+    *saved_read = Some(SavedRead { id: id.to_owned(), token,
         body_base64: request.draft.body_base64.as_str().to_owned() });
     let result = serde_json::json!({"request":value,"totalBytes":body.len(),"readToken":token});
     if serde_json::to_vec(&result).map_err(|error| error.to_string())?.len() > 96 * 1024 {
-        capture.saved_read = None;
+        *saved_read = None;
         return Err("Saved request headers exceed the tunnel message limit".into());
     }
     Ok(result)
@@ -455,7 +486,12 @@ fn open_saved_request(id: &str) -> Result<serde_json::Value, String> {
 fn saved_request_body(token: u64, offset: usize) -> Result<serde_json::Value, String> {
     let mut guard = active().lock().map_err(|_| "Capture state is unavailable")?;
     let capture = guard.as_mut().ok_or("Capture is not running")?;
-    let read = capture.saved_read.as_ref().ok_or("No saved request is open")?;
+    saved_request_body_in(&mut capture.saved_read, token, offset)
+}
+
+fn saved_request_body_in(saved_read: &mut Option<SavedRead>, token: u64, offset: usize)
+    -> Result<serde_json::Value, String> {
+    let read = saved_read.as_ref().ok_or("No saved request is open")?;
     if read.token != token { return Err("Saved request read token has expired".into()); }
     let encoded = read.body_base64.as_str();
     let total = encoded.len() / 4 * 3 - encoded.as_bytes().iter().rev().take_while(|b| **b == b'=').count();
@@ -465,7 +501,7 @@ fn saved_request_body(token: u64, offset: usize) -> Result<serde_json::Value, St
     let begin_char = offset / 3 * 4;
     let end_char = if end == total { encoded.len() } else { end / 3 * 4 };
     let part = encoded[begin_char..end_char].to_owned();
-    if end == total { capture.saved_read = None; }
+    if end == total { *saved_read = None; }
     Ok(serde_json::json!({"offset":offset,"totalBytes":total,
         "bodyBase64":part,
         "nextOffset":(end < total).then_some(end)}))
@@ -523,14 +559,12 @@ fn offline_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, Str
     if !path.is_file() {
         return Err("尚无共享抓包记录；升级后请先启动一次 VPN 迁移旧记录".into());
     }
-    let mut cached = OFFLINE_STORE.get_or_init(|| Mutex::new(None))
+    let mut cached = OFFLINE_STORE.get_or_init(|| Mutex::new(HashMap::new()))
         .lock().map_err(|_| "Offline history is unavailable")?;
-    if let Some((opened, store)) = cached.as_ref() {
-        if opened == &path { return Ok(store.clone()); }
-    }
+    if let Some(store) = cached.get(&path) { return Ok(store.clone()); }
     let store = Arc::new(capture_core::store::Store::open(&path)
         .map_err(|error| format!("{error:#}"))?);
-    *cached = Some((path, store.clone()));
+    cached.insert(path, store.clone());
     Ok(store)
 }
 
@@ -577,13 +611,65 @@ fn history_command(store: &capture_core::store::Store, method: &str,
 }
 
 fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, String> {
-    if request.len() > 128 * 1024 { return Err("Request exceeds 128 KiB".into()); }
+    let request_size = request.len();
+    if request_size > 2 * 1024 * 1024 { return Err("Request exceeds 2 MiB".into()); }
     let request: serde_json::Value = serde_json::from_str(request).map_err(|error| error.to_string())?;
     let method = request.get("method").and_then(|value| value.as_str()).ok_or("Missing method")?;
-    if !matches!(method, "recent" | "metadata" | "body_preview") {
-        return Err("Offline command is read-only and limited to capture history".into());
+    if method != "save_request" && request_size > 128 * 1024 {
+        return Err("Request exceeds 128 KiB".into());
     }
-    history_command(offline_store(data_dir)?.as_ref(), method, &request)
+    let store = offline_store(data_dir)?;
+    if matches!(method, "recent" | "metadata" | "body_preview") {
+        return history_command(store.as_ref(), method, &request);
+    }
+    match method {
+        "list_saved_collections" => list_saved_collections_in(store.as_ref()),
+        "change_saved_collection" => {
+            let action = request.get("action").and_then(|value| value.as_str()).ok_or("Missing collection action")?;
+            let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing collection ID")?;
+            change_saved_collection_in(store.as_ref(), action, id,
+                request.get("name").and_then(|value| value.as_str()))
+        }
+        "list_saved_requests" => {
+            let offset = request.get("offset").and_then(|value| value.as_u64())
+                .and_then(|value| usize::try_from(value).ok()).unwrap_or(0);
+            list_saved_requests_in(store.as_ref(), offset,
+                request.get("query").and_then(|value| value.as_str()).unwrap_or(""),
+                request.get("collectionId").and_then(|value| value.as_str()).unwrap_or(""))
+        }
+        "save_request" => {
+            let draft: RequestDraft = serde_json::from_value(request.get("request").cloned()
+                .ok_or("Missing request draft")?).map_err(|error| error.to_string())?;
+            save_request_in(store.as_ref(), request.get("id").and_then(|value| value.as_str()),
+                request.get("name").and_then(|value| value.as_str()).ok_or("Missing request name")?,
+                draft, request.get("collectionId").and_then(|value| value.as_str()),
+                request.get("newCollectionName").and_then(|value| value.as_str()))
+        }
+        "delete_saved_request" => {
+            let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing request ID")?;
+            let result = delete_saved_request_in(store.as_ref(), id)?;
+            let mut read = OFFLINE_SAVED_READ.get_or_init(|| Mutex::new(None))
+                .lock().map_err(|_| "Saved request reader is unavailable")?;
+            if read.as_ref().is_some_and(|entry| entry.id == id) { *read = None; }
+            Ok(result)
+        }
+        "open_saved_request" => {
+            let id = request.get("id").and_then(|value| value.as_str()).ok_or("Missing request ID")?;
+            let mut read = OFFLINE_SAVED_READ.get_or_init(|| Mutex::new(None))
+                .lock().map_err(|_| "Saved request reader is unavailable")?;
+            open_saved_request_in(store.as_ref(), &mut read, id)
+        }
+        "saved_request_body" => {
+            let token = request.get("readToken").and_then(|value| value.as_u64())
+                .ok_or("Missing saved request read token")?;
+            let offset = request.get("offset").and_then(|value| value.as_u64())
+                .and_then(|value| usize::try_from(value).ok()).ok_or("Invalid saved body offset")?;
+            let mut read = OFFLINE_SAVED_READ.get_or_init(|| Mutex::new(None))
+                .lock().map_err(|_| "Saved request reader is unavailable")?;
+            saved_request_body_in(&mut read, token, offset)
+        }
+        _ => Err("Offline command is limited to capture history and saved requests".into()),
+    }
 }
 
 fn offline_export_session(data_dir: &Path, output: &Path) -> Result<serde_json::Value, String> {
@@ -935,6 +1021,41 @@ mod tests {
         assert!(json.to_string().contains("eHl6"));
         assert!(offline_export_session(dir.path(), &exported).is_err());
         assert!(exported.exists());
+    }
+
+    #[test]
+    fn offline_saved_requests_keep_body_and_collections_without_vpn() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(offline_command(dir.path(), r#"{"method":"list_saved_collections"}"#).is_err());
+        capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let bytes = vec![0xa5; 160 * 1024];
+        let draft = serde_json::json!({"engine":"auto", "method":"POST",
+            "url":"https://example.com/offline", "headers":[], "bodyBase64":STANDARD.encode(&bytes)});
+        let saved = offline_command(dir.path(), &serde_json::json!({"method":"save_request",
+            "name":"offline request", "newCollectionName":"Offline collection", "request":draft}).to_string()).unwrap();
+        let id = saved["id"].as_str().unwrap();
+        let collections = offline_command(dir.path(), r#"{"method":"list_saved_collections"}"#).unwrap();
+        let collection_id = collections["collections"][0]["id"].as_str().unwrap();
+        let listed = offline_command(dir.path(), &serde_json::json!({"method":"list_saved_requests",
+            "collectionId":collection_id,"query":"OFFLINE"}).to_string()).unwrap();
+        assert_eq!(listed["total"], 1);
+        let opened = offline_command(dir.path(), &serde_json::json!({"method":"open_saved_request",
+            "id":id}).to_string()).unwrap();
+        let token = opened["readToken"].as_u64().unwrap();
+        let mut copied = Vec::new();
+        while copied.len() < bytes.len() {
+            let chunk = offline_command(dir.path(), &serde_json::json!({"method":"saved_request_body",
+                "readToken":token,"offset":copied.len()}).to_string()).unwrap();
+            copied.extend(STANDARD.decode(chunk["bodyBase64"].as_str().unwrap()).unwrap());
+        }
+        assert_eq!(copied, bytes);
+        offline_command(dir.path(), &serde_json::json!({"method":"change_saved_collection",
+            "action":"rename","id":collection_id,"name":"Renamed offline"}).to_string()).unwrap();
+        offline_command(dir.path(), &serde_json::json!({"method":"delete_saved_request",
+            "id":id}).to_string()).unwrap();
+        assert_eq!(offline_command(dir.path(), r#"{"method":"list_saved_requests"}"#).unwrap()["total"], 0);
+        offline_command(dir.path(), &serde_json::json!({"method":"change_saved_collection",
+            "action":"delete","id":collection_id}).to_string()).unwrap();
     }
 
     fn tunnel_to(
