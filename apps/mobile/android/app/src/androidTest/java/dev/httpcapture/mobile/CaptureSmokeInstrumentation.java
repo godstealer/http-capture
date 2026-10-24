@@ -41,8 +41,12 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
 
     private void runVpnLifecycleSmoke() throws Exception {
         Intent consent = VpnService.prepare(getTargetContext());
+        Activity consentHost = null;
         if (consent != null) {
-            startActivitySync(consent);
+            Activity activity = startActivitySync(new Intent(getTargetContext(), MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            consentHost = activity;
+            activity.runOnUiThread(() -> activity.startActivityForResult(consent, 49123));
             long deadline = System.currentTimeMillis() + 30_000;
             boolean approved = false;
             String visibleWindow = "no accessibility window";
@@ -64,6 +68,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         if (VpnService.prepare(getTargetContext()) != null) {
             throw new AssertionError("VPN consent was not granted");
         }
+        Activity host = consentHost;
+        if (host != null) host.runOnUiThread(host::finish);
 
         try (ServerSocket reservation = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
             int port = reservation.getLocalPort();
@@ -98,7 +104,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
     private static AccessibilityNodeInfo findConsentButton(AccessibilityNodeInfo node) {
         if (node == null) return null;
         CharSequence id = node.getViewIdResourceName();
-        if ("android:id/button1".contentEquals(id == null ? "" : id)) return node;
+        String resource = id == null ? "" : id.toString();
+        if ("android:id/button1".equals(resource) || resource.endsWith(":id/button_start_vpn")) return node;
         CharSequence label = node.getText();
         String text = label == null ? "" : label.toString().trim();
         if ("android.widget.Button".contentEquals(node.getClassName() == null ? "" : node.getClassName())
