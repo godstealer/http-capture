@@ -268,7 +268,24 @@ fn stop() -> Result<serde_json::Value, String> {
     }
 }
 
+fn validate_mobile_body(draft: &RequestDraft) -> Result<(), String> {
+    if draft.body_base64.len() > MAX_UPLOAD_BODY.div_ceil(3) * 4 {
+        return Err("Request body exceeds 1 MiB".into());
+    }
+    let mut decoder = base64::read::DecoderReader::new(draft.body_base64.as_bytes(), &STANDARD);
+    let mut buffer = [0_u8; MAX_UPLOAD_CHUNK];
+    let mut length = 0;
+    loop {
+        let count = decoder.read(&mut buffer).map_err(|error| format!("Invalid body base64: {error}"))?;
+        if count == 0 { break; }
+        length += count;
+        if length > MAX_UPLOAD_BODY { return Err("Request body exceeds 1 MiB".into()); }
+    }
+    Ok(())
+}
+
 fn replay_request(draft: RequestDraft) -> Result<serde_json::Value, String> {
+    validate_mobile_body(&draft)?;
     let (runtime, handle) = {
         let guard = active()
             .lock()
@@ -288,6 +305,7 @@ fn replay_request(draft: RequestDraft) -> Result<serde_json::Value, String> {
 
 fn replay_request_offline(data_dir: &Path, draft: RequestDraft)
     -> Result<serde_json::Value, String> {
+    validate_mobile_body(&draft)?;
     // The Packet Tunnel performs the first-run migration before the host may
     // open this directory. Do not create a new shared database ahead of it.
     offline_store(data_dir)?;
@@ -316,9 +334,7 @@ fn save_request_in(store: &capture_core::store::Store, id: Option<&str>, name: &
                    new_collection_name: Option<&str>) -> Result<serde_json::Value, String> {
     let name = name.trim();
     if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
-    if draft.body_base64.len() > MAX_UPLOAD_BODY.div_ceil(3) * 4 {
-        return Err("Request body exceeds 1 MiB".into());
-    }
+    validate_mobile_body(&draft)?;
     capture_core::http1::validate_draft(&draft).map_err(|error| error.to_string())?;
     let mut library = store.library().map_err(|error| error.to_string())?;
     if collection_id.is_some() && new_collection_name.is_some() {
@@ -1174,6 +1190,59 @@ mod tests {
         let page = offline_command(dir.path(), r#"{"method":"recent","urlContains":"ios-offline-send"}"#).unwrap();
         assert_eq!(page["requests"][0]["id"], sent["id"]);
         assert_eq!(page["requests"][0]["status"], 200);
+    }
+
+    #[test]
+    fn offline_one_megabyte_request_replays_and_records_exact_body() {
+        let dir = tempfile::tempdir().unwrap();
+        capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/ios-offline-binary", listener.local_addr().unwrap());
+        let payload: Vec<u8> = (0..MAX_UPLOAD_BODY).map(|index| (index % 251) as u8).collect();
+        let expected = payload.clone();
+        let server = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            let mut reader = std::io::BufReader::new(socket);
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" { break; }
+                headers.push_str(&line);
+            }
+            assert!(headers.starts_with("POST /ios-offline-binary HTTP/1.1"));
+            assert!(headers.to_ascii_lowercase().contains("content-length: 1048576"));
+            let mut received = vec![0; expected.len()];
+            reader.read_exact(&mut received).unwrap();
+            assert_eq!(received, expected);
+            reader.get_mut().write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            ).unwrap();
+        });
+        let sent = offline_command(dir.path(), &serde_json::json!({"method":"send_request",
+            "request":{"engine":"native","method":"POST","url":url,
+                "headers":[],"bodyBase64":STANDARD.encode(&payload)}}).to_string()).unwrap();
+        server.join().unwrap();
+        assert_eq!(sent["status"], 200, "{sent}");
+        let detail = offline_command(dir.path(), &serde_json::json!({"method":"metadata",
+            "id":sent["id"]}).to_string()).unwrap();
+        let revision = detail["bodyRevision"].as_str().unwrap();
+        let mut recorded = Vec::with_capacity(MAX_UPLOAD_BODY);
+        while recorded.len() < MAX_UPLOAD_BODY {
+            let chunk = offline_command(dir.path(), &serde_json::json!({"method":"body_preview",
+                "id":sent["id"],"variant":"request","revision":revision,
+                "offset":recorded.len()}).to_string()).unwrap();
+            recorded.extend(STANDARD.decode(chunk["bodyBase64"].as_str().unwrap()).unwrap());
+        }
+        assert_eq!(recorded, payload);
+        let oversize = STANDARD.encode(vec![0_u8; MAX_UPLOAD_BODY + 1]);
+        let too_large = serde_json::json!({"engine":"native","method":"POST","url":url,
+            "headers":[],"bodyBase64":oversize});
+        assert!(offline_command(dir.path(), &serde_json::json!({"method":"send_request",
+            "request":too_large}).to_string()).unwrap_err().contains("1 MiB"));
+        assert!(offline_command(dir.path(), &serde_json::json!({"method":"save_request",
+            "name":"oversize","request":too_large}).to_string()).unwrap_err().contains("1 MiB"));
     }
 
     #[test]
