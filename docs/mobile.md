@@ -162,6 +162,9 @@ iOS 历史记录已接通内核的 URL 包含过滤；搜索时重置分页游�
 iOS 抓包首页连接期间每两秒轮询最新一页请求。列表现改为每页最多 50 条，提供上一页和下一页；仅在最新页自动刷新，查看旧页时保持页内容与游标稳定，返回最新页或手动刷新时重新读取。这样新请求涌入时不会因为截断已加载的 500 条列表而跳过中间记录，且界面内存有界。手动搜索、翻页或断开时会废弃过期轮询结果，避免旧筛选条件覆盖新列表。此轮 Swift 改动仍待 Mac 编译与设备界面验收。
 
 在 macOS 上先安装 Xcode、Rust 和 XcodeGen，然后执行 `cd apps/mobile/ios && xcodegen generate`，用 Xcode 打开生成的 `HTTPCaptureMobile.xcodeproj`，为宿主与扩展选择同一个 Apple Team 及支持 Packet Tunnel 的配置。首次构建会运行 `build-native.sh` 编译对应架构的 Rust 静态库。另有在开发分支的移动端文件更新时自动触发的 **iOS mobile build** 工作流，用 Mac 构建机按宿主架构构建无签名模拟器 App 与 Packet Tunnel 扩展，并检查两个可执行文件的架构；已执行并通过，但不能代替 iPhone 的签名、VPN 权限和流量验收。只有 Xcode 构建、签名和 iPhone 真机 VPN 测试通过后，iOS 才能算可交付。
+
+已添加 Mac 上的签名设备构建入口：`bash scripts/build-ios-device.sh TEAM_ID [DEVICE_UDID]`。脚本生成 Xcode 工程，以指定 Apple Team 对宿主和 Packet Tunnel 进行自动签名，分别校验签名及实际写入的 App Group、Packet Tunnel 权限；提供设备 UDID 时用 Xcode 的 `devicectl` 安装。需要在 Xcode 登录可用的开发者账号，并为两个 Bundle ID、App Group 和 Packet Tunnel 配置可用的签名权限。此脚本尚未在 Mac 和 iPhone 上执行；签名构建或安装成功也仍需手动授权 VPN 并验收抓包流量。
+
 iOS 工作流先构建并安装无签名模拟器 App，启动后保存首页截图，再上传 `http-capture-ios-simulator` 与 `http-capture-ios-launch` 附件；随后在同一台 Mac 上额外编译无签名的 iPhone arm64 宿主与扩展并核对架构。[首次模拟器启动](https://github.com/godstealer/http-capture/actions/runs/40065417596) 已通过，截图确认首页实际显示；后续[端口输入修复运行](https://github.com/godstealer/http-capture/actions/runs/40066439156) 的截图确认默认端口显示为 `8899` 而非 `8,899`。模拟器附件不能安装到 iPhone，设备目标编译和首页截图也不能代替签名、VPN 权限与流量验收。
 
 ## 上游 CA 证书
