@@ -1160,6 +1160,52 @@ mod tests {
     }
 
     #[test]
+    fn saved_one_megabyte_request_replays_without_changing_body() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let _guard = SERIAL.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/large-post", listener.local_addr().unwrap());
+        let body = vec![0xA5; 1024 * 1024];
+        let expected = body.clone();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            assert!(line.starts_with("POST /large-post HTTP/1.1"));
+            let mut length = None;
+            loop {
+                line.clear();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" { break; }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = Some(value.trim().parse::<usize>().unwrap());
+                    }
+                }
+            }
+            assert_eq!(length, Some(expected.len()));
+            let mut received = vec![0; expected.len()];
+            reader.read_exact(&mut received).unwrap();
+            assert_eq!(received, expected);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let raw = json!({"name":"large body", "draft": {
+            "engine":"native", "method":"POST", "url":url, "headers":[],
+            "bodyBase64":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &body)
+        }}).to_string();
+        let id = save_request(dir.path(), &raw).unwrap()["id"].as_str().unwrap().to_owned();
+        let saved = saved_request(dir.path(), &id).unwrap();
+        assert_eq!(saved["draft"]["bodyBase64"].as_str().unwrap().len(), body.len().div_ceil(3) * 4);
+        let result = send_request(dir.path(), &saved["draft"].to_string()).unwrap();
+        server.join().unwrap();
+        assert_eq!(result["status"], 200);
+        assert!(result["error"].is_null());
+    }
+
+    #[test]
     fn exports_saved_session_after_capture_stops() {
         let _guard = SERIAL.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
