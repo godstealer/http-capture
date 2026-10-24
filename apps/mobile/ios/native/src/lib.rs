@@ -169,13 +169,16 @@ fn start(
 }
 
 fn stop() -> Result<serde_json::Value, String> {
-    let Some(mut capture) = active()
+    let mut guard = active()
         .lock()
-        .map_err(|_| "Capture state is unavailable")?
-        .take()
+        .map_err(|_| "Capture state is unavailable")?;
+    let Some(mut capture) = guard.take()
     else {
         return Ok(serde_json::Value::Null);
     };
+    // Keep startup and app messages out until the old proxy, bridge and
+    // executor have actually stopped. Releasing this lock after take() would
+    // let a new tunnel open the same port and database during teardown.
     capture.cancel.cancel();
     let tunnel_result = capture.executor.block_on(async {
         tokio::time::timeout(std::time::Duration::from_secs(5), &mut capture.task).await
