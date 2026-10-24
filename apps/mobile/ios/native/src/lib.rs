@@ -272,9 +272,12 @@ fn stop() -> Result<serde_json::Value, String> {
     let tunnel_result = capture.executor.block_on(async {
         tokio::time::timeout(std::time::Duration::from_secs(5), &mut capture.task).await
     });
-    if tunnel_result.is_err() {
+    let abort_finished = if tunnel_result.is_err() {
         capture.task.abort();
-    }
+        capture.executor.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), &mut capture.task).await
+        }).is_ok()
+    } else { true };
     capture.executor.block_on(capture.bridge.stop());
     if let Some(quic) = capture.quic.take() {
         capture.executor.block_on(quic.stop());
@@ -288,6 +291,7 @@ fn stop() -> Result<serde_json::Value, String> {
         Ok(Ok(Ok(_))) => Ok(serde_json::Value::Null),
         Ok(Ok(Err(e))) => Err(e),
         Ok(Err(e)) => Err(e.to_string()),
+        Err(_) if !abort_finished => Err("Tunnel did not stop after abort".into()),
         Err(_) => Err("Tunnel did not stop within five seconds".into()),
     }
 }

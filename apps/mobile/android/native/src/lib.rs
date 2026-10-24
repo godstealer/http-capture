@@ -242,7 +242,16 @@ fn stop_tunnel_inner(capture: &mut MobileCapture) -> Result<(), String> {
         Ok(Err(error)) => Err(error.to_string()),
         Err(_) => {
             tunnel.task.abort();
-            Err("VPN tunnel did not stop within five seconds".into())
+            // Wait for the aborted outer task to drop its abort-on-drop guard,
+            // which in turn cancels the inner TUN reader before Java closes fd.
+            let aborted = capture.executor.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(2), &mut tunnel.task).await
+            });
+            if aborted.is_err() {
+                Err("VPN tunnel did not stop after abort".into())
+            } else {
+                Err("VPN tunnel did not stop within five seconds".into())
+            }
         }
     };
     capture.executor.block_on(tunnel.bridge.stop());

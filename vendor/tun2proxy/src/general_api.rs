@@ -4,6 +4,54 @@ use crate::{
 };
 use std::os::raw::{c_char, c_int, c_ushort};
 
+// The mobile VPN may abort general_run_async after its shutdown deadline.
+// Tokio JoinHandle normally detaches its child when dropped, leaving the old
+// TUN reader alive while the caller closes the fd and starts a new tunnel.
+#[cfg(not(target_os = "android"))]
+struct AbortTunnelOnDrop(tokio::task::AbortHandle);
+
+#[cfg(not(target_os = "android"))]
+impl Drop for AbortTunnelOnDrop {
+    fn drop(&mut self) { self.0.abort(); }
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod abort_tests {
+    use super::AbortTunnelOnDrop;
+    use tokio::sync::oneshot;
+
+    struct NotifyOnDrop(Option<oneshot::Sender<()>>);
+
+    impl Drop for NotifyOnDrop {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() { let _ = sender.send(()); }
+        }
+    }
+
+    #[tokio::test]
+    async fn aborting_outer_tun_task_stops_its_packet_reader() {
+        let (child_started_tx, child_started_rx) = oneshot::channel();
+        let (parent_ready_tx, parent_ready_rx) = oneshot::channel();
+        let (child_stopped_tx, child_stopped_rx) = oneshot::channel();
+        let parent = tokio::spawn(async move {
+            let child = tokio::spawn(async move {
+                let _notify = NotifyOnDrop(Some(child_stopped_tx));
+                let _ = child_started_tx.send(());
+                std::future::pending::<()>().await;
+            });
+            let _abort_child_on_drop = AbortTunnelOnDrop(child.abort_handle());
+            child_started_rx.await.unwrap();
+            let _ = parent_ready_tx.send(());
+            let _ = child.await;
+        });
+        parent_ready_rx.await.unwrap();
+        parent.abort();
+        let _ = parent.await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), child_stopped_rx)
+            .await.unwrap().unwrap();
+    }
+}
+
 /// # Safety
 ///
 /// Run the tun2proxy component with some arguments.
@@ -259,9 +307,19 @@ pub async fn general_run_async(
         }
     }
 
-    let join_handle = tokio::spawn(crate::run(device, tun_mtu, args.clone(), shutdown_token.clone()));
+    // On Android the caller owns a borrowed VPN fd. Running the packet loop in
+    // this future makes aborting the outer task drop the reader immediately,
+    // before the service closes that fd or starts a replacement tunnel.
+    #[cfg(target_os = "android")]
+    let run_result = crate::run(device, tun_mtu, args.clone(), shutdown_token.clone()).await;
+    #[cfg(not(target_os = "android"))]
+    let run_result = {
+        let join_handle = tokio::spawn(crate::run(device, tun_mtu, args.clone(), shutdown_token.clone()));
+        let _abort_child_on_drop = AbortTunnelOnDrop(join_handle.abort_handle());
+        join_handle.await?
+    };
 
-    match join_handle.await? {
+    match run_result {
         Ok(sessions) => {
             #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
             tproxy_config::tproxy_remove(restore).await?;
