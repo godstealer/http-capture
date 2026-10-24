@@ -104,8 +104,7 @@ struct ResponseRule: Identifiable {
               let response = raw["replacement"] as? [String: Any],
               let base64 = response["bodyBase64"] as? String,
               base64.utf8.count <= 96 * 1024,
-              let body = Data(base64Encoded: base64), body.count <= 64 * 1024,
-              String(data: body, encoding: .utf8) != nil,
+               let body = Data(base64Encoded: base64), body.count <= 64 * 1024,
               let headers = response["headers"] as? [[String: Any]] else { return false }
         var length = 0
         for header in headers {
@@ -580,6 +579,7 @@ final class TunnelController: ObservableObject {
 
     func addResponseRule(name: String, matchType: String, pattern: String, method: String,
                          modify: Bool, status: String, headers: String, body: String,
+                          bodyBase64: String? = nil,
                          find: String, replacement: String, regex: Bool,
                          editingID: String? = nil) {
         let pattern = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -623,9 +623,24 @@ final class TunnelController: ObservableObject {
             rule["modifications"] = [change]
         } else {
             guard let code = UInt16(status.trimmingCharacters(in: .whitespacesAndNewlines)),
-                  (200...599).contains(code), body.utf8.count <= 64 * 1024,
-                  headers.utf8.count <= 16 * 1024 else {
-                message = "状态码需为 200–599，正文最多 64 KiB，响应头最多 16 KiB"
+                  (200...599).contains(code), headers.utf8.count <= 16 * 1024 else {
+                message = "状态码需为 200–599，响应头最多 16 KiB"
+                return
+            }
+            let responseBytes: Data
+            if let bodyBase64 {
+                let encoded = bodyBase64.filter { !$0.isWhitespace }
+                guard encoded.utf8.count <= 96 * 1024,
+                      let decoded = Data(base64Encoded: encoded) else {
+                    message = "正文不是有效的 Base64 编码，最多对应 64 KiB 原始字节"
+                    return
+                }
+                responseBytes = decoded
+            } else {
+                responseBytes = Data(body.utf8)
+            }
+            guard responseBytes.count <= 64 * 1024 else {
+                message = "响应正文最多 64 KiB"
                 return
             }
             var rows: [[String: String]] = []
@@ -641,7 +656,7 @@ final class TunnelController: ObservableObject {
             rule["action"] = "replace"
             rule["modifications"] = nil
             rule["replacement"] = ["status": Int(code), "headers": rows,
-                                   "bodyBase64": Data(body.utf8).base64EncodedString()]
+                                   "bodyBase64": responseBytes.base64EncodedString()]
         }
         if let index = editingIndex { rules[index] = rule }
         else { rules.append(rule) }

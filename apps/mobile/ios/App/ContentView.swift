@@ -192,6 +192,8 @@ private struct ResponseRewriteRulesView: View {
     @State private var status = "200"
     @State private var headers = ""
     @State private var responseBody = ""
+    @State private var responseBodyBase64 = ""
+    @State private var binaryResponseBody = false
     @State private var find = ""
     @State private var replacement = ""
     @State private var regex = false
@@ -257,13 +259,25 @@ private struct ResponseRewriteRulesView: View {
                         TextField("状态码，例如 200", text: $status).keyboardType(.numberPad)
                         Text("响应头，每行 名称: 值").font(.footnote).foregroundStyle(.secondary)
                         TextEditor(text: $headers).frame(minHeight: 100)
-                        Text("完整响应正文（UTF-8 文本）").font(.footnote).foregroundStyle(.secondary)
-                        TextEditor(text: $responseBody).frame(minHeight: 150)
+                        Toggle("按 Base64 输入二进制正文", isOn: $binaryResponseBody)
+                        Text("两种格式使用独立输入框；保存时只采用当前显示的内容")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        if binaryResponseBody {
+                            Text("完整响应正文（Base64 原始字节）")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            TextEditor(text: $responseBodyBase64).frame(minHeight: 150)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        } else {
+                            Text("完整响应正文（UTF-8 文本）")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            TextEditor(text: $responseBody).frame(minHeight: 150)
+                        }
                     }
                     Button(editingID == nil ? "添加规则" : "保存修改") {
                         tunnel.addResponseRule(name: name, matchType: matchType,
                             pattern: pattern, method: method, modify: modify,
                             status: status, headers: headers, body: responseBody,
+                            bodyBase64: binaryResponseBody ? responseBodyBase64 : nil,
                             find: find, replacement: replacement, regex: regex,
                             editingID: editingID)
                     }
@@ -299,6 +313,8 @@ private struct ResponseRewriteRulesView: View {
                 .joined(separator: "\n")
             let bytes = Data(base64Encoded: response["bodyBase64"] as? String ?? "") ?? Data()
             responseBody = String(data: bytes, encoding: .utf8) ?? ""
+            responseBodyBase64 = response["bodyBase64"] as? String ?? ""
+            binaryResponseBody = String(data: bytes, encoding: .utf8) == nil
         }
     }
 
@@ -312,6 +328,8 @@ private struct ResponseRewriteRulesView: View {
         status = "200"
         headers = ""
         responseBody = ""
+        responseBodyBase64 = ""
+        binaryResponseBody = false
         find = ""
         replacement = ""
         regex = false
