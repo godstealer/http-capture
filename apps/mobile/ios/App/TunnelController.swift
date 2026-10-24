@@ -147,6 +147,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var certificateURL: URL?
     @Published private(set) var sessionExportURL: URL?
     @Published private(set) var sessionExporting = false
+    @Published private(set) var sessionExportCancelPending = false
     @Published private(set) var sessionExportProgress = 0
     private var sessionExportGeneration: UInt64 = 0
     private var sessionExportFile: FileHandle?
@@ -1281,7 +1282,14 @@ final class TunnelController: ObservableObject {
         let generation = sessionExportGeneration
         message = "正在导出抓包记录…"
         send(["method": "begin_session_export"], onFailure: { [weak self] in
-            guard let self, self.sessionExportGeneration == generation else { return }
+            guard let self else { return }
+            if self.sessionExportCancelPending && self.sessionExportGeneration == (generation &+ 1) {
+                self.sessionExportCancelPending = false
+                self.sessionExporting = false
+                self.message = "已取消导出抓包记录"
+                return
+            }
+            guard self.sessionExportGeneration == generation else { return }
             self.sessionExporting = false
         }) { [weak self] value in
             guard let self else { return }
@@ -1293,21 +1301,41 @@ final class TunnelController: ObservableObject {
                 if self.sessionExportGeneration == generation {
                     self.sessionExporting = false
                     self.message = "VPN 扩展没有返回导出信息"
+                } else if self.sessionExportCancelPending && self.sessionExportGeneration == (generation &+ 1) {
+                    self.sessionExportCancelPending = false
+                    self.sessionExporting = false
+                    self.message = "已取消导出抓包记录"
                 }
                 return
             }
             guard self.sessionExportGeneration == generation else {
-                self.finishSessionExport(token: token)
+                // A response from a previous VPN session must not send a finish
+                // command to the current session, where token values may repeat.
+                guard self.sessionExportCancelPending,
+                      self.sessionExportGeneration == (generation &+ 1) else { return }
+                let cancelledGeneration = self.sessionExportGeneration
+                self.finishSessionExport(token: token) { [weak self] in
+                    guard let self, self.sessionExportGeneration == cancelledGeneration,
+                          self.sessionExportCancelPending else { return }
+                    self.sessionExportCancelPending = false
+                    self.sessionExporting = false
+                    self.message = "已取消导出抓包记录"
+                }
                 return
             }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("http-capture-\(UUID().uuidString).json")
             guard FileManager.default.createFile(atPath: url.path, contents: nil),
                   let file = try? FileHandle(forWritingTo: url) else {
-                self.sessionExporting = false
                 self.message = "无法创建临时导出文件"
                 try? FileManager.default.removeItem(at: url)
-                self.finishSessionExport(token: token)
+                self.sessionExportCancelPending = true
+                let finishingGeneration = self.sessionExportGeneration
+                self.finishSessionExport(token: token) { [weak self] in
+                    guard self?.sessionExportGeneration == finishingGeneration else { return }
+                    self?.sessionExportCancelPending = false
+                    self?.sessionExporting = false
+                }
                 return
             }
             self.sessionExportToken = token
@@ -1319,16 +1347,16 @@ final class TunnelController: ObservableObject {
     }
 
     func cancelSessionExport() {
-        guard sessionExporting else { return }
+        guard sessionExporting, !sessionExportCancelPending else { return }
         if let token = sessionExportToken,
            let file = sessionExportFile,
            let url = sessionExportTempURL {
-            endSessionExport(token: token, file: file, url: url, success: false)
+            endSessionExport(token: token, file: file, url: url, success: false, cancelled: true)
         } else {
             sessionExportGeneration &+= 1
-            sessionExporting = false
+            sessionExportCancelPending = true
         }
-        message = "已取消导出抓包记录"
+        message = "正在取消导出抓包记录…"
     }
 
     private func readSessionExport(token: UInt64, total: UInt64, offset: UInt64,
@@ -1373,7 +1401,8 @@ final class TunnelController: ObservableObject {
         }
     }
 
-    private func endSessionExport(token: UInt64, file: FileHandle, url: URL, success: Bool) {
+    private func endSessionExport(token: UInt64, file: FileHandle, url: URL,
+                                  success: Bool, cancelled: Bool = false) {
         sessionExportGeneration &+= 1
         try? file.close()
         if success { sessionExportURL = url }
@@ -1381,15 +1410,42 @@ final class TunnelController: ObservableObject {
         sessionExportToken = nil
         sessionExportFile = nil
         sessionExportTempURL = nil
-        sessionExporting = false
-        finishSessionExport(token: token)
+        sessionExportCancelPending = true
+        let finishingGeneration = sessionExportGeneration
+        finishSessionExport(token: token) { [weak self] in
+            guard self?.sessionExportGeneration == finishingGeneration else { return }
+            self?.sessionExportCancelPending = false
+            self?.sessionExporting = false
+            if cancelled { self?.message = "已取消导出抓包记录" }
+        }
     }
 
-    private func finishSessionExport(token: UInt64) {
+    private func finishSessionExport(token: UInt64, completion: @escaping () -> Void) {
         guard let session = manager?.connection as? NETunnelProviderSession,
               let data = try? JSONSerialization.data(withJSONObject:
-                  ["method": "finish_session_export", "token": token]) else { return }
-        try? session.sendProviderMessage(data) { _ in }
+                  ["method": "finish_session_export", "token": token]) else {
+            completion()
+            return
+        }
+        do {
+            try session.sendProviderMessage(data) { _ in
+                Task { @MainActor in completion() }
+            }
+        } catch { completion() }
+    }
+
+    private func abandonSessionExport() {
+        guard sessionExporting else { return }
+        sessionExportGeneration &+= 1
+        try? sessionExportFile?.close()
+        if let url = sessionExportTempURL { try? FileManager.default.removeItem(at: url) }
+        if let token = sessionExportToken { finishSessionExport(token: token) { } }
+        sessionExportFile = nil
+        sessionExportTempURL = nil
+        sessionExportToken = nil
+        sessionExportCancelPending = false
+        sessionExporting = false
+        sessionExportProgress = 0
     }
 
     func refreshTrustedCertificates() {
@@ -1501,6 +1557,7 @@ final class TunnelController: ObservableObject {
             message = "VPN 抓包运行中"
             refreshRequests()
         case .connecting, .reasserting:
+            abandonSessionExport()
             abandonManualSend()
             resetSavedRequestUI()
             if tunnelStopping {
@@ -1518,6 +1575,7 @@ final class TunnelController: ObservableObject {
             requestPageLoading = false
             message = "正在建立 VPN…"
         case .disconnecting:
+            abandonSessionExport()
             abandonManualSend()
             resetSavedRequestUI()
             connected = false
@@ -1530,6 +1588,7 @@ final class TunnelController: ObservableObject {
             requestPageLoading = false
             message = "正在停止 VPN…"
         default:
+            abandonSessionExport()
             abandonManualSend()
             resetSavedRequestUI()
             connected = false

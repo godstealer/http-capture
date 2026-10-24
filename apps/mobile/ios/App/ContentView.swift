@@ -62,7 +62,8 @@ struct ContentView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("请求记录") {
-                    Button(tunnel.sessionExporting ? "正在导出…" : "导出抓包记录 JSON") {
+                    Button(tunnel.sessionExportCancelPending ? "正在结束导出…" :
+                           tunnel.sessionExporting ? "正在导出…" : "导出抓包记录 JSON") {
                         tunnel.exportSession()
                     }.disabled(!tunnel.connected || tunnel.sessionExporting)
                     if tunnel.sessionExporting {
@@ -71,6 +72,7 @@ struct ContentView: View {
                             Text("\(tunnel.sessionExportProgress)%")
                                 .font(.footnote).foregroundStyle(.secondary)
                             Button("取消") { tunnel.cancelSessionExport() }
+                                .disabled(tunnel.sessionExportCancelPending)
                         }
                     }
                     if let url = tunnel.sessionExportURL {
