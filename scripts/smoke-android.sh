@@ -68,7 +68,9 @@ for attempt in 0 1; do
 done
 probe_log="$(adb logcat -d -s 'HttpCaptureProbe:I' '*:S')"
 if ! grep -Fq 'HTTP stack request succeeded: /?vpn-restart-0' <<<"$probe_log" ||
-   ! grep -Fq 'HTTP stack request succeeded: /?vpn-restart-1' <<<"$probe_log"; then
+   ! grep -Fq 'HTTP stack request succeeded: /?vpn-restart-1' <<<"$probe_log" ||
+   ! grep -Fq 'VPN HTTP proxy hint observed: true' <<<"$probe_log" ||
+   ! grep -Fq 'VPN HTTP proxy hint observed: false' <<<"$probe_log"; then
   adb logcat -d -s 'HttpCaptureProbe:V' '*:S' || true
   echo 'VPN HTTP stack requests did not complete in both proxy hint modes' >&2
   exit 1

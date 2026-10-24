@@ -3,6 +3,8 @@ package dev.httpcapture.probe;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.ProxyInfo;
 import android.util.Log;
 import android.os.Process;
 
@@ -35,7 +37,7 @@ public final class ProbeReceiver extends BroadcastReceiver {
                 } else if ("dev.httpcapture.probe.RUN_UDP".equals(intent.getAction())) {
                     runUdp();
                 } else if ("dev.httpcapture.probe.RUN_HTTP_STACK".equals(intent.getAction())) {
-                    runHttpStack(intent.getStringExtra("path"));
+                    runHttpStack(context, intent);
                 } else {
                     runHttp(intent.getStringExtra("path"));
                 }
@@ -61,8 +63,25 @@ public final class ProbeReceiver extends BroadcastReceiver {
         }
     }
 
-    private static void runHttpStack(String path) throws Exception {
+    private static void runHttpStack(Context context, Intent intent) throws Exception {
+        String path = intent.getStringExtra("path");
         if (path == null) throw new IllegalArgumentException("missing HTTP path");
+        boolean expectProxyHint = intent.getBooleanExtra("expectProxyHint", false);
+        int proxyPort = intent.getIntExtra("proxyPort", 0);
+        ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+        if (connectivity == null) throw new IllegalStateException("no ConnectivityManager");
+        long deadline = System.currentTimeMillis() + 5_000;
+        boolean matches;
+        do {
+            ProxyInfo proxy = connectivity.getDefaultProxy();
+            boolean localHint = proxy != null && "127.0.0.1".equals(proxy.getHost())
+                    && proxy.getPort() == proxyPort;
+            matches = localHint == expectProxyHint;
+            if (!matches) Thread.sleep(100);
+        } while (!matches && System.currentTimeMillis() < deadline);
+        if (!matches) throw new IllegalStateException("VPN HTTP proxy hint did not match expected "
+                + expectProxyHint);
+        Log.i("HttpCaptureProbe", "VPN HTTP proxy hint observed: " + expectProxyHint);
         HttpURLConnection connection = (HttpURLConnection) new URL(
                 "http://10.0.2.2:18080" + path).openConnection();
         connection.setConnectTimeout(10_000);

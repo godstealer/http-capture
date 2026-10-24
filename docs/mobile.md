@@ -14,7 +14,7 @@ iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无�
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,391,297 字节，SHA-256 `37B879927FC22E9CB4F72CDEDC7F2917C2076A982FFC78DFD07B5F2F3A694645`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,486,441 字节，SHA-256 `09E41634423A7DF72C1614EA1C980DC411DCE72DFE65E4ACF430F1F087A868C6`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
@@ -213,7 +213,7 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 
 Android 模拟器冒烟现增加同一端口连续两次启动/停止 VPN，并在每次停止后检查回环代理端口已释放，覆盖快速重启时的资源清理。测试 APK 已在本地编译通过；当前 Windows 无可运行模拟器或连接设备，执行结果须等集中推送后的 Android CI。
 
-该回归进一步让独立测试 App 使用 Android 的 `HttpURLConnection`，分别在公布和不公布系统代理时访问本机测试上游；检查抓包响应、上游实际收到请求、测试 App 完成读取，并在关闭代理提示时核对流量来源为 TUN。设备测试尚待集中 CI 运行。
+该回归进一步让独立测试 App 使用 Android 的 `HttpURLConnection`，分别在公布和不公布系统代理时访问本机测试上游；测试 App 先读取 `ConnectivityManager.getDefaultProxy()`，核对两种模式是否真的改变本机代理提示，再检查抓包响应、上游实际收到请求、测试 App 完成读取，并在关闭代理提示时核对流量来源为 TUN。前台服务无法升级时会记录明确的 VPN 启动错误并退出，避免服务异常导致测试进程直接崩溃。设备测试尚待集中 CI 运行。
 
 Android 10 及以上可在启动前关闭“向应用公布本机 HTTP 代理”。开关默认保持开启以兼容原行为；关闭时 VPN 仍建立完整路由并由 TUN 转发流量，便于测试不使用系统代理提示的应用及 TUN 来源识别。系统代理只是一项建议，应用可以忽略；开关需要重启 VPN 才会生效。模拟器快速启停回归分别启动开启和关闭两种设置，实际流量与代理公布状态仍待设备验证。依据：[Android `VpnService.Builder.setHttpProxy`](https://developer.android.com/reference/android/net/VpnService.Builder#setHttpProxy(android.net.ProxyInfo))。
 

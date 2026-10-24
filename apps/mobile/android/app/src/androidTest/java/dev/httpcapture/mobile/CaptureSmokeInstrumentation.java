@@ -113,7 +113,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 if (!CaptureVpnService.isActive())
                     throw new AssertionError("VPN restart timed out: " + CaptureVpnService.message());
                 expectOk(NativeCapture.tunnelStatus());
-                verifyHttpStackFlow(attempt);
+                verifyHttpStackFlow(attempt, port);
 
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
                 stop.setAction(CaptureVpnService.ACTION_STOP);
@@ -140,7 +140,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         }
     }
 
-    private void verifyHttpStackFlow(int attempt) throws Exception {
+    private void verifyHttpStackFlow(int attempt, int port) throws Exception {
         String path = "vpn-restart-" + attempt;
         Set<String> previous = new HashSet<>();
         JSONArray existing = expectOk(recent("", path)).getJSONArray("requests");
@@ -150,6 +150,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         probe.setComponent(new ComponentName("dev.httpcapture.probe",
                 "dev.httpcapture.probe.ProbeReceiver"));
         probe.putExtra("path", "/?" + path);
+        probe.putExtra("expectProxyHint", attempt == 0);
+        probe.putExtra("proxyPort", port);
         getTargetContext().sendBroadcast(probe);
         long deadline = System.currentTimeMillis() + 20_000;
         while (System.currentTimeMillis() < deadline) {

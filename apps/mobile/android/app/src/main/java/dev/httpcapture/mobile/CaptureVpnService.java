@@ -135,7 +135,14 @@ public final class CaptureVpnService extends VpnService {
             stopSelf();
             return START_NOT_STICKY;
         }
-        startForeground(NOTIFICATION_ID, notification());
+        try {
+            startForeground(NOTIFICATION_ID, notification());
+        } catch (RuntimeException error) {
+            message = "VPN 启动失败：前台服务无法启动：" + error.getMessage();
+            Log.e("HttpCaptureVpn", "Could not promote VPN to foreground service", error);
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
         managed = true;
         stopPending = false;
         message = "正在建立 VPN…";
