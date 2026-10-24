@@ -105,6 +105,8 @@ struct ResponseRule: Identifiable {
 @MainActor
 final class TunnelController: ObservableObject {
     @Published private(set) var connected = false
+    @Published private(set) var tunnelStarting = false
+    @Published private(set) var tunnelStopping = false
     @Published private(set) var busy = false
     @Published private(set) var message = "VPN 未启动"
     @Published private(set) var requests: [CapturedRequest] = []
@@ -145,6 +147,8 @@ final class TunnelController: ObservableObject {
     private var rawDetail = ""
     private var statusObserver: NSObjectProtocol?
 
+    var shouldOfferStop: Bool { connected || tunnelStarting }
+
     init() { loadProfile() }
 
     deinit {
@@ -169,7 +173,7 @@ final class TunnelController: ObservableObject {
     }
 
     func start() {
-        if busy { return }
+        if busy || shouldOfferStop || tunnelStopping { return }
         guard (1...65535).contains(port) else {
             message = "端口必须在 1 到 65535 之间"
             return
@@ -198,6 +202,8 @@ final class TunnelController: ObservableObject {
                     self.watchStatus()
                     do {
                         try profile.connection.startVPNTunnel()
+                        self.tunnelStarting = true
+                        self.tunnelStopping = false
                         self.message = "正在建立 VPN…"
                     } catch {
                         self.message = error.localizedDescription
@@ -208,6 +214,9 @@ final class TunnelController: ObservableObject {
     }
 
     func stop() {
+        guard shouldOfferStop, !tunnelStopping else { return }
+        tunnelStarting = false
+        tunnelStopping = true
         manager?.connection.stopVPNTunnel()
         message = "正在停止 VPN…"
     }
@@ -774,21 +783,40 @@ final class TunnelController: ObservableObject {
     private func refreshStatus() {
         switch manager?.connection.status {
         case .connected:
+            if tunnelStopping {
+                manager?.connection.stopVPNTunnel()
+                connected = false
+                message = "正在停止 VPN…"
+                return
+            }
             connected = true
+            tunnelStarting = false
+            tunnelStopping = false
             message = "VPN 抓包运行中"
             refreshRequests()
         case .connecting, .reasserting:
+            if tunnelStopping {
+                connected = false
+                message = "正在停止 VPN…"
+                return
+            }
             connected = false
+            tunnelStarting = true
+            tunnelStopping = false
             requestGeneration &+= 1
             cursor = nil
             message = "正在建立 VPN…"
         case .disconnecting:
             connected = false
+            tunnelStarting = false
+            tunnelStopping = true
             requestGeneration &+= 1
             cursor = nil
             message = "正在停止 VPN…"
         default:
             connected = false
+            tunnelStarting = false
+            tunnelStopping = false
             requestGeneration &+= 1
             cursor = nil
             message = "VPN 未启动"

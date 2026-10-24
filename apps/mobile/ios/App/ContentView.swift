@@ -21,9 +21,9 @@ struct ContentView: View {
                             .disabled(tunnel.connected)
                     }
                     Text(tunnel.message).foregroundStyle(.secondary)
-                    Button(tunnel.connected ? "停止抓包" : "启动抓包") {
-                        if tunnel.connected { tunnel.stop() } else { tunnel.start() }
-                    }.disabled(tunnel.busy)
+                    Button(tunnel.shouldOfferStop ? "停止抓包" : "启动抓包") {
+                        if tunnel.shouldOfferStop { tunnel.stop() } else { tunnel.start() }
+                    }.disabled(tunnel.busy || tunnel.tunnelStopping)
                 }
                 Section("证书") {
                     Button("导出 CA 公钥证书") { tunnel.exportCertificate() }
