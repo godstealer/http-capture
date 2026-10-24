@@ -51,13 +51,15 @@ public final class CaptureVpnService extends VpnService {
             worker.execute(() -> {
                 try {
                     JSONObject state = new JSONObject(NativeCapture.tunnelStatus());
-                    if (!state.optBoolean("ok")) {
+                    if (!state.optBoolean("ok") && !underlyingNetworkLost && !networkRestartPending) {
                         message = "VPN 转发已退出：" + state.optString("error");
                         main.post(CaptureVpnService.this::stopSelf);
                     }
                 } catch (Exception error) {
-                    message = "VPN 状态读取失败：" + error.getMessage();
-                    main.post(CaptureVpnService.this::stopSelf);
+                    if (!underlyingNetworkLost && !networkRestartPending) {
+                        message = "VPN 状态读取失败：" + error.getMessage();
+                        main.post(CaptureVpnService.this::stopSelf);
+                    }
                 }
             });
             main.postDelayed(this, 1500);
@@ -67,7 +69,8 @@ public final class CaptureVpnService extends VpnService {
     private ConnectivityManager connectivity;
     private ConnectivityManager.NetworkCallback networkCallback;
     private Network underlyingNetwork;
-    private boolean underlyingNetworkLost;
+    private volatile boolean underlyingNetworkLost;
+    private volatile boolean networkRestartPending;
     private volatile int networkGeneration;
     private volatile boolean destroyed;
     private boolean shutdownStarted;
@@ -198,6 +201,7 @@ public final class CaptureVpnService extends VpnService {
                 if (destroyed || !network.equals(underlyingNetwork)) return;
                 underlyingNetwork = null;
                 underlyingNetworkLost = true;
+                networkRestartPending = true;
                 ++networkGeneration;
                 if (!setUnderlyingNetworks(null)) {
                     Log.w("HttpCaptureVpn", "Android did not clear the lost underlying network");
@@ -228,6 +232,7 @@ public final class CaptureVpnService extends VpnService {
             }
             if (network.equals(underlyingNetwork)) return;
             boolean switched = underlyingNetwork != null || underlyingNetworkLost;
+            if (switched && active) networkRestartPending = true;
             underlyingNetwork = network;
             underlyingNetworkLost = false;
             int generation = ++networkGeneration;
@@ -245,10 +250,17 @@ public final class CaptureVpnService extends VpnService {
         try {
             JSONObject stopped = new JSONObject(NativeCapture.stopTunnel());
             if (!stopped.optBoolean("ok")) throw new IllegalStateException(stopped.optString("error"));
+            // A newer handoff (or complete network loss) supersedes this restart.
+            // The next valid network callback will queue its own restart.
+            if (destroyed || !active || generation != networkGeneration || underlyingNetworkLost) return;
             JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
             if (!started.optBoolean("ok")) throw new IllegalStateException(started.optString("error"));
-            message = "VPN 抓包运行中 · 网络连接已更新";
+            if (generation == networkGeneration && !underlyingNetworkLost) {
+                networkRestartPending = false;
+                message = "VPN 抓包运行中 · 网络连接已更新";
+            }
         } catch (Exception error) {
+            networkRestartPending = false;
             active = false;
             message = "切换网络后重建连接失败：" + error.getMessage();
             requestStop();

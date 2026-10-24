@@ -191,6 +191,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 
 参考源码：[Android VpnService](https://github.com/wanghongenpin/proxypin/blob/main/android/app/src/main/kotlin/com/network/proxy/ProxyVpnService.kt)、[Android 包处理](https://github.com/wanghongenpin/proxypin/blob/main/android/app/src/main/kotlin/com/network/proxy/vpn/ConnectionHandler.kt)、[Android 请求来源](https://github.com/wanghongenpin/proxypin/blob/main/android/app/src/main/kotlin/com/network/proxy/vpn/util/ProcessInfoManager.kt)、[iOS Packet Tunnel](https://github.com/wanghongenpin/proxypin/blob/main/ios/ProxyPin/PacketTunnelProvider.swift)、[iOS VPN 管理](https://github.com/wanghongenpin/proxypin/blob/main/ios/Runner/VpnManager.swift)。
 
+2026-10-25：Android 切网重建增加代次检查，失效的重建任务停止旧 TUN 后不再用已丢失的网络启动；巡检在等待新网络和重建期间不把暂时停止的转发器误判为永久故障。Android 原生 Rust 8 项测试、本地双架构交叉编译与调试 APK 组装通过；转发任务自行退出时还会停止可选 QUIC 监听器。仍需真机验证 Wi-Fi/蜂窝连续切换、短时断网恢复和手动停止的竞态。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。

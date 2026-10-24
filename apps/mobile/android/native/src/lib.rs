@@ -270,13 +270,16 @@ fn tunnel_status() -> Result<serde_json::Value, String> {
     if !tunnel.task.is_finished() {
         return Ok(serde_json::json!({"running": true}));
     }
-    let tunnel = capture.tunnel.take().unwrap();
+    let mut tunnel = capture.tunnel.take().unwrap();
     let outcome = match capture.executor.block_on(tunnel.task) {
         Ok(Ok(_)) => Err("VPN tunnel exited unexpectedly".into()),
         Ok(Err(error)) => Err(error),
         Err(error) => Err(error.to_string()),
     };
     capture.executor.block_on(tunnel.bridge.stop());
+    if let Some(quic) = tunnel.quic.take() {
+        capture.executor.block_on(quic.stop());
+    }
     outcome
 }
 
