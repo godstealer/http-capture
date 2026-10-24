@@ -955,7 +955,7 @@ public final class MainActivity extends Activity {
         content.addView(headers);
         Button toggleHeaders = new Button(this);
         toggleHeaders.setText("逐项启用或停用请求头");
-        toggleHeaders.setOnClickListener(view -> showHeaderToggles(headers));
+        toggleHeaders.setOnClickListener(view -> showHeaderToggles(headers, "请求"));
         content.addView(toggleHeaders);
         TextView modeLabel = new TextView(this);
         modeLabel.setText("请求正文类型");
@@ -1024,7 +1024,7 @@ public final class MainActivity extends Activity {
         dialog.show();
     }
 
-    private void showHeaderToggles(EditText editor) {
+    private void showHeaderToggles(EditText editor, String kind) {
         String[] lines = editor.getText().toString().split("\\n", -1);
         List<Integer> indexes = new ArrayList<>();
         List<String> labels = new ArrayList<>();
@@ -1038,14 +1038,14 @@ public final class MainActivity extends Activity {
             states.add(!disabled);
         }
         if (indexes.isEmpty()) {
-            new AlertDialog.Builder(this).setMessage("先粘贴或输入请求头，每行填写 名称: 值")
+            new AlertDialog.Builder(this).setMessage("先粘贴或输入" + kind + "头，每行填写 名称: 值")
                 .setPositiveButton("关闭", null).show();
             return;
         }
         boolean[] checked = new boolean[states.size()];
         for (int i = 0; i < states.size(); i++) checked[i] = states.get(i);
         new AlertDialog.Builder(this)
-            .setTitle("启用的请求头会发送")
+            .setTitle("启用的" + kind + "头会应用")
             .setMultiChoiceItems(labels.toArray(new String[0]), checked, (dialog, which, enabled) -> {
                 editor.setText(RequestHeaderCodec.toggleLine(editor.getText().toString(), indexes.get(which)));
             })
@@ -1619,9 +1619,17 @@ public final class MainActivity extends Activity {
             int length = 0;
             for (int i = 0; i < headers.length(); i++) {
                 JSONObject header = headers.getJSONObject(i);
+                String headerName = header.getString("name");
                 String headerValue = header.getString("value");
                 if (!headerValue.equals(headerValue.trim())) return false;
-                length += header.getString("name").length() + headerValue.length() + 4;
+                boolean disabled = header.optBoolean("disabled");
+                List<RequestHeaderCodec.Header> roundtrip = RequestHeaderCodec.parseResponse(
+                    (disabled ? "# " : "") + headerName + ": " + headerValue);
+                if (roundtrip.size() != 1 || !roundtrip.get(0).name.equals(headerName)
+                        || !roundtrip.get(0).value.equals(headerValue)
+                        || roundtrip.get(0).disabled != disabled) return false;
+                length += headerName.getBytes(StandardCharsets.UTF_8).length
+                    + headerValue.getBytes(StandardCharsets.UTF_8).length + 4 + (disabled ? 2 : 0);
             }
             return length <= 16 * 1024;
         } catch (Exception error) { return false; }
@@ -1691,7 +1699,7 @@ public final class MainActivity extends Activity {
             statusCode.setInputType(InputType.TYPE_CLASS_NUMBER);
             content.addView(statusCode);
             headers = new EditText(this);
-            headers.setHint("响应头，每行一个，例如 Content-Type: application/json");
+            headers.setHint("响应头，每行一个；行首 # 停用\nContent-Type: application/json");
             headers.setMinLines(3);
             headers.setGravity(Gravity.TOP);
             if (editing) {
@@ -1699,12 +1707,18 @@ public final class MainActivity extends Activity {
                 StringBuilder lines = new StringBuilder();
                 for (int i = 0; i < previousHeaders.length(); i++) {
                     JSONObject header = previousHeaders.optJSONObject(i);
-                    if (header != null) lines.append(header.optString("name")).append(": ")
+                    if (header != null) lines.append(header.optBoolean("disabled") ? "# " : "")
+                        .append(header.optString("name")).append(": ")
                         .append(header.optString("value")).append('\n');
                 }
                 headers.setText(lines.toString());
             }
             content.addView(headers);
+            Button toggleResponseHeaders = new Button(this);
+            toggleResponseHeaders.setText("逐项启用或停用响应头");
+            EditText responseHeaderEditor = headers;
+            toggleResponseHeaders.setOnClickListener(view -> showHeaderToggles(responseHeaderEditor, "响应"));
+            content.addView(toggleResponseHeaders);
             body = new EditText(this);
             body.setHint("完整响应正文（UTF-8 文本）");
             body.setMinLines(4);
@@ -1799,13 +1813,11 @@ public final class MainActivity extends Activity {
                     if (responseBody.length > 64 * 1024)
                         throw new IllegalArgumentException("响应正文最多 64 KiB");
                     JSONArray responseHeaders = new JSONArray();
-                    for (String line : headerInput.split("\\r?\\n")) {
-                        if (line.trim().isEmpty()) continue;
-                        int separator = line.indexOf(':');
-                        if (separator <= 0) throw new IllegalArgumentException("响应头需要按 名称: 值 填写");
+                    for (RequestHeaderCodec.Header header : RequestHeaderCodec.parseResponse(headerInput)) {
                         responseHeaders.put(new JSONObject()
-                            .put("name", line.substring(0, separator).trim())
-                            .put("value", line.substring(separator + 1).trim()));
+                            .put("name", header.name)
+                            .put("value", header.value)
+                            .put("disabled", header.disabled));
                     }
                     rule.put("action", "replace");
                     rule.put("replacement", new JSONObject()

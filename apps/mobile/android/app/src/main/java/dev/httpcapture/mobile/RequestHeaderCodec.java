@@ -20,20 +20,29 @@ final class RequestHeaderCodec {
     private RequestHeaderCodec() { }
 
     static List<Header> parse(String text) {
+        return parse(text, true);
+    }
+
+    static List<Header> parseResponse(String text) {
+        return parse(text, false);
+    }
+
+    private static List<Header> parse(String text, boolean ignoreBrowserRequestMetadata) {
         List<Header> rows = new ArrayList<>();
+        String kind = ignoreBrowserRequestMetadata ? "请求" : "响应";
         String[] lines = text.split("\\r?\\n", -1);
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i].trim();
             if (line.isEmpty()) continue;
             boolean disabled = line.startsWith("# ");
             String content = disabled ? line.substring(2) : line;
-            if (isRequestLine(content) || isPseudoHeader(content)) continue;
+            if (ignoreBrowserRequestMetadata && (isRequestLine(content) || isPseudoHeader(content))) continue;
             int colon = content.indexOf(':');
-            if (colon <= 0) throw new IllegalArgumentException("第 " + (i + 1) + " 行请求头无效，请按 名称: 值 填写");
+            if (colon <= 0) throw new IllegalArgumentException("第 " + (i + 1) + " 行" + kind + "头无效，请按 名称: 值 填写");
             String name = content.substring(0, colon).trim();
             String value = content.substring(colon + 1).trim();
             if (name.isEmpty() || !isToken(name) || hasBadValueCharacter(value)) {
-                throw new IllegalArgumentException("第 " + (i + 1) + " 行请求头无效，请按 名称: 值 填写");
+                throw new IllegalArgumentException("第 " + (i + 1) + " 行" + kind + "头无效，请按 名称: 值 填写");
             }
             rows.add(new Header(name, value, disabled));
         }
