@@ -2,9 +2,9 @@
 
 状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过设备验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路，iOS Simulator 目标已在 Xcode 编译，iPhone arm64 目标已完成无签名编译，签名及设备验收尚未完成。当前没有可交付的正式移动安装包。
 
-2026-10-25 本地新增抓包记录导出：Android 通过系统文件选择器保存 `http-capture-session` v1 JSON；iOS 在 VPN 扩展内生成同格式文件，以 32 KiB 分块传给宿主，再通过系统分享菜单保存。共享存储层使用独立 SQLite 读取快照，逐条恢复正文并写出，避免一次载入全部历史。单条超大正文仍会完整进入内存；此前暂缓的超大正文低内存链路尚未解决。共享存储测试、Android JNI/Java 编译及 iOS Rust 桥接测试已通过；Android 文件选择器和 iOS Swift 界面仍需设备或 Mac 构建验收。导出包含请求与响应正文，分享前请确认目标位置。
+2026-10-25 本地新增抓包记录导出：Android 通过系统文件选择器保存 `http-capture-session` v1 JSON；iOS 在 VPN 扩展内生成同格式文件，以 32 KiB 分块传给宿主，再通过系统分享菜单保存。共享存储层使用独立 SQLite 读取快照，逐条恢复正文并写出，避免一次载入全部历史。单条超大正文仍会完整进入内存；此前暂缓的超大正文低内存链路尚未解决。共享存储测试、Android 双架构 APK 与仪器测试源码编译、iOS Rust 桥接测试已通过；Android 文件选择器和 iOS Swift 界面仍需设备或 Mac 构建验收。导出包含请求与响应正文，分享前请确认目标位置。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，120,728,929 字节，SHA-256 `96c7cf34aadd2bb5ff31fead259b6b1e5f1c1b7055cdf91d4882f86085ebcb67`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，121,143,718 字节，SHA-256 `5a580c86305fa5f73c9152eab5efe534c1cb6ebbbf3e9f1628518cc9430162d3`。`apksigner verify` 确认 v2 签名有效，包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 2026-10-24 首次远端构建：同一提交的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40053342564)前端、Linux、macOS 和 Windows 全部通过；[Android 构建](https://github.com/godstealer/http-capture/actions/runs/40053342578)在 SDK 安装阶段因 action 默认请求已移除的 `tools` 包而失败，未编译 APK；[iOS 构建](https://github.com/godstealer/http-capture/actions/runs/40053342628)通过 Swift 测试、Xcode 工程生成和无签名模拟器 App/Packet Tunnel 编译，随后因 `lipo` 校验命令参数顺序错误而中止，尚未编译 iPhone 目标或上传附件。两处工作流脚本随后一并修复并完成重跑。
 
