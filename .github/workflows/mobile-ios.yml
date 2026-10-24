@@ -54,6 +54,33 @@ jobs:
           test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
           lipo "$app/HTTPCaptureMobile" -verify_arch "$simulator_arch"
           lipo "$app/PlugIns/PacketTunnel.appex/PacketTunnel" -verify_arch "$simulator_arch"
+      - name: Launch unsigned app on iOS Simulator
+        timeout-minutes: 8
+        run: |
+          read -r simulator state < <(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          phones = [device for group in devices.values() for device in group
+                    if device["name"].startswith("iPhone") and device["isAvailable"]]
+          if not phones:
+              raise SystemExit("No available iPhone simulator")
+          choice = next((device for device in phones if device["state"] == "Booted"), phones[0])
+          print(choice["udid"], choice["state"])
+          ')
+          if [ "$state" != Booted ]; then xcrun simctl boot "$simulator"; fi
+          xcrun simctl bootstatus "$simulator" -b
+          app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/HTTPCaptureMobile.app
+          xcrun simctl install "$simulator" "$app"
+          xcrun simctl launch "$simulator" dev.httpcapture.mobile.ios
+          sleep 3
+          xcrun simctl io "$simulator" screenshot "$RUNNER_TEMP/http-capture-ios-launch.png"
+          test -s "$RUNNER_TEMP/http-capture-ios-launch.png"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: http-capture-ios-launch
+          path: ${{ runner.temp }}/http-capture-ios-launch.png
+          if-no-files-found: error
+          retention-days: 7
       - name: Package unsigned simulator app
         run: |
           app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/HTTPCaptureMobile.app
