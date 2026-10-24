@@ -28,6 +28,7 @@ static UPLOAD_IDS: AtomicU64 = AtomicU64::new(1);
 const SESSION_EXPORT_CHUNK: usize = 32 * 1024;
 static OFFLINE_STORE: OnceLock<Mutex<HashMap<PathBuf, Arc<capture_core::store::Store>>>> = OnceLock::new();
 static OFFLINE_SAVED_READ: OnceLock<Mutex<Option<SavedRead>>> = OnceLock::new();
+static OFFLINE_CERTIFICATES: OnceLock<Mutex<HashMap<PathBuf, Arc<capture_core::certificates::Certificates>>>> = OnceLock::new();
 
 struct RequestUpload {
     token: u64,
@@ -586,6 +587,17 @@ fn offline_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, Str
     Ok(store)
 }
 
+fn offline_certificates(data_dir: &Path)
+    -> Result<Arc<capture_core::certificates::Certificates>, String> {
+    let mut cached = OFFLINE_CERTIFICATES.get_or_init(|| Mutex::new(HashMap::new()))
+        .lock().map_err(|_| "Offline certificates are unavailable")?;
+    if let Some(certificates) = cached.get(data_dir) { return Ok(certificates.clone()); }
+    let certificates = capture_core::certificates::Certificates::open(data_dir)
+        .map_err(|error| format!("{error:#}"))?;
+    cached.insert(data_dir.to_path_buf(), certificates.clone());
+    Ok(certificates)
+}
+
 fn history_command(store: &capture_core::store::Store, method: &str,
                    request: &serde_json::Value) -> Result<serde_json::Value, String> {
     match method {
@@ -646,6 +658,34 @@ fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, 
         return history_command(store.as_ref(), method, &request);
     }
     match method {
+        "certificate" => {
+            let engine = Engine::open(data_dir).map_err(|error| format!("{error:#}"))?;
+            std::fs::read_to_string(&engine.ca.cert_path)
+                .map(serde_json::Value::String).map_err(|error| error.to_string())
+        }
+        "certificates" => {
+            let certificates = offline_certificates(data_dir)?;
+            serde_json::to_value(certificates.snapshot().map_err(|error| format!("{error:#}"))?)
+                .map_err(|error| error.to_string())
+        }
+        "import_certificate" => {
+            let input: capture_core::certificates::Import = serde_json::from_value(
+                request.get("input").cloned().ok_or("Missing certificate input")?)
+                .map_err(|error| error.to_string())?;
+            let certificates = offline_certificates(data_dir)?;
+            certificates.snapshot().map_err(|error| format!("{error:#}"))?;
+            serde_json::to_value(certificates.import(input).map_err(|error| format!("{error:#}"))?)
+                .map_err(|error| error.to_string())
+        }
+        "change_certificate" => {
+            let input: capture_core::certificates::Change = serde_json::from_value(
+                request.get("input").cloned().ok_or("Missing certificate change")?)
+                .map_err(|error| error.to_string())?;
+            let certificates = offline_certificates(data_dir)?;
+            certificates.snapshot().map_err(|error| format!("{error:#}"))?;
+            serde_json::to_value(certificates.change(input).map_err(|error| format!("{error:#}"))?)
+                .map_err(|error| error.to_string())
+        }
         "blocking" => {
             let blocking = capture_core::blocking::Blocking::open(store.clone())
                 .map_err(|error| format!("{error:#}"))?;
@@ -721,7 +761,7 @@ fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, 
                 .lock().map_err(|_| "Saved request reader is unavailable")?;
             saved_request_body_in(&mut read, token, offset)
         }
-        _ => Err("Offline command is limited to history, saved requests, rules and manual sending".into()),
+        _ => Err("Offline command is limited to history, saved requests, rules, certificates and manual sending".into()),
     }
 }
 
@@ -1161,6 +1201,35 @@ mod tests {
         let engine = Engine::open(dir.path()).unwrap();
         assert_eq!(engine.blocking.snapshot().rules[0].id, "ios-offline-block");
         assert_eq!(engine.response_rewrite.snapshot().config.rules[0].id, "ios-offline-response");
+    }
+
+    #[test]
+    fn offline_ca_export_and_upstream_trust_keep_public_material_only() {
+        let dir = tempfile::tempdir().unwrap();
+        capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let ca = offline_command(dir.path(), r#"{"method":"certificate"}"#).unwrap();
+        let pem = ca.as_str().unwrap();
+        assert!(pem.contains("BEGIN CERTIFICATE"));
+        assert!(!pem.contains("PRIVATE KEY"));
+        let before = offline_command(dir.path(), r#"{"method":"certificates"}"#).unwrap();
+        let imported = offline_command(dir.path(), &serde_json::json!({
+            "method":"import_certificate", "input": {
+                "name":"iOS offline trust", "kind":"trust", "host":"offline.example",
+                "port":443, "certificateBase64":STANDARD.encode(pem.as_bytes()),
+                "expectedVersion":before["version"]
+            }
+        }).to_string()).unwrap();
+        let id = imported["entries"][0]["id"].as_str().unwrap();
+        let change = serde_json::json!({"method":"change_certificate", "input": {
+            "action":"enable", "id":id, "enabled":true,
+            "expectedVersion":imported["version"]
+        }});
+        let enabled = offline_command(dir.path(), &change.to_string()).unwrap();
+        assert_eq!(enabled["entries"][0]["enabled"], true);
+        assert!(offline_command(dir.path(), &change.to_string()).is_err());
+        let engine = Engine::open(dir.path()).unwrap();
+        assert_eq!(engine.certificates.snapshot().unwrap().entries[0].id, id);
+        assert_eq!(offline_command(dir.path(), r#"{"method":"certificate"}"#).unwrap(), ca);
     }
 
     fn tunnel_to(

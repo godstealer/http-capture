@@ -273,7 +273,7 @@ final class TunnelController: ObservableObject {
     func start() {
         if busy || shouldOfferStop || tunnelStopping { return }
         if sendingManualRequest || savedCollectionSaving || savedDeleteBusy ||
-           blockingSaving || responseSaving {
+           blockingSaving || responseSaving || trustedCertificatesBusy {
             message = "请等待离线操作完成后再启动 VPN"
             return
         }
@@ -1613,7 +1613,8 @@ final class TunnelController: ObservableObject {
                    "change_saved_collection", "list_saved_requests", "save_request",
                    "delete_saved_request", "open_saved_request", "saved_request_body",
                    "send_request", "blocking", "configure_blocking",
-                   "response_rewrite", "configure_response_rewrite"].contains(method),
+                   "response_rewrite", "configure_response_rewrite", "certificate",
+                   "certificates", "import_certificate", "change_certificate"].contains(method),
                   !tunnelStarting, !tunnelStopping else {
                 message = "请先启动 VPN"
                 onFailure?()

@@ -32,6 +32,8 @@ iOS 手动 HTTP(S) 请求也可在停抓时发送：宿主用同一 `Engine::rep
 
 iOS 停抓时还可查看和编辑请求阻止规则、整份响应替换与部分内容修改规则。宿主复用共享内核的配置校验和 App Group 数据库，响应规则更新继续检查配置版本，避免旧页面覆盖新版本；再次启动 VPN 时会载入离线保存的规则。Rust 测试覆盖离线保存、重新打开内核后的持久化和旧版本拒绝；Swift/Xcode 编译、界面交互及实际流量效果仍待验证。
 
+iOS 停抓后也可导出抓包 CA 公钥证书，并导入、启用、停用或删除上游 CA。宿主使用共享目录中的证书库，保持配置版本校验；CA 分享文件仅含公开证书，不含私钥。首次仍须启动一次 VPN 完成旧目录迁移。Rust 桥接测试验证公开 CA、离线导入与启用、旧版本拒绝及重新打开内核后的配置；14 项测试通过。Swift/Mac 编译、系统证书安装和真实私有 CA 站点仍待设备验收。
+
 2026-10-24 首次远端构建：同一提交的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40053342564)前端、Linux、macOS 和 Windows 全部通过；[Android 构建](https://github.com/godstealer/http-capture/actions/runs/40053342578)在 SDK 安装阶段因 action 默认请求已移除的 `tools` 包而失败，未编译 APK；[iOS 构建](https://github.com/godstealer/http-capture/actions/runs/40053342628)通过 Swift 测试、Xcode 工程生成和无签名模拟器 App/Packet Tunnel 编译，随后因 `lipo` 校验命令参数顺序错误而中止，尚未编译 iPhone 目标或上传附件。两处工作流脚本随后一并修复并完成重跑。
 
 第二批提交 `d9fca00` 的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40055538553)四个平台全部通过；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40055538618)成功编译双架构 APK 并上传 `http-capture-android-debug` 附件；[iOS mobile build](https://github.com/godstealer/http-capture/actions/runs/40055538644)成功编译并上传 `http-capture-ios-simulator` 附件，随后无签名 iPhone arm64 宿主与 Packet Tunnel 编译及架构校验也通过。构建结果不能替代 Android/iPhone 真机 VPN、HTTPS 证书信任、网络切换和界面操作验收；iOS 设备安装仍需签名与 Packet Tunnel 权限。

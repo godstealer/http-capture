@@ -15,7 +15,7 @@ char *hc_ios_start(const char *data_dir, uint16_t port, bool capture_quic,
                    hc_ios_packet_callback callback, void *context);
 char *hc_ios_stop(void);
 char *hc_ios_command(const char *request_json);
-// Host access to shared history, saved requests, rules and manual sending while the
+// Host access to shared history, saved requests, rules, certificates and manual sending while the
 // Packet Tunnel is stopped. Pass the App Group's HTTP Capture directory.
 char *hc_ios_offline_command(const char *data_dir, const char *request_json);
 // Export the stopped tunnel's shared history to a new file in the host app's

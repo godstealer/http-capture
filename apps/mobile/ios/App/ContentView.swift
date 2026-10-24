@@ -52,14 +52,18 @@ struct ContentView: View {
                 }
                 Section("证书") {
                     Button("导出 CA 公钥证书") { tunnel.exportCertificate() }
-                        .disabled(!tunnel.connected)
+                        .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping)
                     if let url = tunnel.certificateURL {
                         ShareLink("分享或保存证书", item: url)
                     }
                     Button("上游 CA 证书") { showingTrustedCertificates = true }
-                        .disabled(!tunnel.connected)
+                        .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping)
                     Text("HTTPS 解密需要在设备设置中安装并信任该 CA；证书固定的应用可能拒绝解密。")
                         .font(.footnote).foregroundStyle(.secondary)
+                    if !tunnel.connected {
+                        Text("停抓时可管理证书；首次使用请先启动一次 VPN 创建共享证书目录。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section("请求记录") {
                     Button(tunnel.sessionExportCancelPending ? "正在结束导出…" :
