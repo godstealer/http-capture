@@ -473,6 +473,36 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         if (!id.equals(updated.getString("id")) || !"https://example.com/mobile-saved-updated"
                 .equals(expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft").getString("url")))
             throw new AssertionError("Saved request update was not persisted");
+        String oldCollectionId = expectOk(NativeCapture.savedRequest(id)).getString("collectionId");
+        String newCollectionName = "mobile-collection-smoke-" + System.nanoTime();
+        expectOk(NativeCapture.saveRequest(new JSONObject().put("id", id)
+            .put("name", name).put("draft", reopened)
+            .put("newCollectionName", newCollectionName).toString()));
+        String newCollectionId = expectOk(NativeCapture.savedRequest(id)).getString("collectionId");
+        if (newCollectionId.equals(oldCollectionId))
+            throw new AssertionError("Saved request was not moved into the new collection");
+        JSONArray collections = expectOk(NativeCapture.savedCollections()).getJSONArray("collections");
+        boolean collectionListed = false;
+        for (int i = 0; i < collections.length(); i++) {
+            JSONObject item = collections.getJSONObject(i);
+            if (newCollectionId.equals(item.getString("id"))
+                    && newCollectionName.equals(item.getString("name"))
+                    && item.getInt("count") == 1) collectionListed = true;
+        }
+        if (!collectionListed) throw new AssertionError("New collection was not listed with its request");
+        expectOk(NativeCapture.saveRequest(new JSONObject().put("id", id)
+            .put("name", name).put("draft", reopened)
+            .put("collectionId", oldCollectionId).toString()));
+        if (!oldCollectionId.equals(expectOk(NativeCapture.savedRequest(id)).getString("collectionId")))
+            throw new AssertionError("Saved request did not move back to an existing collection");
+        if (new JSONObject(NativeCapture.saveRequest(new JSONObject().put("id", id)
+                .put("name", name).put("draft", reopened)
+                .put("collectionId", "missing-collection").toString())).optBoolean("ok"))
+            throw new AssertionError("Unknown collection was accepted");
+        if (new JSONObject(NativeCapture.saveRequest(new JSONObject().put("id", id)
+                .put("name", name).put("draft", reopened)
+                .put("newCollectionName", newCollectionName).toString())).optBoolean("ok"))
+            throw new AssertionError("Duplicate collection name was accepted");
 
         String editableHeaders = MainActivity.savedHeaderText(reopenedHeaders);
         if (!editableHeaders.contains("# X-Disabled: omit")

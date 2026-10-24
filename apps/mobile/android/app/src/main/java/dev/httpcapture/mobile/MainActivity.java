@@ -80,6 +80,7 @@ public final class MainActivity extends Activity {
     private String savedRequestQuery = "";
     private final List<String> pageHistory = new ArrayList<>();
     private boolean pageLoading;
+    private boolean saveDialogLoading;
     private boolean running;
     private boolean pollPending;
     private boolean vpnRequested;
@@ -105,6 +106,7 @@ public final class MainActivity extends Activity {
     private static final class ManualRequestDraft {
         String savedId;
         String savedName;
+        String savedCollectionId;
         String method = "GET";
         String url = "";
         String headers = "";
@@ -1096,7 +1098,8 @@ public final class MainActivity extends Activity {
                 for (int i = 0; i < rows.length(); i++) {
                     JSONObject row = rows.getJSONObject(i);
                     ids[i] = row.getString("id");
-                    labels[i] = row.optString("name") + "\n" + row.optString("method")
+                    labels[i] = row.optString("name") + " · " + row.optString("collectionName")
+                        + "\n" + row.optString("method")
                         + " " + row.optString("url");
                 }
                 int total = page.optInt("total");
@@ -1215,6 +1218,7 @@ public final class MainActivity extends Activity {
         ManualRequestDraft draft = new ManualRequestDraft();
         draft.savedId = saved.getString("id");
         draft.savedName = saved.getString("name");
+        draft.savedCollectionId = saved.getString("collectionId");
         draft.method = request.getString("method");
         draft.url = request.getString("url");
         validateSavedTarget(draft.method, draft.url);
@@ -1272,6 +1276,29 @@ public final class MainActivity extends Activity {
     }
 
     private void saveManualRequest(ManualRequestDraft draft, AlertDialog editor) {
+        if (saveDialogLoading) return;
+        saveDialogLoading = true;
+        worker.execute(() -> {
+            try {
+                JSONObject reply = parseReply(NativeCapture.savedCollections());
+                if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                JSONArray collections = reply.getJSONObject("value").getJSONArray("collections");
+                main.post(() -> {
+                    saveDialogLoading = false;
+                    if (!isFinishing() && !isDestroyed() && editor.isShowing())
+                        showSaveManualRequestDialog(draft, editor, collections);
+                });
+            } catch (Exception error) {
+                main.post(() -> {
+                    saveDialogLoading = false;
+                    showSavedRequestError(error.getMessage());
+                });
+            }
+        });
+    }
+
+    private void showSaveManualRequestDialog(ManualRequestDraft draft, AlertDialog editor,
+                                             JSONArray collections) {
         String method = draft.method.trim().toUpperCase(Locale.ROOT);
         String url = draft.url.trim();
         String suggested = draft.savedName == null ? method + " " + url : draft.savedName;
@@ -1282,10 +1309,54 @@ public final class MainActivity extends Activity {
         name.selectAll();
         int inset = (int) (18 * getResources().getDisplayMetrics().density);
         LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(inset, inset, inset, inset);
         content.addView(name);
+        TextView collectionLabel = new TextView(this);
+        collectionLabel.setText("保存到集合");
+        content.addView(collectionLabel);
+        List<String> collectionNames = new ArrayList<>();
+        List<String> collectionIds = new ArrayList<>();
+        int selected = -1;
+        for (int i = 0; i < collections.length(); i++) {
+            JSONObject item = collections.optJSONObject(i);
+            if (item == null) continue;
+            String id = item.optString("id");
+            String collectionName = item.optString("name");
+            if (id.isEmpty() || collectionName.isEmpty()) continue;
+            if (id.equals(draft.savedCollectionId)
+                    || draft.savedId == null && "我的请求".equals(collectionName))
+                selected = collectionIds.size();
+            collectionIds.add(id);
+            collectionNames.add(collectionName);
+        }
+        if (selected < 0) {
+            collectionIds.add(0, "");
+            collectionNames.add(0, draft.savedId == null
+                ? "我的请求（自动创建）" : "保持原集合");
+            selected = 0;
+        }
+        collectionIds.add("");
+        collectionNames.add("＋ 新建集合");
+        final int createIndex = collectionIds.size() - 1;
+        Spinner collection = new Spinner(this);
+        collection.setAdapter(new ArrayAdapter<>(this,
+            android.R.layout.simple_spinner_dropdown_item, collectionNames));
+        collection.setSelection(Math.max(0, selected));
+        content.addView(collection);
+        EditText newCollectionName = new EditText(this);
+        newCollectionName.setSingleLine(true);
+        newCollectionName.setHint("新集合名称");
+        content.addView(newCollectionName);
+        collection.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                                                 int position, long id) {
+                newCollectionName.setVisibility(position == createIndex ? View.VISIBLE : View.GONE);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
         AlertDialog naming = new AlertDialog.Builder(this)
-            .setTitle(draft.savedId == null ? "保存到“我的请求”" : "保存请求修改")
+            .setTitle(draft.savedId == null ? "保存请求" : "保存请求修改")
             .setView(content).setNegativeButton("取消", null)
             .setPositiveButton("保存", null).create();
         naming.setOnShowListener(ignored -> naming.getButton(AlertDialog.BUTTON_POSITIVE)
@@ -1295,12 +1366,22 @@ public final class MainActivity extends Activity {
                     name.setError("名称须为 1–512 字节");
                     return;
                 }
+                int collectionIndex = collection.getSelectedItemPosition();
+                String collectionId = collectionIds.get(collectionIndex);
+                String newName = newCollectionName.getText().toString().trim();
+                if (collectionIndex == createIndex && (newName.isEmpty()
+                        || newName.getBytes(StandardCharsets.UTF_8).length > 512)) {
+                    newCollectionName.setError("集合名称须为 1–512 字节");
+                    return;
+                }
                 naming.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
                 worker.execute(() -> {
                     try {
                         JSONObject request = buildManualRequest(draft);
                         JSONObject input = new JSONObject().put("name", requestName).put("draft", request);
                         if (draft.savedId != null) input.put("id", draft.savedId);
+                        if (collectionIndex == createIndex) input.put("newCollectionName", newName);
+                        else if (!collectionId.isEmpty()) input.put("collectionId", collectionId);
                         JSONObject reply = parseReply(NativeCapture.saveRequest(input.toString()));
                         if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                         main.post(() -> {

@@ -304,8 +304,22 @@ fn metadata(id: &str) -> Result<serde_json::Value, String> {
 struct SaveMobileRequest {
     #[serde(default)]
     id: Option<String>,
+    #[serde(default)]
+    collection_id: Option<String>,
+    #[serde(default)]
+    new_collection_name: Option<String>,
     name: String,
     draft: RequestDraft,
+}
+
+fn saved_collections() -> Result<serde_json::Value, String> {
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    Ok(json!({"collections": library.collections.iter().map(|collection| {
+        let count = library.requests.iter().filter(|request| request.collection_id == collection.id).count();
+        json!({"id": collection.id, "name": collection.name, "count": count})
+    }).collect::<Vec<_>>() }))
 }
 
 fn saved_requests(offset: usize, query: &str) -> Result<serde_json::Value, String> {
@@ -368,6 +382,28 @@ fn save_request(raw: &str) -> Result<serde_json::Value, String> {
     let capture = current.as_ref().ok_or("Capture is not running")?;
     let store = &capture.runtime.engine.store;
     let mut library = store.library().map_err(|error| error.to_string())?;
+    if input.collection_id.is_some() && input.new_collection_name.is_some() {
+        return Err("Choose an existing collection or create a new one".into());
+    }
+    let selected_collection = if let Some(new_name) = input.new_collection_name {
+        let new_name = new_name.trim();
+        if new_name.is_empty() || new_name.len() > 512 {
+            return Err("Collection name must be 1–512 bytes".into());
+        }
+        if library.collections.iter().any(|collection| collection.name.eq_ignore_ascii_case(new_name)) {
+            return Err("Collection name already exists".into());
+        }
+        let id = Uuid::new_v4().to_string();
+        library.collections.push(Collection { id: id.clone(), name: new_name.into() });
+        Some(id)
+    } else if let Some(id) = input.collection_id {
+        if !library.collections.iter().any(|collection| collection.id == id) {
+            return Err("Selected collection no longer exists".into());
+        }
+        Some(id)
+    } else {
+        None
+    };
     if let Some(id) = input.id {
         let request = library.requests.iter_mut().find(|request| request.id == id)
             .ok_or("Saved request not found")?;
@@ -376,10 +412,12 @@ fn save_request(raw: &str) -> Result<serde_json::Value, String> {
         }
         request.name = name.into();
         request.draft = input.draft;
+        if let Some(collection_id) = selected_collection { request.collection_id = collection_id; }
         let revision = store.save_library(library).map_err(|error| error.to_string())?;
         return Ok(json!({"id": id, "revision": revision}));
     }
-    let collection_id = if let Some(collection) = library.collections.iter()
+    let collection_id = if let Some(id) = selected_collection { id }
+    else if let Some(collection) = library.collections.iter()
         .find(|collection| collection.name == "我的请求") {
         collection.id.clone()
     } else {
@@ -600,6 +638,13 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_metadata(
         metadata(&id)
     })();
     jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedCollections(
+    env: JNIEnv<'_>, _class: JClass<'_>,
+) -> jstring {
+    jni_reply(env, saved_collections())
 }
 
 #[no_mangle]
