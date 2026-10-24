@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <queries>
         <intent>
@@ -17,8 +19,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Active VPN apps qualify for systemExempted without exact-alarm permissions. -->
         <service android:name=".CaptureVpnService"
                  android:permission="android.permission.BIND_VPN_SERVICE"
+                 android:foregroundServiceType="systemExempted"
+                 tools:ignore="ForegroundServicePermission"
                  android:exported="true">
             <meta-data android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
                        android:value="false" />

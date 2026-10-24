@@ -28,7 +28,7 @@ jobs:
           packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.0.2'
+          gradle-version: '8.11.1'
       - name: Verify mobile request and response body codecs
         run: |
           mkdir -p "$RUNNER_TEMP/http-capture-body-tests"
@@ -49,7 +49,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang libclang-dev libdbus-1-dev libssl-dev perl make pkg-config
-          sdkmanager --install 'platforms;android-33' 'build-tools;33.0.2' 'ndk;27.2.12479018'
+          sdkmanager --install 'platforms;android-36' 'build-tools;35.0.0' 'ndk;27.2.12479018'
       - name: Build Android arm64 and x86_64 APK
         run: |
           libclang="$(find /usr/lib -name libclang.so -print -quit)"
@@ -62,6 +62,7 @@ jobs:
           apk=apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
           unzip -Z1 "$apk" | grep -Fx 'lib/arm64-v8a/libhttp_capture_android.so'
           unzip -Z1 "$apk" | grep -Fx 'lib/x86_64/libhttp_capture_android.so'
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | grep -F "targetSdkVersion:'36'"
       - uses: actions/upload-artifact@v4
         with:
           name: http-capture-android-debug
@@ -77,7 +78,7 @@ jobs:
       - name: Smoke test packaged APK on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 33
+          api-level: 36
           target: google_apis
           arch: x86_64
           script: bash scripts/smoke-android.sh

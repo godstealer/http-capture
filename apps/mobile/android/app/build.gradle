@@ -2,12 +2,12 @@ plugins { id 'com.android.application' }
 
 android {
     namespace 'dev.httpcapture.mobile'
-    compileSdk 33
+    compileSdk 36
 
     defaultConfig {
         applicationId 'dev.httpcapture.mobile'
         minSdk 26
-        targetSdk 33
+        targetSdk 36
         testInstrumentationRunner 'dev.httpcapture.mobile.CaptureSmokeInstrumentation'
         versionCode 1
         versionName '0.1.0-dev'

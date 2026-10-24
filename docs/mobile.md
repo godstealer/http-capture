@@ -14,7 +14,7 @@ iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无�
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,473,680 字节，SHA-256 `86DD0461984C5017F86BFCCE37C779049101986628F66461D0EE84A9864E4527`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,391,297 字节，SHA-256 `37B879927FC22E9CB4F72CDEDC7F2917C2076A982FFC78DFD07B5F2F3A694645`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
@@ -228,6 +228,6 @@ iOS 也新增同名开关，默认保留原有 `NEProxySettings`；关闭时 Pac
 
 移动版目前不纳入桌面版 Check、发布和更新频道。Android/iOS 签名、应用商店分发、证书信任限制和扩展权限需要单独处理。
 
-Android 当前 `compileSdk/targetSdk` 均为 33，适用于现阶段调试包。若要提交新的 Google Play 手机应用，2026 年的目标 API 要求为 36；升级至少需要支持 API 36 的 Android Gradle Plugin/Gradle、SDK，并为前台 VPN 服务声明适用类型与权限，再在新版系统上重测 VPN 授权、前台运行、证书和文件选择器。该分发升级尚未实施，也不能用现有 API 33 模拟器冒烟代替。依据：[Google Play 目标 API 要求](https://support.google.com/googleplay/android-developer/answer/11926878)、[Android 构建工具兼容表](https://developer.android.com/build/releases/about-agp)、[前台服务类型](https://developer.android.com/develop/background-work/services/fgs/service-types)。
+Android 已升级到 `compileSdk/targetSdk` 36、AGP 8.10.1 和 Gradle 8.11.1，VPN 前台服务声明 `systemExempted` 类型与对应权限，并处理 Android 15+ 的系统栏边距。本地 arm64-v8a/x86_64 Rust 库与调试 APK、测试 APK、Lint 均构建通过；`aapt` 确认调试包目标 API 36 与双架构。CI 冒烟测试改用 API 36 模拟器，但集中推送后的结果尚未取得；尤其不能用旧 API 33 的通过记录证明新目标 API 下 VPN 授权、前台运行、证书和文件选择器正常。Google Play 上架、签名和政策申报也未完成。依据：[Google Play 目标 API 要求](https://support.google.com/googleplay/android-developer/answer/11926878)、[AGP 8.10 兼容表](https://developer.android.com/build/releases/agp-8-10-0-release-notes)、[前台服务类型](https://developer.android.com/develop/background-work/services/fgs/service-types)。
 
 设备验收需检查：授予 VPN 后 HTTP/TLS 流量进入记录；普通 UDP 保持连通但不进入 HTTP 记录；停止服务和撤销 VPN 权限后端口与 TUN 句柄释放；切到后台后通知及抓包继续运行；导出的 CA 文件只含公开证书。HTTPS 解密还取决于目标 App 是否信任用户安装的 CA，证书固定的 App 需单独处理。

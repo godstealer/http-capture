@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="HTTP Capture VPN probe">
+    <application android:label="HTTP Capture VPN probe" android:usesCleartextTraffic="true">
         <receiver android:name=".ProbeReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="dev.httpcapture.probe.RUN" />

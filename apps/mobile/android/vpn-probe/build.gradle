@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 
 android {
     namespace 'dev.httpcapture.probe'
-    compileSdk 33
+    compileSdk 36
 
     defaultConfig {
         applicationId 'dev.httpcapture.probe'

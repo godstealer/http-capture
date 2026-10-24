@@ -5,7 +5,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $androidProject = Join-Path $projectRoot 'apps/mobile/android'
-$sdk = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { 'D:\AndroidSDK' }
+$localSdk = Join-Path $projectRoot '.local/android-toolchain/sdk'
+$sdk = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif (Test-Path -LiteralPath (Join-Path $localSdk 'platforms/android-36/android.jar')) { $localSdk } else { 'D:\AndroidSDK' }
 $ndk = $env:ANDROID_NDK_HOME
 if (-not $ndk) {
     $installed = Join-Path $sdk 'ndk'
@@ -19,12 +20,19 @@ if (-not $ndk) {
     if (Test-Path -LiteralPath $localNdk) { $ndk = $localNdk }
 }
 if (-not $ndk -or -not (Test-Path -LiteralPath $ndk)) { throw 'Android NDK is required; set ANDROID_NDK_HOME or install it under the Android SDK.' }
+if (-not (Test-Path -LiteralPath (Join-Path $sdk 'platforms/android-36/android.jar'))) {
+    throw "Android API 36 platform is required under $sdk. Install platforms;android-36 with sdkmanager."
+}
 $llvm = Join-Path $ndk 'toolchains/llvm/prebuilt/windows-x86_64/bin'
-$gradle = Get-Command gradle -ErrorAction SilentlyContinue
-if ($gradle) { $gradleExe = $gradle.Source }
-else {
-    $gradleExe = Join-Path $projectRoot '.local/android-toolchain/gradle-8.0.2/bin/gradle.bat'
-    if (-not (Test-Path -LiteralPath $gradleExe)) { throw 'Gradle is required to build the Android app; install Gradle or open apps/mobile/android in Android Studio.' }
+$gradleExe = Join-Path $projectRoot '.local/android-toolchain/gradle-8.11.1/bin/gradle.bat'
+if (-not (Test-Path -LiteralPath $gradleExe)) {
+    $gradle = Get-Command gradle -ErrorAction SilentlyContinue
+    if (-not $gradle) { throw 'Gradle 8.11.1 or newer is required to build the Android app.' }
+    $gradleExe = $gradle.Source
+    $versionLine = & $gradleExe --version | Select-String '^Gradle (\d+\.\d+(?:\.\d+)?)$' | Select-Object -First 1
+    if (-not $versionLine -or [version]$versionLine.Matches[0].Groups[1].Value -lt [version]'8.11.1') {
+        throw "Gradle 8.11.1 or newer is required; found $gradleExe."
+    }
 }
 $env:ANDROID_SDK_ROOT = $sdk
 $localRustup = Join-Path $projectRoot '.local/rustup'

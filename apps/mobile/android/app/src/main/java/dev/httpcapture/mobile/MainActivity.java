@@ -18,8 +18,10 @@ import android.text.InputType;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.graphics.Typeface;
+import android.graphics.Insets;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -249,6 +251,16 @@ public final class MainActivity extends Activity {
         results.setOrientation(LinearLayout.VERTICAL);
         resultScroll = new ScrollView(this);
         resultScroll.setFillViewport(true);
+        if (Build.VERSION.SDK_INT >= 35) {
+            getWindow().setDecorFitsSystemWindows(false);
+            resultScroll.setOnApplyWindowInsetsListener((view, windowInsets) -> {
+                Insets bars = windowInsets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                layout.setPadding(inset + bars.left, inset + bars.top,
+                    inset + bars.right, inset + bars.bottom);
+                return windowInsets;
+            });
+        }
         layout.addView(results);
         resultScroll.addView(layout);
         showEmptyResults();
