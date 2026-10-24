@@ -1,6 +1,6 @@
 # Android / iOS 移动端
 
-状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过设备验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路，iOS Simulator 目标已在 Xcode 编译，iPhone arm64 目标已完成无签名编译，签名及设备验收尚未完成。当前没有可交付的正式移动安装包。
+状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过真机验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路；此前版本曾通过 Simulator 与无签名 iPhone arm64 编译，近期 App Group、宿主 Rust 链接和离线功能改动尚未经过 Mac 重编。签名及 iPhone 设备验收尚未完成。当前没有可交付的正式移动安装包。
 
 2026-10-25 本地新增抓包记录导出：Android 通过系统文件选择器保存 `http-capture-session` v1 JSON；iOS 在 VPN 扩展内生成同格式文件，以 32 KiB 分块传给宿主，再通过系统分享菜单保存。共享存储层使用独立 SQLite 读取快照，逐条恢复正文并写出，避免一次载入全部历史。单条超大正文仍会完整进入内存；此前暂缓的超大正文低内存链路尚未解决。共享存储测试、Android 双架构 APK 与仪器测试源码编译、iOS Rust 桥接测试已通过；Android 文件选择器和 iOS Swift 界面仍需设备或 Mac 构建验收。导出包含请求与响应正文，分享前请确认目标位置。
 
@@ -164,7 +164,7 @@ iOS 工作流先构建并安装无签名模拟器 App，启动后保存首页截
 
 ## 上游 CA 证书
 
-Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 通过 Packet Tunnel 消息传递，单张导入文件暂限 64 KiB。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40086909266) 已通过模拟器证书导入/启停/删除、VPN 和 HTTPS 抓取测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），并上传双架构 APK。iOS Rust 命令测试 9 项通过；iOS Swift 界面构建仍待 Mac CI，真机上游私有 CA 站点验收仍待设备测试。
+Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 单张导入文件暂限 64 KiB，VPN 运行时通过扩展消息、停抓时通过宿主 Rust 桥接保存。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40086909266) 已通过模拟器证书导入/启停/删除、VPN 和 HTTPS 抓取测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），并上传双架构 APK。iOS Rust 桥接当前 15 项测试通过；近期 Swift 界面改动仍待 Mac CI，真机上游私有 CA 站点验收仍待设备测试。
 
 ## iOS 分发边界
 
@@ -181,10 +181,10 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 
 待完成顺序：
 
-1. 在 Android 设备或模拟器上安装含 arm64 原生库的 APK；验证本机代理的 HTTP 和 HTTPS 回环请求、VPN TCP/DNS 转发、停止清理与 CA 证书仅导出公钥。
+1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。
 2. 验证前台 `VpnService` 的实际流量与生命周期，重点测试 IPv4/IPv6 TCP、双栈 DNS、普通 UDP 直连和代理自身回环；快速停止再启动、VPN 权限撤销、页面重建及 Wi-Fi/蜂窝网络切换后的按钮、端口和新旧连接状态也需实测。切网重建逻辑已写入，但设备上还需检查未受影响的请求、旧连接释放和新连接建立。验证可选 HTTP/3 抓取开关在可信 CA、证书固定和隐藏 SNI 等场景下的行为；其他 UDP 内容仍未抓取。
 3. 用真机验证已实现的按 App 选择、请求详情/正文、手动请求发送与域名/URL 阻止；补充断网/切网恢复、异常退出清理、其他规则与高级请求编辑能力，并按功能逐项验收。
-4. Android 真机验收仍需完成；iOS 工程入口已建立，Mac CI 已生成 Xcode 工程并通过模拟器和无签名 iPhone 目标编译；下一步在 iPhone 上验证 VPN 授权、IPv4/IPv6、DNS、普通 UDP、HTTPS 解密、停止/重启与扩展内存占用。继续补齐 iOS 规则、正文、重放等移动界面。不能把 Android APK 测试视为 iOS 证据。
+4. 集中推送近期 iOS 改动后，先由 Mac CI 重编宿主与 Packet Tunnel、运行 Swift 和 Rust 测试并检查 App Group 配置；此前的通过记录不覆盖这批新代码。之后在已签名 iPhone 上验证 VPN 授权、IPv4/IPv6、DNS、普通 UDP、HTTPS 解密、离线历史/导出/请求库/规则/证书、停止与重启及扩展内存占用。高级重放编辑器与设备交互仍需继续完善。不能把 Android APK 测试视为 iOS 证据。
 
 移动版目前不纳入桌面版 Check、发布和更新频道。Android/iOS 签名、应用商店分发、证书信任限制和扩展权限需要单独处理。
 

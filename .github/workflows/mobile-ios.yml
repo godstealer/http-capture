@@ -29,6 +29,22 @@ jobs:
         run: |
           cd apps/mobile/ios
           xcodegen generate
+      - name: Check shared App Group entitlements
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+
+          expected = "group.dev.httpcapture.mobile.ios"
+          root = Path("apps/mobile/ios")
+          for target in ("App", "PacketTunnel"):
+              with (root / target / f"{target}.entitlements").open("rb") as file:
+                  entitlements = plistlib.load(file)
+              assert expected in entitlements.get("com.apple.security.application-groups", []), target
+              assert "packet-tunnel-provider" in entitlements.get(
+                  "com.apple.developer.networking.networkextension", []
+              ), target
+          PY
       - name: Build unsigned simulator app and Packet Tunnel
         run: |
           simulator_arch="$(uname -m)"
