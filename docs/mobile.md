@@ -32,6 +32,8 @@ iOS 手动 HTTP(S) 请求也可在停抓时发送：宿主用同一 `Engine::rep
 
 iOS 停抓时还可查看和编辑请求阻止规则、整份响应替换与部分内容修改规则。宿主复用共享内核的配置校验和 App Group 数据库，响应规则更新继续检查配置版本，避免旧页面覆盖新版本；再次启动 VPN 时会载入离线保存的规则。Rust 测试覆盖离线保存、重新打开内核后的持久化和旧版本拒绝；Swift/Xcode 编译、界面交互及实际流量效果仍待验证。
 
+本机离线手动发送集成测试现进一步验证规则的实际效果：HTTP 上游返回 200 和 `real`，保存的响应替换规则让调用方收到 201 和 `ok`；另一条域名阻止规则让未连接目标主机的请求直接得到 403。iOS Rust 桥接 15 项测试通过。这证明宿主离线重放链路会应用规则，但仍不能代替 iPhone 系统 VPN 抓包流量的验收。
+
 iOS 停抓后也可导出抓包 CA 公钥证书，并导入、启用、停用或删除上游 CA。宿主使用共享目录中的证书库，保持配置版本校验；CA 分享文件仅含公开证书，不含私钥。首次仍须启动一次 VPN 完成旧目录迁移。Rust 桥接测试验证公开 CA、离线导入与启用、旧版本拒绝及重新打开内核后的配置；14 项测试通过。Swift/Mac 编译、系统证书安装和真实私有 CA 站点仍待设备验收。
 
 2026-10-24 首次远端构建：同一提交的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40053342564)前端、Linux、macOS 和 Windows 全部通过；[Android 构建](https://github.com/godstealer/http-capture/actions/runs/40053342578)在 SDK 安装阶段因 action 默认请求已移除的 `tools` 包而失败，未编译 APK；[iOS 构建](https://github.com/godstealer/http-capture/actions/runs/40053342628)通过 Swift 测试、Xcode 工程生成和无签名模拟器 App/Packet Tunnel 编译，随后因 `lipo` 校验命令参数顺序错误而中止，尚未编译 iPhone 目标或上传附件。两处工作流脚本随后一并修复并完成重跑。

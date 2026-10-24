@@ -1232,6 +1232,53 @@ mod tests {
         assert_eq!(offline_command(dir.path(), r#"{"method":"certificate"}"#).unwrap(), ca);
     }
 
+    #[test]
+    fn offline_manual_send_applies_saved_block_and_response_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let initial = offline_command(dir.path(), r#"{"method":"response_rewrite"}"#).unwrap();
+        offline_command(dir.path(), &serde_json::json!({
+            "method":"configure_response_rewrite", "expectedVersion":initial["version"],
+            "config":{"enabled":true,"scope":"replay","rules":[{
+                "id":"offline-replay-replace","enabled":true,"matchType":"urlContains",
+                "pattern":"/offline-rule","action":"replace",
+                "replacement":{"status":201,"headers":[],"bodyBase64":"b2s="}
+            }]}
+        }).to_string()).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/offline-rule", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            let mut input = [0; 1024];
+            socket.read(&mut input).unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nreal").unwrap();
+        });
+        let sent = offline_command(dir.path(), &serde_json::json!({"method":"send_request",
+            "request":{"engine":"auto","method":"GET","url":url,
+                "headers":[],"bodyBase64":""}}).to_string()).unwrap();
+        server.join().unwrap();
+        assert_eq!(sent["status"], 201);
+        let detail = offline_command(dir.path(), &serde_json::json!({"method":"metadata",
+            "id":sent["id"]}).to_string()).unwrap();
+        let response = offline_command(dir.path(), &serde_json::json!({"method":"body_preview",
+            "id":sent["id"],"variant":"response","revision":detail["bodyRevision"],
+            "offset":0}).to_string()).unwrap();
+        assert_eq!(response["bodyBase64"], "b2s=");
+
+        offline_command(dir.path(), &serde_json::json!({"method":"configure_blocking",
+            "config":{"enabled":true,"scope":"replay","rules":[{
+                "id":"offline-replay-block","enabled":true,"matchType":"host",
+                "pattern":"blocked.example","method":""
+            }]}}).to_string()).unwrap();
+        let blocked = offline_command(dir.path(), &serde_json::json!({"method":"send_request",
+            "request":{"engine":"auto","method":"GET",
+                "url":"http://blocked.example/no-connect","headers":[],"bodyBase64":""}})
+            .to_string()).unwrap();
+        assert_eq!(blocked["status"], 403);
+        assert!(blocked["error"].is_null());
+    }
+
     fn tunnel_to(
         bridge_address: std::net::SocketAddr,
         origin_address: std::net::SocketAddr,
