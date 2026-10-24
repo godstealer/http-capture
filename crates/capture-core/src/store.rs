@@ -583,6 +583,14 @@ mod body_storage_tests {
   assert_eq!(flows[0]["id"],"small");
   assert_eq!(flows[1]["request"]["bodyBase64"],large.request.body_base64.as_str());
   assert!(flows[1]["request"]["bodyBase64"].as_str().unwrap().starts_with("BwcH"));
+  let imported=Store::open(&dir.path().join("desktop-import.db")).unwrap();
+  let job=imported.begin_import().unwrap();
+  let parsed:Vec<Flow>=serde_json::from_value(session["flows"].clone()).unwrap();
+  assert_eq!(imported.append_import(&job,0,parsed).unwrap(),2);
+  assert_eq!(imported.finish_import(&job,true).unwrap(),2);
+  let restored=imported.list().unwrap();
+  assert_eq!(restored.len(),2);
+  assert!(restored.iter().any(|flow|flow.request.body_base64==large.request.body_base64));
  }
  #[test]
  fn session_export_keeps_snapshot_when_capture_writes_during_output() {
