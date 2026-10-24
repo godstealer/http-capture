@@ -844,10 +844,11 @@ public final class MainActivity extends Activity {
             showReplayError("这条记录缺少请求信息，请重新打开详情");
             return;
         }
-        String method = request.optString("method").trim();
-        String url = request.optString("url").trim();
-        if (method.isEmpty() || url.isEmpty()) {
-            showReplayError("这条记录缺少请求方法或 URL，无法无损复制");
+        String method = request.optString("method");
+        String url = request.optString("url");
+        if (method.isEmpty() || url.isEmpty()
+                || !method.equals(method.trim()) || !url.equals(url.trim())) {
+            showReplayError("这条记录的方法或 URL 无法无损复制");
             return;
         }
         if (!java.util.Arrays.asList(SEND_ENGINES).contains(request.optString("engine", "auto"))) {
@@ -875,6 +876,8 @@ public final class MainActivity extends Activity {
             if (name.startsWith(":")) continue;
             String value = row.optString("value");
             if (!name.equals(name.trim()) || !value.equals(value.trim())
+                    || name.indexOf('\r') >= 0 || name.indexOf('\n') >= 0
+                    || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0
                     || !RequestHeaderCodec.isHeaderLine(name + ": " + value)) {
                 showReplayError("请求头包含移动编辑器无法无损表示的字符");
                 return;

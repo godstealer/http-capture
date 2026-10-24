@@ -35,6 +35,11 @@ struct RecordedRequestCopy {
               let length = (reference["byteLength"] as? NSNumber)?.intValue else {
             throw CopyError.invalid("这条记录缺少请求或正文信息，请重新打开详情")
         }
+        guard !method.isEmpty, !url.isEmpty,
+              method == method.trimmingCharacters(in: .whitespacesAndNewlines),
+              url == url.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw CopyError.invalid("这条记录的方法或 URL 无法无损复制")
+        }
         guard (0...Self.maxEditableCopyBytes).contains(length) else {
             throw CopyError.invalid("请求正文超过 64 KiB，当前 iOS 编辑器不能安全复制后重发")
         }
@@ -57,11 +62,11 @@ struct RecordedRequestCopy {
                 throw CopyError.invalid("请求头记录不完整")
             }
             if name.hasPrefix(":") { continue }
-            guard !name.isEmpty, !name.contains(":"),
+            guard name == name.trimmingCharacters(in: .whitespaces),
+                  value == value.trimmingCharacters(in: .whitespaces),
                   !name.contains("\r"), !name.contains("\n"),
                   !value.contains("\r"), !value.contains("\n"),
-                  name == name.trimmingCharacters(in: .whitespaces),
-                  value == value.trimmingCharacters(in: .whitespaces) else {
+                  RequestHeaderText.isHeaderLine("\(name): \(value)") else {
                 throw CopyError.invalid("请求头包含移动编辑器无法表示的字符")
             }
             let prefix = row["disabled"] as? Bool == true ? "# " : ""

@@ -141,6 +141,30 @@ do {
         _ = try RecordedRequestCopy(flow: spaced)
         preconditionFailure("无法保留前导空格的请求头不能静默改写")
     } catch RecordedRequestCopy.CopyError.invalid(_) { }
+    for (key, value) in [("method", " POST"), ("url", "https://example.test/ ")] {
+        var malformed = flow
+        var malformedRequest = malformed["request"] as! [String: Any]
+        malformedRequest[key] = value
+        malformed["request"] = malformedRequest
+        do {
+            _ = try RecordedRequestCopy(flow: malformed)
+            preconditionFailure("方法或 URL 含边界空格时不能静默改写")
+        } catch RecordedRequestCopy.CopyError.invalid(_) { }
+    }
+    var malformedHeader = flow
+    var malformedHeaderRequest = malformedHeader["request"] as! [String: Any]
+    malformedHeaderRequest["headers"] = [["name": "X-Bad Name", "value": "value"]]
+    malformedHeader["request"] = malformedHeaderRequest
+    do {
+        _ = try RecordedRequestCopy(flow: malformedHeader)
+        preconditionFailure("移动编辑器无法发送的头名称应在复制阶段拒绝")
+    } catch RecordedRequestCopy.CopyError.invalid(_) { }
+    malformedHeaderRequest["headers"] = [["name": "X-Test", "value": "one\nGET / HTTP/1.1"]]
+    malformedHeader["request"] = malformedHeaderRequest
+    do {
+        _ = try RecordedRequestCopy(flow: malformedHeader)
+        preconditionFailure("请求头值中的换行不能被当作浏览器请求行忽略")
+    } catch RecordedRequestCopy.CopyError.invalid(_) { }
     let controlFlow: [String: Any] = [
         "id": "control", "bodyRevision": "run:1",
         "request": ["method": "POST", "url": "https://example.test/", "headers": []],
