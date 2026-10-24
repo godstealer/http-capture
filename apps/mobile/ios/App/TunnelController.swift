@@ -1451,6 +1451,12 @@ final class TunnelController: ObservableObject {
             return
         }
         let directory = shared.appendingPathComponent("HTTP Capture", isDirectory: true).path
+        guard FileManager.default.fileExists(atPath: directory) else {
+            sessionExportOffline = false
+            sessionExporting = false
+            message = "请先启动一次 VPN，完成共享数据目录初始化或旧记录迁移"
+            return
+        }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("http-capture-\(UUID().uuidString).json")
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1700,6 +1706,11 @@ final class TunnelController: ObservableObject {
                 return
             }
             let directory = shared.appendingPathComponent("HTTP Capture", isDirectory: true).path
+            guard FileManager.default.fileExists(atPath: directory) else {
+                message = "请先启动一次 VPN，完成共享数据目录初始化或旧记录迁移"
+                onFailure?()
+                return
+            }
             DispatchQueue.global(qos: .userInitiated).async {
                 let response = directory.withCString { path in
                     String(decoding: data, as: UTF8.self).withCString { request in
