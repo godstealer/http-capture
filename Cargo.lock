@@ -2608,6 +2608,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tun2proxy",
+ "uuid",
 ]
 
 [[package]]

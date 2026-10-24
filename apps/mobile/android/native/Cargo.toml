@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 jni = "0.21.1"
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # TUN TCP/DNS bridge; the capture engine remains the local HTTP proxy.

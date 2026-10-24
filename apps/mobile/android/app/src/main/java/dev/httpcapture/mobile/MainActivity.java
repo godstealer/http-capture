@@ -61,6 +61,7 @@ public final class MainActivity extends Activity {
     private Button blockingRules;
     private Button responseRewriteRules;
     private Button manualRequest;
+    private Button savedRequestsButton;
     private Button selectApps;
     private Button addApp;
     private CheckBox captureQuic;
@@ -99,6 +100,8 @@ public final class MainActivity extends Activity {
     private ManualRequestDraft pendingFileRequest;
 
     private static final class ManualRequestDraft {
+        String savedId;
+        String savedName;
         String method = "GET";
         String url = "";
         String headers = "";
@@ -168,11 +171,13 @@ public final class MainActivity extends Activity {
         blockingRules = button(layout, "阻止规则", view -> loadBlocking());
         responseRewriteRules = button(layout, "响应修改规则", view -> loadResponseRewrite());
         manualRequest = button(layout, "新建请求", view -> openManualRequest());
+        savedRequestsButton = button(layout, "已保存请求", view -> showSavedRequests());
         stop.setEnabled(false);
         exportCa.setEnabled(false);
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
         manualRequest.setEnabled(false);
+        savedRequestsButton.setEnabled(false);
 
         TextView hint = new TextView(this);
         hint.setText("首次启动需要授权系统 VPN；HTTPS 正文还需要目标 App 信任本 CA。普通 UDP 直连且不记录；开启 HTTP/3 后，UDP/443 会尝试进入本机解密入口，不支持 ECH/隐藏 SNI。");
@@ -226,6 +231,7 @@ public final class MainActivity extends Activity {
             blockingRules.setEnabled(true);
             responseRewriteRules.setEnabled(true);
             manualRequest.setEnabled(true);
+            savedRequestsButton.setEnabled(true);
             setAppSelectionEnabled(false);
             updatePagingControls();
             status.setText(CaptureVpnService.message());
@@ -251,6 +257,7 @@ public final class MainActivity extends Activity {
                     blockingRules.setEnabled(true);
                     responseRewriteRules.setEnabled(true);
                     manualRequest.setEnabled(true);
+                    savedRequestsButton.setEnabled(true);
                     status.setText("本机代理运行中 · " + value.optString("address"));
                     updatePagingControls();
                     poll();
@@ -453,6 +460,7 @@ public final class MainActivity extends Activity {
                     blockingRules.setEnabled(true);
                     responseRewriteRules.setEnabled(true);
                     manualRequest.setEnabled(true);
+                    savedRequestsButton.setEnabled(true);
                     updatePagingControls();
                     requestVpn(selectedPort);
                     poll();
@@ -503,6 +511,7 @@ public final class MainActivity extends Activity {
         blockingRules.setEnabled(true);
         responseRewriteRules.setEnabled(true);
         manualRequest.setEnabled(true);
+        savedRequestsButton.setEnabled(true);
         status.setText("正在建立 VPN…");
         poll();
     }
@@ -527,6 +536,7 @@ public final class MainActivity extends Activity {
             blockingRules.setEnabled(false);
             responseRewriteRules.setEnabled(false);
             manualRequest.setEnabled(false);
+            savedRequestsButton.setEnabled(false);
             status.setText("正在停止 VPN…");
             waitForVpnStop();
             return;
@@ -543,6 +553,7 @@ public final class MainActivity extends Activity {
                 blockingRules.setEnabled(false);
                 responseRewriteRules.setEnabled(false);
                 manualRequest.setEnabled(false);
+                savedRequestsButton.setEnabled(false);
             });
         });
     }
@@ -560,6 +571,7 @@ public final class MainActivity extends Activity {
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
         manualRequest.setEnabled(false);
+        savedRequestsButton.setEnabled(false);
         updatePagingControls();
     }
 
@@ -594,6 +606,7 @@ public final class MainActivity extends Activity {
                         blockingRules.setEnabled(false);
                         responseRewriteRules.setEnabled(false);
                         manualRequest.setEnabled(false);
+                        savedRequestsButton.setEnabled(false);
                         waitForVpnStop();
                         return;
                     }
@@ -995,9 +1008,10 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("新建 HTTP 请求")
+            .setTitle(draft.savedId == null ? "新建 HTTP 请求" : "编辑已保存请求")
             .setView(scroll)
             .setNegativeButton("取消", null)
+            .setNeutralButton(draft.savedId == null ? "保存请求" : "保存修改", null)
             .setPositiveButton("发送", null)
             .create();
         pickFile.setOnClickListener(view -> {
@@ -1024,18 +1038,222 @@ public final class MainActivity extends Activity {
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
-        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-            draft.method = method.getText().toString();
-            draft.url = url.getText().toString();
-            draft.headers = headers.getText().toString();
-            draft.body = body.getText().toString();
-            draft.engine = SEND_ENGINES[engine.getSelectedItemPosition()];
-            draft.bodyMode = bodyMode.getSelectedItemPosition();
-            if (sendManualRequest(draft)) {
-                dialog.dismiss();
-            }
-        }));
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                copyManualInputs(draft, method, url, headers, body, engine, bodyMode);
+                if (sendManualRequest(draft)) dialog.dismiss();
+            });
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+                copyManualInputs(draft, method, url, headers, body, engine, bodyMode);
+                saveManualRequest(draft, dialog);
+            });
+        });
         dialog.show();
+    }
+
+    private static void copyManualInputs(ManualRequestDraft draft, EditText method,
+                                         EditText url, EditText headers, EditText body,
+                                         Spinner engine, Spinner bodyMode) {
+        draft.method = method.getText().toString();
+        draft.url = url.getText().toString();
+        draft.headers = headers.getText().toString();
+        draft.body = body.getText().toString();
+        draft.engine = SEND_ENGINES[engine.getSelectedItemPosition()];
+        draft.bodyMode = bodyMode.getSelectedItemPosition();
+    }
+
+    private void showSavedRequests() { showSavedRequests(0); }
+
+    private void showSavedRequests(int offset) {
+        worker.execute(() -> {
+            try {
+                JSONObject reply = parseReply(NativeCapture.savedRequests(offset));
+                if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                JSONObject page = reply.getJSONObject("value");
+                JSONArray rows = page.getJSONArray("requests");
+                String[] labels = new String[rows.length()];
+                String[] ids = new String[rows.length()];
+                for (int i = 0; i < rows.length(); i++) {
+                    JSONObject row = rows.getJSONObject(i);
+                    ids[i] = row.getString("id");
+                    labels[i] = row.optString("name") + "\n" + row.optString("method")
+                        + " " + row.optString("url");
+                }
+                int total = page.optInt("total");
+                int next = page.isNull("nextOffset") ? -1 : page.getInt("nextOffset");
+                main.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    AlertDialog.Builder list = new AlertDialog.Builder(this)
+                        .setTitle("已保存请求 · " + total + " 条")
+                        .setNegativeButton("关闭", null);
+                    if (labels.length == 0) list.setMessage("还没有保存的请求。新建请求后点“保存请求”即可。");
+                    else list.setItems(labels, (dialog, which) -> openSavedRequest(ids[which]));
+                    if (offset > 0) list.setNeutralButton("上一页",
+                        (dialog, which) -> showSavedRequests(Math.max(0, offset - 100)));
+                    if (next >= 0) list.setPositiveButton("下一页",
+                        (dialog, which) -> showSavedRequests(next));
+                    list.show();
+                });
+            } catch (Exception error) {
+                main.post(() -> showSavedRequestError(error.getMessage()));
+            }
+        });
+    }
+
+    private void openSavedRequest(String id) {
+        worker.execute(() -> {
+            try {
+                JSONObject reply = parseReply(NativeCapture.savedRequest(id));
+                if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                ManualRequestDraft draft = manualDraftFromSaved(reply.getJSONObject("value"));
+                main.post(() -> {
+                    if (!isFinishing() && !isDestroyed()) openManualRequest(draft);
+                });
+            } catch (Exception error) {
+                main.post(() -> showSavedRequestError(error.getMessage()));
+            }
+        });
+    }
+
+    private static ManualRequestDraft manualDraftFromSaved(JSONObject saved) throws Exception {
+        if (!saved.isNull("grpcDraft") || "grpc".equalsIgnoreCase(saved.optString("requestMode")))
+            throw new IllegalArgumentException("此请求是 gRPC 请求，移动 HTTP 编辑器暂不能打开");
+        JSONObject request = saved.getJSONObject("draft");
+        JSONArray pseudo = request.optJSONArray("pseudoHeaders");
+        if (pseudo != null && pseudo.length() > 0)
+            throw new IllegalArgumentException("此请求含 HTTP/2 伪头，移动编辑器暂不能无损打开");
+        if (!request.isNull("upstreamProfileId"))
+            throw new IllegalArgumentException("此请求使用上游代理配置，移动编辑器暂不能无损打开");
+        JSONObject scripts = request.optJSONObject("scripts");
+        if (scripts != null && (scripts.optBoolean("enabled")
+                || !scripts.optString("before").isEmpty()
+                || !scripts.optString("after").isEmpty()
+                || scripts.optJSONObject("variables") != null
+                   && scripts.optJSONObject("variables").length() > 0))
+            throw new IllegalArgumentException("此请求含脚本配置，移动编辑器暂不能无损打开");
+        JSONObject tls = request.optJSONObject("tls");
+        if (tls != null && (!tls.isNull("clientHelloHex") || !tls.isNull("browserVersion")
+                || !tls.isNull("version") || !"native".equals(tls.optString("preset", "native"))
+                || !tls.isNull("cipherList") || !tls.isNull("sigalgsList")
+                || !tls.isNull("curvesList") || !tls.isNull("grease")
+                || !tls.isNull("permuteExtensions")))
+            throw new IllegalArgumentException("此请求使用自定义 TLS 配置，移动编辑器暂不能无损打开");
+        ManualRequestDraft draft = new ManualRequestDraft();
+        draft.savedId = saved.getString("id");
+        draft.savedName = saved.getString("name");
+        draft.method = request.getString("method");
+        draft.url = request.getString("url");
+        draft.engine = request.optString("engine", "auto");
+        if (!java.util.Arrays.asList(SEND_ENGINES).contains(draft.engine))
+            throw new IllegalArgumentException("此请求使用移动版尚不支持的发送引擎");
+        JSONArray rows = request.getJSONArray("headers");
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i);
+            if (i > 0) text.append('\n');
+            if (row.optBoolean("disabled")) text.append("# ");
+            text.append(row.getString("name")).append(": ").append(row.getString("value"));
+        }
+        draft.headers = text.toString();
+        String encoded = request.optString("bodyBase64", "");
+        if (encoded.length() > ((RequestBodyCodec.MAX_BODY_BYTES + 2) / 3) * 4)
+            throw new IllegalArgumentException("请求正文超过移动编辑器的 1 MiB 限制");
+        byte[] bytes = Base64.decode(encoded, Base64.DEFAULT);
+        if (bytes.length > RequestBodyCodec.MAX_BODY_BYTES)
+            throw new IllegalArgumentException("请求正文超过移动编辑器的 1 MiB 限制");
+        if (bytes.length <= 64 * 1024 && ResponseBodyCodec.isReadableUtf8(bytes)) {
+            draft.body = new String(bytes, StandardCharsets.UTF_8);
+            draft.bodyMode = 0;
+        } else {
+            draft.body = Base64.encodeToString(bytes, Base64.NO_WRAP);
+            draft.bodyMode = 5;
+        }
+        return draft;
+    }
+
+    private void showSavedRequestError(String reason) {
+        if (isFinishing() || isDestroyed()) return;
+        new AlertDialog.Builder(this).setTitle("保存的请求无法打开")
+            .setMessage(reason).setPositiveButton("关闭", null).show();
+    }
+
+    private void saveManualRequest(ManualRequestDraft draft, AlertDialog editor) {
+        String method = draft.method.trim().toUpperCase(Locale.ROOT);
+        String url = draft.url.trim();
+        String suggested = draft.savedName == null ? method + " " + url : draft.savedName;
+        if (suggested.length() > 100) suggested = suggested.substring(0, 100);
+        EditText name = new EditText(this);
+        name.setSingleLine(true);
+        name.setText(suggested);
+        name.selectAll();
+        int inset = (int) (18 * getResources().getDisplayMetrics().density);
+        LinearLayout content = new LinearLayout(this);
+        content.setPadding(inset, inset, inset, inset);
+        content.addView(name);
+        AlertDialog naming = new AlertDialog.Builder(this)
+            .setTitle(draft.savedId == null ? "保存到“我的请求”" : "保存请求修改")
+            .setView(content).setNegativeButton("取消", null)
+            .setPositiveButton("保存", null).create();
+        naming.setOnShowListener(ignored -> naming.getButton(AlertDialog.BUTTON_POSITIVE)
+            .setOnClickListener(view -> {
+                String requestName = name.getText().toString().trim();
+                if (requestName.isEmpty() || requestName.getBytes(StandardCharsets.UTF_8).length > 512) {
+                    name.setError("名称须为 1–512 字节");
+                    return;
+                }
+                naming.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                worker.execute(() -> {
+                    try {
+                        JSONObject request = buildManualRequest(draft);
+                        JSONObject input = new JSONObject().put("name", requestName).put("draft", request);
+                        if (draft.savedId != null) input.put("id", draft.savedId);
+                        JSONObject reply = parseReply(NativeCapture.saveRequest(input.toString()));
+                        if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
+                        main.post(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            naming.dismiss();
+                            editor.dismiss();
+                            status.setText((draft.savedId == null ? "已保存：" : "已更新：") + requestName);
+                        });
+                    } catch (Exception error) {
+                        main.post(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            naming.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                            new AlertDialog.Builder(this).setTitle("保存失败")
+                                .setMessage(error.getMessage()).setPositiveButton("关闭", null).show();
+                        });
+                    }
+                });
+            }));
+        naming.show();
+    }
+
+    private JSONObject buildManualRequest(ManualRequestDraft draft) throws Exception {
+        String requestMethod = draft.method.trim().toUpperCase(Locale.ROOT);
+        String requestUrl = draft.url.trim();
+        URI uri = new URI(requestUrl);
+        if (requestMethod.isEmpty() || uri.getHost() == null
+                || !("http".equalsIgnoreCase(uri.getScheme())
+                     || "https".equalsIgnoreCase(uri.getScheme())))
+            throw new IllegalArgumentException("请输入 HTTP(S) URL 和请求方法");
+        if (!java.util.Arrays.asList(SEND_ENGINES).contains(draft.engine))
+            throw new IllegalArgumentException("此发送引擎未内置于移动版，请选择原生协议");
+        if ("h3".equals(draft.engine) && !"https".equalsIgnoreCase(uri.getScheme()))
+            throw new IllegalArgumentException("HTTP/3 需要 HTTPS URL");
+        int bodyTextLimit = draft.bodyMode == 5
+            ? ((RequestBodyCodec.MAX_BODY_BYTES + 2) / 3) * 4 : 64 * 1024;
+        if (draft.body.getBytes(StandardCharsets.UTF_8).length > bodyTextLimit
+                || draft.headers.getBytes(StandardCharsets.UTF_8).length > 16 * 1024)
+            throw new IllegalArgumentException("文本最多 64 KiB，Base64 正文最多 1 MiB，请求头最多 16 KiB");
+        JSONArray headerRows = new JSONArray();
+        for (RequestHeaderCodec.Header row : RequestHeaderCodec.parse(draft.headers))
+            headerRows.put(new JSONObject().put("name", row.name)
+                .put("value", row.value).put("disabled", row.disabled));
+        RequestBody body = composeRequestBody(draft);
+        JSONArray preparedHeaders = applyContentType(headerRows, body.contentType, body.replaceContentType);
+        return new JSONObject().put("method", requestMethod).put("url", requestUrl)
+            .put("engine", draft.engine).put("headers", preparedHeaders)
+            .put("bodyBase64", Base64.encodeToString(body.bytes, Base64.NO_WRAP));
     }
 
     private void showHeaderToggles(EditText editor, String kind) {
@@ -1083,10 +1301,11 @@ public final class MainActivity extends Activity {
             if ("h3".equals(draft.engine) && !"https".equalsIgnoreCase(uri.getScheme())) {
                 throw new IllegalArgumentException("HTTP/3 需要 HTTPS URL");
             }
-            int bodyTextLimit = draft.bodyMode == 5 ? 128 * 1024 : 64 * 1024;
+            int bodyTextLimit = draft.bodyMode == 5
+                ? ((RequestBodyCodec.MAX_BODY_BYTES + 2) / 3) * 4 : 64 * 1024;
             if (draft.body.getBytes(StandardCharsets.UTF_8).length > bodyTextLimit
                     || draft.headers.getBytes(StandardCharsets.UTF_8).length > 16 * 1024) {
-                throw new IllegalArgumentException("文本最多 64 KiB，Base64 输入最多 128 KiB，请求头最多 16 KiB");
+                throw new IllegalArgumentException("文本最多 64 KiB，Base64 正文最多 1 MiB，请求头最多 16 KiB");
             }
             if (draft.bodyMode == 3 && draft.fileUri == null) {
                 throw new IllegalArgumentException("请先选择要发送的文件");

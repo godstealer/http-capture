@@ -337,6 +337,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     throw new AssertionError("CA export must contain only a public certificate");
                 }
                 runCertificateManagementSmoke(certificate);
+                runSavedRequestSmoke();
 
                 AtomicReference<Throwable> originError = new AtomicReference<>();
                 Thread server = new Thread(() -> {
@@ -404,6 +405,43 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 expectOk(NativeCapture.stop());
             }
         }
+    }
+
+    private void runSavedRequestSmoke() throws Exception {
+        byte[] body = new byte[] {0, 1, 2, (byte) 0xff};
+        JSONArray headers = new JSONArray()
+            .put(new JSONObject().put("name", "X-Order").put("value", "first"))
+            .put(new JSONObject().put("name", "x-order").put("value", "second"))
+            .put(new JSONObject().put("name", "X-Disabled").put("value", "omit")
+                .put("disabled", true));
+        JSONObject draft = new JSONObject().put("method", "POST")
+            .put("url", "https://example.com/mobile-saved-smoke")
+            .put("engine", "auto").put("headers", headers)
+            .put("bodyBase64", Base64.encodeToString(body, Base64.NO_WRAP));
+        String name = "mobile-saved-smoke-" + System.nanoTime();
+        JSONObject saved = expectOk(NativeCapture.saveRequest(
+            new JSONObject().put("name", name).put("draft", draft).toString()));
+        String id = saved.getString("id");
+        JSONObject page = expectOk(NativeCapture.savedRequests(0));
+        JSONArray rows = page.getJSONArray("requests");
+        boolean listed = false;
+        for (int i = 0; i < rows.length(); i++)
+            if (id.equals(rows.getJSONObject(i).getString("id"))) listed = true;
+        if (!listed) throw new AssertionError("Saved request missing from library list");
+        JSONObject reopened = expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft");
+        JSONArray reopenedHeaders = reopened.getJSONArray("headers");
+        if (reopenedHeaders.length() != 3
+                || !"first".equals(reopenedHeaders.getJSONObject(0).getString("value"))
+                || !"second".equals(reopenedHeaders.getJSONObject(1).getString("value"))
+                || !reopenedHeaders.getJSONObject(2).getBoolean("disabled")
+                || !Arrays.equals(body, Base64.decode(reopened.getString("bodyBase64"), Base64.DEFAULT)))
+            throw new AssertionError("Saved request changed headers or binary body");
+        reopened.put("url", "https://example.com/mobile-saved-updated");
+        JSONObject updated = expectOk(NativeCapture.saveRequest(new JSONObject()
+            .put("id", id).put("name", name).put("draft", reopened).toString()));
+        if (!id.equals(updated.getString("id")) || !"https://example.com/mobile-saved-updated"
+                .equals(expectOk(NativeCapture.savedRequest(id)).getJSONObject("draft").getString("url")))
+            throw new AssertionError("Saved request update was not persisted");
     }
 
     private void runBinaryResponseRewriteSmoke(int proxyPort) throws Exception {

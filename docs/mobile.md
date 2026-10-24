@@ -14,6 +14,8 @@ Android 新增模拟器冒烟测试：在 API 33 x86_64 模拟器安装构建的
 
 ## Android 当前代码
 
+2026-10-25：手动新建请求增加“保存请求”和“已保存请求”入口。保存时把已组装的有序请求头、停用状态和最终正文写入共享请求库的“我的请求”集合；列表每页最多读取 100 条，选中后可重新打开、修改、覆盖保存或发送。若库中请求包含当前移动编辑器无法无损表达的 gRPC、HTTP/2 伪头、上游代理、启用脚本或自定义 TLS 配置，会明确拒绝打开。Android arm64-v8a / x86_64 调试 APK 和模拟器测试源码已在本地编译；模拟器保存/读取测试及设备界面验收仍待运行。该批改动尚未推送或发布。
+
 Android VPN 的 TCP 来源识别已接入：`tun2proxy` 在连接本机透明代理时记录原始 TUN 源/目标地址与回环连接端口；VPN 服务在 Android 10（API 29）及以上用 `ConnectivityManager.getConnectionOwnerUid` 查询原始连接的 UID，再尝试取得包名和应用名。共享内核按回环端口一次性关联抓包记录，无法匹配或系统拒绝查询时保持未知，不把转发器误标成来源应用。Android 11 起包可见性可能使应用名不可用，此时仍可显示 UID；Android 9 及以下暂不支持 UID 查询。核心集成测试已验证来源写入、端口隔离和旧记录兼容；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40088853655) 通过双架构 APK 构建与模拟器独立 App 的 UID 存在性断言（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`）。已进一步加入“记录的 UID 等于测试 App 自报 UID”的断言，Java 编译通过，待下批 CI；真机应用名显示仍待验证。实现依据为 Android 官方的 [getConnectionOwnerUid](https://developer.android.com/reference/android/net/ConnectivityManager#getConnectionOwnerUid(int,%20java.net.InetSocketAddress,%20java.net.InetSocketAddress)) 文档。iOS 当前 Packet Tunnel 只有原始 IP 包，不能沿用 Android UID 查询；Apple 的 [NEFlowMetaData](https://developer.apple.com/documentation/networkextension/neflowmetadata) 仅在按 App 配置的 VPN 中包含来源信息，现有全局 Packet Tunnel 先保持 TUN 来源未知。
 
 - `apps/mobile/android/native` 是独立 Rust `cdylib`，通过 JNI 打开 `capture-core`、启动手机本机回环 HTTP(S) 代理、读取不含正文的流量元数据以及导出 CA **公钥证书**。CA 私钥仍留在应用私有数据目录。

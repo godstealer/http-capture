@@ -1,6 +1,7 @@
 //! Android-owned entry point for the shared capture engine. JNI only translates
 //! arguments and results; HTTP/TLS, persistence and capture rules stay in core.
 use capture_core::store::McpRequestFilter;
+use capture_core::store::{Collection, SavedRequest};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use jni::{
     objects::{GlobalRef, JClass, JString, JValue},
@@ -12,6 +13,9 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, OnceLock},
 };
+use serde::Deserialize;
+use serde_json::json;
+use uuid::Uuid;
 
 #[cfg(target_os = "android")]
 use tun2proxy::{ArgDns, ArgProxy, Args, CancellationToken, TcpProxyObserver};
@@ -295,6 +299,83 @@ fn metadata(id: &str) -> Result<serde_json::Value, String> {
     serde_json::to_value(record).map_err(|error| error.to_string())
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveMobileRequest {
+    #[serde(default)]
+    id: Option<String>,
+    name: String,
+    draft: RequestDraft,
+}
+
+fn saved_requests(offset: usize) -> Result<serde_json::Value, String> {
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    let total = library.requests.len();
+    let requests: Vec<_> = library.requests.iter().rev().skip(offset).take(100).map(|request| {
+        let collection_name = library.collections.iter()
+            .find(|collection| collection.id == request.collection_id)
+            .map(|collection| collection.name.as_str()).unwrap_or("");
+        json!({"id": request.id, "name": request.name, "collectionName": collection_name,
+            "method": request.draft.method, "url": request.draft.url})
+    }).collect();
+    Ok(json!({"revision": library.revision, "total": total,
+        "nextOffset": (offset + requests.len() < total).then_some(offset + requests.len()),
+        "requests": requests}))
+}
+
+fn saved_request(id: &str) -> Result<serde_json::Value, String> {
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    let library = capture.runtime.engine.store.library().map_err(|error| error.to_string())?;
+    let request = library.requests.iter().find(|request| request.id == id)
+        .ok_or("Saved request not found")?;
+    if request.draft.body_base64.len() > (1024 * 1024 + 2) / 3 * 4 {
+        return Err("Saved request body exceeds the mobile editor limit".into());
+    }
+    serde_json::to_value(request).map_err(|error| error.to_string())
+}
+
+fn save_request(raw: &str) -> Result<serde_json::Value, String> {
+    if raw.len() > 2 * 1024 * 1024 { return Err("Saved request exceeds 2 MiB".into()); }
+    let input: SaveMobileRequest = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    let name = input.name.trim();
+    if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
+    if input.draft.body_base64.len() > (1024 * 1024 + 2) / 3 * 4 {
+        return Err("Request body exceeds the 1 MiB mobile limit".into());
+    }
+    capture_core::http1::validate_draft(&input.draft).map_err(|error| error.to_string())?;
+    let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
+    let capture = current.as_ref().ok_or("Capture is not running")?;
+    let store = &capture.runtime.engine.store;
+    let mut library = store.library().map_err(|error| error.to_string())?;
+    if let Some(id) = input.id {
+        let request = library.requests.iter_mut().find(|request| request.id == id)
+            .ok_or("Saved request not found")?;
+        if request.grpc_draft.is_some() || request.request_mode.as_deref() == Some("grpc") {
+            return Err("gRPC requests cannot be edited in the mobile HTTP editor".into());
+        }
+        request.name = name.into();
+        request.draft = input.draft;
+        let revision = store.save_library(library).map_err(|error| error.to_string())?;
+        return Ok(json!({"id": id, "revision": revision}));
+    }
+    let collection_id = if let Some(collection) = library.collections.iter()
+        .find(|collection| collection.name == "我的请求") {
+        collection.id.clone()
+    } else {
+        let id = Uuid::new_v4().to_string();
+        library.collections.push(Collection { id: id.clone(), name: "我的请求".into() });
+        id
+    };
+    let id = Uuid::new_v4().to_string();
+    library.requests.push(SavedRequest { id: id.clone(), name: name.into(), collection_id,
+        draft: input.draft, grpc_draft: None, request_mode: Some("http".into()) });
+    let revision = store.save_library(library).map_err(|error| error.to_string())?;
+    Ok(json!({"id": id, "revision": revision}))
+}
+
 fn certificate() -> Result<String, String> {
     let current = capture()
         .lock()
@@ -499,6 +580,35 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_metadata(
             .map_err(|error| error.to_string())?
             .into();
         metadata(&id)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedRequests(
+    env: JNIEnv<'_>, _class: JClass<'_>, offset: jint,
+) -> jstring {
+    jni_reply(env, saved_requests(offset.max(0) as usize))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_savedRequest(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, id: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let id: String = env.get_string(&id).map_err(|error| error.to_string())?.into();
+        saved_request(&id)
+    })();
+    jni_reply(env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_saveRequest(
+    mut env: JNIEnv<'_>, _class: JClass<'_>, raw: JString<'_>,
+) -> jstring {
+    let result = (|| {
+        let raw: String = env.get_string(&raw).map_err(|error| error.to_string())?.into();
+        save_request(&raw)
     })();
     jni_reply(env, result)
 }
