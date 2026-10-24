@@ -213,6 +213,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 
 Android 模拟器冒烟现增加同一端口连续两次启动/停止 VPN，并在每次停止后检查回环代理端口已释放，覆盖快速重启时的资源清理。测试 APK 已在本地编译通过；当前 Windows 无可运行模拟器或连接设备，执行结果须等集中推送后的 Android CI。
 
+冒烟还增加端口已被其他监听器占用的启动失败场景：确认用户能看到失败原因、VPN 服务和内核退出，且占用结束后端口可重新绑定。测试 APK 离线编译通过；API 36 模拟器执行仍待集中 CI。此项只验证启动失败清理，不替代真机上的端口冲突和前台服务限制验收。
+
 该回归进一步让独立测试 App 使用 Android 的 `HttpURLConnection`，分别在公布和不公布系统代理时访问本机测试上游；测试 App 先读取 `ConnectivityManager.getDefaultProxy()`，核对两种模式是否真的改变本机代理提示，再检查抓包响应、上游实际收到请求、测试 App 完成读取，并在关闭代理提示时核对流量来源为 TUN。前台服务无法升级时会记录明确的 VPN 启动错误并退出，避免服务异常导致测试进程直接崩溃。设备测试尚待集中 CI 运行。
 
 Android 10 及以上可在启动前关闭“向应用公布本机 HTTP 代理”。开关默认保持开启以兼容原行为；关闭时 VPN 仍建立完整路由并由 TUN 转发流量，便于测试不使用系统代理提示的应用及 TUN 来源识别。系统代理只是一项建议，应用可以忽略；开关需要重启 VPN 才会生效。模拟器快速启停回归分别启动开启和关闭两种设置，实际流量与代理公布状态仍待设备验证。依据：[Android `VpnService.Builder.setHttpProxy`](https://developer.android.com/reference/android/net/VpnService.Builder#setHttpProxy(android.net.ProxyInfo))。

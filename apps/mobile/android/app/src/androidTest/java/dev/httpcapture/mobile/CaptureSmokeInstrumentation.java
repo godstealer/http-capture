@@ -51,6 +51,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             runVpnLifecycleSmoke();
             runSelectedAppSmoke();
             runVpnQuickRestartSmoke();
+            runVpnPortConflictSmoke();
             runVpnStartupFailureSmoke();
             runPortableConfigurationSmoke();
             result.putString("smokeStatus", "ok");
@@ -85,6 +86,36 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         if (!CaptureVpnService.message().contains(missingPackage))
             throw new AssertionError("VPN failure was overwritten: " + CaptureVpnService.message());
         try (ServerSocket available = new ServerSocket(port, 1,
+                InetAddress.getByName("127.0.0.1"))) { }
+    }
+
+    private void runVpnPortConflictSmoke() throws Exception {
+        final int port;
+        try (ServerSocket occupied = new ServerSocket(0, 1,
+                InetAddress.getByName("127.0.0.1"))) {
+            port = occupied.getLocalPort();
+            Intent start = new Intent(getTargetContext(), CaptureVpnService.class);
+            start.setAction(CaptureVpnService.ACTION_START);
+            start.putExtra(CaptureVpnService.EXTRA_PORT, port);
+            getTargetContext().startForegroundService(start);
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (System.currentTimeMillis() < deadline &&
+                    (CaptureVpnService.isManaged() || CaptureVpnService.isStopping()
+                     || !CaptureVpnService.message().startsWith("VPN 启动失败"))) {
+                Thread.sleep(200);
+            }
+            if (CaptureVpnService.isManaged() || CaptureVpnService.isStopping()
+                    || CaptureVpnService.isActive())
+                throw new AssertionError("Port-conflict VPN did not stop: "
+                        + CaptureVpnService.message());
+            if (!CaptureVpnService.message().startsWith("VPN 启动失败"))
+                throw new AssertionError("Port-conflict failure was not reported: "
+                        + CaptureVpnService.message());
+            JSONObject status = expectOk(NativeCapture.status());
+            if (status.optBoolean("running"))
+                throw new AssertionError("Port-conflict capture engine kept running");
+        }
+        try (ServerSocket released = new ServerSocket(port, 1,
                 InetAddress.getByName("127.0.0.1"))) { }
     }
 
