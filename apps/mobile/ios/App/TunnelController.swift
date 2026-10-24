@@ -197,6 +197,8 @@ final class TunnelController: ObservableObject {
     private var savedOpenGeneration: UInt64 = 0
     private var savedListGeneration: UInt64 = 0
     private var savedCollectionGeneration: UInt64 = 0
+    private var savedListRefreshPending = false
+    private var savedCollectionRefreshPending = false
     private var pendingSavedCopy: SavedRequestCopy?
     var manualActivityText: String { manualSaving ? "正在保存请求…" : "正在发送请求…" }
 
@@ -204,6 +206,8 @@ final class TunnelController: ObservableObject {
         savedOpenGeneration &+= 1
         savedListGeneration &+= 1
         savedCollectionGeneration &+= 1
+        savedListRefreshPending = false
+        savedCollectionRefreshPending = false
         pendingSavedCopy = nil
         savedOpenLoading = false
         savedRequestLoading = false
@@ -754,23 +758,37 @@ final class TunnelController: ObservableObject {
     }
 
     func loadSavedCollections() {
-        guard connected, !savedCollectionLoading, !savedCollectionSaving else { return }
+        guard connected else { return }
+        if savedCollectionLoading || savedCollectionSaving {
+            savedCollectionRefreshPending = true
+            return
+        }
+        savedCollectionRefreshPending = false
         savedCollectionGeneration &+= 1
         let generation = savedCollectionGeneration
         savedCollectionLoading = true
         send(["method": "list_saved_collections"],
              onFailure: { [weak self] in
-                 self?.savedCollectionLoading = false
                  self?.savedRequestError = self?.message
+                 self?.finishSavedCollectionLoad()
              }, accept: { [weak self] in self?.savedCollectionGeneration == generation }) { [weak self] value in
             guard let self else { return }
-            self.savedCollectionLoading = false
             guard let object = value as? [String: Any],
                   let rows = object["collections"] as? [[String: Any]] else {
                 self.savedRequestError = "请求库没有返回集合列表"
+                self.finishSavedCollectionLoad()
                 return
             }
             self.savedCollections = rows.compactMap(SavedCollectionSummary.init)
+            self.finishSavedCollectionLoad()
+        }
+    }
+
+    private func finishSavedCollectionLoad() {
+        savedCollectionLoading = false
+        if savedCollectionRefreshPending {
+            savedCollectionRefreshPending = false
+            loadSavedCollections()
         }
     }
 
@@ -792,8 +810,10 @@ final class TunnelController: ObservableObject {
         savedCollectionSaving = true
         savedRequestError = nil
         send(request, onFailure: { [weak self] in
-            self?.savedCollectionSaving = false
-            self?.savedRequestError = self?.message
+            guard let self else { return }
+            self.savedCollectionSaving = false
+            self.savedRequestError = self.message
+            if self.savedCollectionRefreshPending { self.loadSavedCollections() }
         }, accept: { [weak self] in self?.savedCollectionGeneration == generation }) { [weak self] _ in
             guard let self else { return }
             self.savedCollectionSaving = false
@@ -804,7 +824,12 @@ final class TunnelController: ObservableObject {
     }
 
     func loadSavedRequests(offset: Int = 0, query: String? = nil, collectionID: String? = nil) {
-        guard connected, !savedRequestLoading, !savedDeleteBusy, offset >= 0 else { return }
+        guard connected, !savedDeleteBusy, offset >= 0 else { return }
+        if savedRequestLoading {
+            if offset == 0 && query == nil && collectionID == nil { savedListRefreshPending = true }
+            return
+        }
+        savedListRefreshPending = false
         let search = (query ?? savedRequestQuery).trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedCollection = collectionID ?? savedCollectionID
         guard search.utf8.count <= 256 else {
@@ -821,20 +846,29 @@ final class TunnelController: ObservableObject {
               "collectionId": selectedCollection],
              onFailure: { [weak self] in
                  guard let self else { return }
-                 self.savedRequestLoading = false
                  self.savedRequestError = self.message
+                 self.finishSavedListLoad()
              }, accept: { [weak self] in self?.savedListGeneration == generation }) { [weak self] value in
             guard let self else { return }
-            self.savedRequestLoading = false
             guard let page = value as? [String: Any],
                   let rows = page["requests"] as? [[String: Any]] else {
                 self.savedRequestError = "请求库没有返回列表"
+                self.finishSavedListLoad()
                 return
             }
             self.savedRequests = rows.compactMap(SavedRequestSummary.init)
             self.savedRequestTotal = (page["total"] as? NSNumber)?.intValue ?? 0
             self.savedRequestOffset = offset
             self.savedRequestNextOffset = (page["nextOffset"] as? NSNumber)?.intValue
+            self.finishSavedListLoad()
+        }
+    }
+
+    private func finishSavedListLoad() {
+        savedRequestLoading = false
+        if savedListRefreshPending {
+            savedListRefreshPending = false
+            loadSavedRequests()
         }
     }
 
