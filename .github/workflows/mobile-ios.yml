@@ -52,8 +52,8 @@ jobs:
           test -d "$app"
           test -d "$app/PlugIns/PacketTunnel.appex"
           test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
-          lipo -verify_arch "$simulator_arch" "$app/HTTPCaptureMobile"
-          lipo -verify_arch "$simulator_arch" "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
+          lipo "$app/HTTPCaptureMobile" -verify_arch "$simulator_arch"
+          lipo "$app/PlugIns/PacketTunnel.appex/PacketTunnel" -verify_arch "$simulator_arch"
       - name: Package unsigned simulator app
         run: |
           app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/HTTPCaptureMobile.app
@@ -82,5 +82,5 @@ jobs:
           app=apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphoneos/HTTPCaptureMobile.app
           test -f "$app/HTTPCaptureMobile"
           test -f "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
-          lipo -verify_arch arm64 "$app/HTTPCaptureMobile"
-          lipo -verify_arch arm64 "$app/PlugIns/PacketTunnel.appex/PacketTunnel"
+          lipo "$app/HTTPCaptureMobile" -verify_arch arm64
+          lipo "$app/PlugIns/PacketTunnel.appex/PacketTunnel" -verify_arch arm64

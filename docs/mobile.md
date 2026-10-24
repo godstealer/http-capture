@@ -1,12 +1,14 @@
 # Android / iOS 移动端
 
-状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过设备验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路，尚未在 Xcode 编译或设备验收。当前没有可交付的正式移动安装包。
+状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过设备验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路，iOS Simulator 目标已在 Xcode 编译，iPhone 目标、签名及设备验收尚未完成。当前没有可交付的正式移动安装包。
+
+2026-10-24 首次远端构建：同一提交的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40053342564)前端、Linux、macOS 和 Windows 全部通过；[Android 构建](https://github.com/godstealer/http-capture/actions/runs/40053342578)在 SDK 安装阶段因 action 默认请求已移除的 `tools` 包而失败，未编译 APK；[iOS 构建](https://github.com/godstealer/http-capture/actions/runs/40053342628)通过 Swift 测试、Xcode 工程生成和无签名模拟器 App/Packet Tunnel 编译，随后因 `lipo` 校验命令参数顺序错误而中止，尚未编译 iPhone 目标或上传附件。两处工作流脚本已在本地修正，待集中重跑。
 
 ## Android 当前代码
 
 - `apps/mobile/android/native` 是独立 Rust `cdylib`，通过 JNI 打开 `capture-core`、启动手机本机回环 HTTP(S) 代理、读取不含正文的流量元数据以及导出 CA **公钥证书**。CA 私钥仍留在应用私有数据目录。
 - `apps/mobile/android/app` 是原生 Android 工程，可输入并保存端口、选择需要抓包的应用（桌面应用可勾选，后台应用可按包名添加；VPN 启动时会校验应用是否仍已安装）、启动/停止抓包、按 URL 包含搜索、按每页最多 100 条浏览全部历史摘要、点开请求元数据并按每段 16 KiB 浏览请求/响应正文，并用系统文件选择器保存 CA 证书。首页实时刷新；搜索与旧页均使用数据库游标按需读取，页面不会一次加载全量历史。可手动新建 HTTP(S) 请求，输入方法、URL 和有序文本请求头，发送后写入现有重放记录并打开详情；正文支持文本、JSON、URL 表单、Base64 原始字节、系统文件选择及简单 Multipart 字段/单文件上传；文本最多 64 KiB，文件与最终请求正文最多 1 MiB，完整高级请求编辑器仍未实现。阻止规则页可添加精确域名、URL 包含或 URL 正则规则及可选请求方法，也可启停全局或单条规则、删除规则，复用内核校验与持久化。前台 `VpnService` 负责授权、建立 IPv4/IPv6 虚拟网卡和服务生命周期；JNI 通过 `tun2proxy` 将 TCP 与虚拟 DNS 导向本机 `capture-core` 透明代理入口。该入口识别 HTTP/TLS；非 TLS、非 HTTP 的 TCP 直接转发，包含服务端先发数据的协议，不写入 HTTP 抓包记录。TLS ClientHello 仅声明非 HTTP ALPN 时，或命中解密绕过列表时，原样转发握手；未声明 ALPN 的非 HTTP TLS 仍需专门识别和设备验收。VPN DNS 服务地址为 `10.111.0.1`，与虚拟域名地址池分开。虚拟 DNS 以独立的 IPv4/IPv6 地址池响应 A/AAAA，其他查询类型返回空答案，双栈虚拟地址均可反查原始域名。对非 DNS UDP，使用本地维护的 `tun2proxy` 小补丁直连目标，避免 HTTP 代理不支持 UDP 时阻断连接；默认情况下 UDP 内容不进入抓包记录；开启 HTTP/3 抓取后，UDP/443 可进入 QUIC/H3 入口。摘要和正文预览均走有界存储读取，详情仅在点开时载入。
-- Android arm64-v8a 与 x86_64 Rust 原生库已在 Windows NDK 交叉编译并重新打入调试 APK，包含 TUN 透明代理桥。Windows 构建为 OpenSSL 启用 `no-asm`，避开 MSYS Perl 与原生 Make 的 ARM 汇编命令引号冲突；Linux NDK 仍可使用 `scripts/build-android.sh`。已确认 APK 内两架构库与本地构建结果字节一致、各有 13 个 JNI 入口，且调试 APK 签名有效；尚未在设备运行。开发分支移动端文件更新时触发的 `mobile-android.yml` 作为独立 Linux 构建入口，仍待首次执行。虚拟 DNS 的查询类型与双地址池回归 3 项通过。停止 VPN 后界面等待服务清理完代理和 TUN 句柄再允许重启；界面重建时会查询仍在运行的独立本机代理。服务监听非 VPN 的联网网络变化并向 Android 更新底层网络列表，退出时注销回调；现有连接在切网时是否恢复仍需设备测试。详情页已按内核实际的顶层 `FlowMetadata` 结构修正，手动请求的文本输入限制为 64 KiB，请求头最多 16 KiB；文件与最终正文最多 1 MiB。Gradle `:app:assembleDebug --offline` 于 2026-10-24 对 Java/资源部分通过。APK 启动、VPN 流量和真机行为均未验证。本机 `adb devices` 无设备；旧模拟器及新下载的官方 stable 37.2.12 模拟器的 x86_64 后端均在 Windows 加载阶段以 `-1073741515`（`0xC0000135`）退出。新版本能识别 AVD，失败发生在 Android 系统启动前；静态依赖检查没有定位到缺失的具体 DLL，不能据此归因于 APK。IPv6 路由已写入代码但未做设备验证；HTTP/3 仍待手机实测，完整的移动端规则/请求编辑界面尚未实现。
+- Android arm64-v8a 与 x86_64 Rust 原生库已在 Windows NDK 交叉编译并重新打入调试 APK，包含 TUN 透明代理桥。Windows 构建为 OpenSSL 启用 `no-asm`，避开 MSYS Perl 与原生 Make 的 ARM 汇编命令引号冲突；Linux NDK 仍可使用 `scripts/build-android.sh`。已确认 APK 内两架构库与本地构建结果字节一致、各有 13 个 JNI 入口，且调试 APK 签名有效；尚未在设备运行。开发分支移动端文件更新时触发的 `mobile-android.yml` 作为独立 Linux 构建入口，已首次执行，见上文 CI 记录；修复后的完整重跑尚未完成。虚拟 DNS 的查询类型与双地址池回归 3 项通过。停止 VPN 后界面等待服务清理完代理和 TUN 句柄再允许重启；界面重建时会查询仍在运行的独立本机代理。服务监听非 VPN 的联网网络变化并向 Android 更新底层网络列表，退出时注销回调；现有连接在切网时是否恢复仍需设备测试。详情页已按内核实际的顶层 `FlowMetadata` 结构修正，手动请求的文本输入限制为 64 KiB，请求头最多 16 KiB；文件与最终正文最多 1 MiB。Gradle `:app:assembleDebug --offline` 于 2026-10-24 对 Java/资源部分通过。APK 启动、VPN 流量和真机行为均未验证。本机 `adb devices` 无设备；旧模拟器及新下载的官方 stable 37.2.12 模拟器的 x86_64 后端均在 Windows 加载阶段以 `-1073741515`（`0xC0000135`）退出。新版本能识别 AVD，失败发生在 Android 系统启动前；静态依赖检查没有定位到缺失的具体 DLL，不能据此归因于 APK。IPv6 路由已写入代码但未做设备验证；HTTP/3 仍待手机实测，完整的移动端规则/请求编辑界面尚未实现。
 
 在当前已安装 Android 工具链的 Windows 工作区可运行 `scripts/build-android.ps1 debug both`；Linux 安装 Android SDK、NDK、Rust、JDK 17 和 Gradle 后运行 `bash scripts/build-android.sh debug both`。2026-10-24 本机构建的调试安装包为 `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，SHA-256 为 `404A2F3E71DB5A9A9C0AF685C243A7B21A8AB9E4A25EE779954DE135F09ABD07`。包内 arm64-v8a 与 x86_64 原生库已随共享内核规则更新重新交叉编译，Java/资源也已重编；调试签名校验通过。仓库的 **Android mobile build** 工作流在开发分支的移动端文件更新时自动触发，合入默认分支后也可手动触发，生成 `http-capture-android-debug` 构建附件；它不属于桌面版 Check 或正式发布流程。安装包仍需设备验收 VPN 和证书链路。
 
@@ -42,7 +44,7 @@ Android 的 `VpnService` 只负责获得虚拟网卡与用户授权；包转发�
 ## iOS 当前代码与构建入口
 
 - `apps/mobile/ios/native` 是 Rust `staticlib`，提供 C ABI：在 Packet Tunnel 扩展中启动同一个 `capture-core` 回环代理，将 `NEPacketTunnelFlow` 的 IP 包通过有界队列送入 `tun2proxy::run`，并将生成的包写回扩展。它支持虚拟 DNS、IPv4/IPv6、非 DNS UDP 直连及每页最多 50 条的请求摘要、请求元数据、按偏移每段 16 KiB 的正文读取、CA 公钥证书读取。C ABI 不允许宿主 App 再打开第二份代理/数据库，宿主通过 `sendProviderMessage` 与扩展通信。
-- `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现，这些界面尚未经过 Xcode 编译和真机验证。
+- `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现，这些界面已通过 iOS Simulator 目标编译，尚未经过真机验证。
 - `apps/mobile/ios/project.yml` 由 XcodeGen 生成宿主和 Packet Tunnel 扩展工程；扩展构建前 `build-native.sh` 根据 iPhoneOS/Simulator 与架构编译 Rust 静态库。Rust 本地测试已覆盖扩展启停、阻止规则，以及本机 HTTP 请求发送、记录详情、正文预览，2026-10-24 共 4 项通过；扩展消息限长 128 KiB。需要 macOS、Xcode、Rust Apple target、XcodeGen，以及能用于 Packet Tunnel 的 Apple 签名权限。当前 Windows 环境无法执行 Xcode 编译，更不能证明扩展启动、系统流量、内存限制、证书信任或 App Store 分发通过。
 
 iOS 新建请求的正文编辑已增加文本、JSON、URL 表单、Base64、原始文件和带普通字段及单个文件的 Multipart。文件经系统文件选择器授权，最多读取 1 MiB；文本输入最多 64 KiB，最终正文最多 1 MiB。较小请求可直接通过扩展消息发送，较大请求使用带上传令牌和偏移校验的 16 KiB 分段消息，完成后再提交给内核；扩展同一时间仅暂存一份最多 1 MiB 的正文，新的上传会替换未完成的旧上传。Rust 本机测试已验证 160 KiB 二进制请求分段、错误偏移与未完成提交的拒绝、实际 HTTP POST 字节一致性，以及完整 1 MiB 分段接收和旧令牌失效；JSON 语法、表单编码、Multipart 边界/文件字节和非法 MIME 回退有独立 Swift 测试，已接入手动 iOS 构建工作流。当前 Windows 缺 Swift/Xcode，宿主编译和设备实际发送仍待 Mac/iPhone 验证；超过 1 MiB 的流式上传尚未实现。
@@ -56,12 +58,12 @@ iOS 阻止规则页可切换仅抓包、仅重放或两者，可编辑已有规�
 iOS 扩展停止时会在旧代理、TUN 转发任务和执行器全部清理完成前保持全局启动锁，避免用户快速关开 VPN 时新隧道抢先占用相同端口和数据库。Rust 桥接回归已通过；实际快速重启仍需 iPhone 验收。
 iOS 宿主在系统显示“正在连接”或重连时提供“停止抓包”，阻止重复启动；停止过程中禁用按钮，待系统状态回到未连接再允许启动。Swift 界面仍需 Mac 编译与 iPhone 状态切换验收。
 
-iOS 扩展命令现接入共享内核的响应修改快照和版本校验保存，宿主可启停总开关与单条规则、设置作用范围、删除规则，并新增或编辑 UTF-8 整份响应替换及单操作正文文本/正则局部替换。编辑保留原规则 ID、启用状态，以及正文修改未展示的大小写/全部匹配参数；二进制、超出移动输入上限、多操作规则和不能无损回填的响应头禁用编辑入口。保存基于完整配置字典修改，保留界面尚未展示的高级规则字段；消息超过 128 KiB 时给出明确错误，不发送截断配置。Rust 本机测试验证了规则保存和旧版本拒绝；Swift 界面尚未经过 Xcode 编译或设备操作验证。移动端高级规则界面仍待补齐。
+iOS 扩展命令现接入共享内核的响应修改快照和版本校验保存，宿主可启停总开关与单条规则、设置作用范围、删除规则，并新增或编辑 UTF-8 整份响应替换及单操作正文文本/正则局部替换。编辑保留原规则 ID、启用状态，以及正文修改未展示的大小写/全部匹配参数；二进制、超出移动输入上限、多操作规则和不能无损回填的响应头禁用编辑入口。保存基于完整配置字典修改，保留界面尚未展示的高级规则字段；消息超过 128 KiB 时给出明确错误，不发送截断配置。Rust 本机测试验证了规则保存和旧版本拒绝；Swift 界面已通过 iOS Simulator 目标编译，尚未经过设备操作验证。移动端高级规则界面仍待补齐。
 iOS 正文桥接已接受字节偏移，详情页可逐段前后浏览完整请求/响应正文；零字节正文也不会因为文本为空而自动关闭详情。若 16 KiB 边界落在 UTF-8 字符中间，桥接会将不完整字节留给下一段，界面记录实际段起点用于返回上一段；非法二进制仍以 Base64 显示。Rust 桥接测试用 20,000 字节响应和跨段 UTF-8 字符验证连续读取与末段，负偏移被拒绝，2026-10-24 本机 4 项测试通过。Swift 界面及大正文实际内存占用仍需 Xcode 和设备验证。
 iOS 历史记录已接通内核的 URL 包含过滤；搜索时重置分页游标，后续“加载更多”沿用筛选条件。Rust 桥接测试覆盖命中与未命中请求。模拟器工作流现固定使用 Mac 构建机架构，并校验宿主及扩展可执行文件的架构；仍须实际运行该工作流。
 
 在 macOS 上先安装 Xcode、Rust 和 XcodeGen，然后执行 `cd apps/mobile/ios && xcodegen generate`，用 Xcode 打开生成的 `HTTPCaptureMobile.xcodeproj`，为宿主与扩展选择同一个 Apple Team 及支持 Packet Tunnel 的配置。首次构建会运行 `build-native.sh` 编译对应架构的 Rust 静态库。另有在开发分支的移动端文件更新时自动触发的 **iOS mobile build** 工作流，用 Mac 构建机按宿主架构构建无签名模拟器 App 与 Packet Tunnel 扩展，并检查两个可执行文件的架构；尚未执行，且即使通过也不能代替 iPhone 的签名、VPN 权限和流量验收。只有 Xcode 构建、签名和 iPhone 真机 VPN 测试通过后，iOS 才能算可交付。
-iOS 工作流先上传 `http-capture-ios-simulator`，内含完整的无签名模拟器 App 与 Packet Tunnel 扩展；随后在同一台 Mac 上额外编译无签名的 iPhone arm64 宿主与扩展并核对架构。模拟器附件不能安装到 iPhone，设备目标编译也不能代替签名和 VPN 权限验收。工作流仍待首次执行。
+iOS 工作流设计为先上传 `http-capture-ios-simulator`，内含完整的无签名模拟器 App 与 Packet Tunnel 扩展；随后在同一台 Mac 上额外编译无签名的 iPhone arm64 宿主与扩展并核对架构。模拟器附件不能安装到 iPhone，设备目标编译也不能代替签名和 VPN 权限验收。工作流已首次执行，见上文 CI 记录；修复后的完整重跑尚未完成。
 
 ## ProxyPin 源码参考（2026-10-24）
 
