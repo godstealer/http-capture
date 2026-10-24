@@ -51,7 +51,7 @@ struct RecordedRequestCopy {
             throw CopyError.invalid("这条记录的请求头不完整")
         }
         var lines: [String] = []
-        for row in rows where row["disabled"] as? Bool != true {
+        for row in rows {
             guard let name = row["name"] as? String,
                   let value = row["value"] as? String else {
                 throw CopyError.invalid("请求头记录不完整")
@@ -64,7 +64,8 @@ struct RecordedRequestCopy {
                   value == value.trimmingCharacters(in: .whitespaces) else {
                 throw CopyError.invalid("请求头包含移动编辑器无法表示的字符")
             }
-            lines.append("\(name): \(value)")
+            let prefix = row["disabled"] as? Bool == true ? "# " : ""
+            lines.append("\(prefix)\(name): \(value)")
         }
         let headerText = lines.joined(separator: "\n")
         guard headerText.utf8.count <= 16 * 1024 else {
@@ -112,6 +113,66 @@ struct RecordedRequestCopy {
         var errorDescription: String? {
             if case .invalid(let reason) = self { return reason }
             return nil
+        }
+    }
+}
+
+enum RequestHeaderText {
+    enum HeaderError: LocalizedError {
+        case invalid(Int)
+        var errorDescription: String? {
+            if case .invalid(let line) = self { return "第 \(line) 行请求头无效，请按 名称: 值 填写" }
+            return nil
+        }
+    }
+
+    static func parse(_ text: String) throws -> [[String: Any]] {
+        var rows: [[String: Any]] = []
+        for (index, rawLine) in text.components(separatedBy: .newlines).enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            let disabled = line.hasPrefix("# ")
+            let content = disabled ? String(line.dropFirst(2)) : line
+            // Browser copies can include a request line and HTTP/2 pseudo headers.
+            let parts = content.split(separator: " ", omittingEmptySubsequences: true)
+            if parts.count >= 3, parts.last?.hasPrefix("HTTP/") == true,
+               ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE"]
+                .contains(String(parts[0])) { continue }
+            if content.hasPrefix(":"), content.dropFirst().contains(":") { continue }
+            guard let colon = content.firstIndex(of: ":"), colon != content.startIndex else {
+                throw HeaderError.invalid(index + 1)
+            }
+            let name = String(content[..<colon]).trimmingCharacters(in: .whitespaces)
+            let value = String(content[content.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, name.utf8.allSatisfy({ Self.isTokenByte($0) }),
+                  !value.unicodeScalars.contains(where: { $0.value < 0x20 && $0.value != 0x09 }),
+                  !value.unicodeScalars.contains(where: { $0.value == 0x7F }) else {
+                throw HeaderError.invalid(index + 1)
+            }
+            rows.append(["name": name, "value": value, "disabled": disabled])
+        }
+        return rows
+    }
+
+    static func isHeaderLine(_ line: String) -> Bool {
+        (try? parse(line).count) == 1
+    }
+
+    static func toggle(_ text: String, line index: Int) -> String {
+        var lines = text.components(separatedBy: "\n")
+        guard lines.indices.contains(index), !lines[index].trimmingCharacters(in: .whitespaces).isEmpty else {
+            return text
+        }
+        let line = lines[index].trimmingCharacters(in: .whitespaces)
+        lines[index] = line.hasPrefix("# ") ? String(line.dropFirst(2)) : "# " + line
+        return lines.joined(separator: "\n")
+    }
+
+    private static func isTokenByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 48...57, 65...90, 97...122: return true
+        case 33, 35, 36, 37, 38, 39, 42, 43, 45, 46, 94, 95, 96, 124, 126: return true
+        default: return false
         }
     }
 }

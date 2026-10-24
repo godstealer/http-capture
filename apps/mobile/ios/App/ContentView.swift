@@ -327,6 +327,8 @@ private struct ManualRequestView: View {
     @State private var showingFileImporter = false
     @State private var inputError: String?
 
+    private var headerLines: [String] { headers.components(separatedBy: "\n") }
+
     init(draft: ManualRequestDraft = .empty) {
         _method = State(initialValue: draft.method)
         _url = State(initialValue: draft.url)
@@ -349,6 +351,23 @@ private struct ManualRequestView: View {
                 }
                 Section("请求头，每行 名称: 值") {
                     TextEditor(text: $headers).frame(minHeight: 100)
+                    Text("可粘贴浏览器请求头；请求行和 HTTP/2 伪头会忽略。行首 # 表示停用，发送时保留此状态。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    DisclosureGroup("逐项启用或停用") {
+                        ForEach(headerLines.indices, id: \.self) { index in
+                            let line = headerLines[index].trimmingCharacters(in: .whitespaces)
+                            if RequestHeaderText.isHeaderLine(line) {
+                                let disabled = line.hasPrefix("# ")
+                                Button {
+                                    headers = RequestHeaderText.toggle(headers, line: index)
+                                } label: {
+                                    Label(disabled ? String(line.dropFirst(2)) : line,
+                                          systemImage: disabled ? "square" : "checkmark.square.fill")
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
                 }
                 Section("发送协议") {
                     Picker("协议", selection: $engine) {

@@ -62,7 +62,22 @@ do {
     expect(detail.contains("[停用] X-Ignored: off"), "停用请求头未标明")
     expect(detail.contains("请求：3 字节"), "详情没有显示正文大小")
     var copy = try RecordedRequestCopy(flow: flow)
-    expect(copy.headers == "X-Test: one\nX-Test: two", "请求头顺序或重复项丢失")
+    expect(copy.headers == "X-Test: one\nX-Test: two\n# X-Ignored: off",
+           "请求头顺序、重复项或停用状态丢失")
+    let copiedHeaders = try RequestHeaderText.parse(copy.headers)
+    expect(copiedHeaders.count == 3 && copiedHeaders[2]["disabled"] as? Bool == true,
+           "停用请求头未传入重放草稿")
+    let enabledText = RequestHeaderText.toggle(copy.headers, line: 2)
+    let enabledHeaders = try RequestHeaderText.parse(enabledText)
+    expect(enabledHeaders[2]["disabled"] as? Bool == false,
+           "请求头启用按钮未改变发送状态")
+    let browserHeaders = try RequestHeaderText.parse("GET /upload HTTP/2\n:authority: example.test\nX-Test: one\nX-Test: two")
+    expect(browserHeaders.count == 2 && browserHeaders[0]["value"] as? String == "one",
+           "浏览器请求头粘贴未保留普通请求头顺序")
+    do {
+        _ = try RequestHeaderText.parse("X-Bad Name: value")
+        preconditionFailure("非法请求头名称应被拒绝")
+    } catch RequestHeaderText.HeaderError.invalid(_) { }
     let firstComplete = try copy.append(["offset": 0, "totalBytes": 3,
                                          "bodyBase64": "AP8=", "nextOffset": 2])
     expect(!firstComplete, "第一页提前结束")

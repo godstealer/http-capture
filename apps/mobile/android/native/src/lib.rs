@@ -112,7 +112,13 @@ fn start_tunnel(fd: i32, capture_quic: bool) -> Result<(), String> {
         .map_err(|error| format!("{error:#}"))?;
     let proxy = format!("http://{}", bridge.address);
     let mut args = Args::default();
-    args.proxy = ArgProxy::try_from(proxy.as_str()).map_err(|error| error.to_string())?;
+    args.proxy = match ArgProxy::try_from(proxy.as_str()) {
+        Ok(proxy) => proxy,
+        Err(error) => {
+            capture.executor.block_on(bridge.stop());
+            return Err(format!("Transparent bridge address is invalid: {error}"));
+        }
+    };
     args.direct_udp_for_http = true;
     args.ipv6_enabled = true;
     args.virtual_dns_pool_v6 = Some(

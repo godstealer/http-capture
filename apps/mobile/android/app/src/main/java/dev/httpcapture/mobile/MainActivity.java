@@ -848,9 +848,10 @@ public final class MainActivity extends Activity {
         if (headerRows != null) {
             for (int i = 0; i < headerRows.length(); i++) {
                 JSONObject row = headerRows.optJSONObject(i);
-                if (row == null || row.optBoolean("disabled")) continue;
+                if (row == null) continue;
                 String name = row.optString("name");
                 if (name.startsWith(":")) continue;
+                if (row.optBoolean("disabled")) headerText.append("# ");
                 headerText.append(name).append(": ").append(row.optString("value")).append('\n');
             }
         }
@@ -934,11 +935,15 @@ public final class MainActivity extends Activity {
         engine.setSelection(Math.max(0, engineIndex));
         content.addView(engine);
         EditText headers = new EditText(this);
-        headers.setHint("请求头，每行一个：\nContent-Type: application/json");
+        headers.setHint("可粘贴浏览器请求头；行首 # 停用：\nContent-Type: application/json");
         headers.setMinLines(3);
         headers.setGravity(Gravity.TOP);
         headers.setText(draft.headers);
         content.addView(headers);
+        Button toggleHeaders = new Button(this);
+        toggleHeaders.setText("逐项启用或停用请求头");
+        toggleHeaders.setOnClickListener(view -> showHeaderToggles(headers));
+        content.addView(toggleHeaders);
         TextView modeLabel = new TextView(this);
         modeLabel.setText("请求正文类型");
         content.addView(modeLabel);
@@ -1006,6 +1011,35 @@ public final class MainActivity extends Activity {
         dialog.show();
     }
 
+    private void showHeaderToggles(EditText editor) {
+        String[] lines = editor.getText().toString().split("\\n", -1);
+        List<Integer> indexes = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        List<Boolean> states = new ArrayList<>();
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (!RequestHeaderCodec.isHeaderLine(line)) continue;
+            boolean disabled = line.startsWith("# ");
+            indexes.add(i);
+            labels.add(disabled ? line.substring(2) : line);
+            states.add(!disabled);
+        }
+        if (indexes.isEmpty()) {
+            new AlertDialog.Builder(this).setMessage("先粘贴或输入请求头，每行填写 名称: 值")
+                .setPositiveButton("关闭", null).show();
+            return;
+        }
+        boolean[] checked = new boolean[states.size()];
+        for (int i = 0; i < states.size(); i++) checked[i] = states.get(i);
+        new AlertDialog.Builder(this)
+            .setTitle("启用的请求头会发送")
+            .setMultiChoiceItems(labels.toArray(new String[0]), checked, (dialog, which, enabled) -> {
+                editor.setText(RequestHeaderCodec.toggleLine(editor.getText().toString(), indexes.get(which)));
+            })
+            .setPositiveButton("完成", null)
+            .show();
+    }
+
     private boolean sendManualRequest(ManualRequestDraft draft) {
         String requestMethod = draft.method.trim().toUpperCase(Locale.ROOT);
         String requestUrl = draft.url.trim();
@@ -1030,13 +1064,11 @@ public final class MainActivity extends Activity {
                 throw new IllegalArgumentException("请先选择要发送的文件");
             }
             JSONArray headerRows = new JSONArray();
-            for (String line : draft.headers.split("\\r?\\n")) {
-                if (line.trim().isEmpty()) continue;
-                int separator = line.indexOf(':');
-                if (separator <= 0) throw new IllegalArgumentException("请求头需要按 名称: 值 填写");
+            for (RequestHeaderCodec.Header row : RequestHeaderCodec.parse(draft.headers)) {
                 headerRows.put(new JSONObject()
-                    .put("name", line.substring(0, separator).trim())
-                    .put("value", line.substring(separator + 1).trim()));
+                    .put("name", row.name)
+                    .put("value", row.value)
+                    .put("disabled", row.disabled));
             }
             status.setText("正在发送请求…");
             worker.execute(() -> {
@@ -1163,7 +1195,7 @@ public final class MainActivity extends Activity {
             JSONObject header = headers.getJSONObject(i);
             if ("Content-Type".equalsIgnoreCase(header.optString("name"))) {
                 if (replace) continue;
-                found = true;
+                if (!header.optBoolean("disabled")) found = true;
             }
             result.put(header);
         }

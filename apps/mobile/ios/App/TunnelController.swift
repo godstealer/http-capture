@@ -671,14 +671,12 @@ final class TunnelController: ObservableObject {
             message = "正文最多 1 MiB，请求头最多 16 KiB"
             return
         }
-        var headerRows: [[String: Any]] = []
-        for line in headers.components(separatedBy: .newlines) where !line.trimmingCharacters(in: .whitespaces).isEmpty {
-            guard let colon = line.firstIndex(of: ":"), colon != line.startIndex else {
-                message = "请求头需要按 名称: 值 填写"
-                return
-            }
-            headerRows.append(["name": String(line[..<colon]).trimmingCharacters(in: .whitespaces),
-                               "value": String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)])
+        var headerRows: [[String: Any]]
+        do {
+            headerRows = try RequestHeaderText.parse(headers)
+        } catch {
+            message = error.localizedDescription
+            return
         }
         if let contentType = body.contentType {
             if body.replaceContentType {
@@ -687,6 +685,7 @@ final class TunnelController: ObservableObject {
                 }
             }
             let hasContentType = headerRows.contains {
+                $0["disabled"] as? Bool != true &&
                 ($0["name"] as? String)?.lowercased() == "content-type"
             }
             if !hasContentType {
