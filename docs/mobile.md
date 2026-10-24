@@ -10,6 +10,8 @@
 
 Android 新增模拟器冒烟测试：在 API 33 x86_64 模拟器安装构建的 APK 和独立测试 APK，在应用进程内经 JNI 启动回环代理，让本机 HTTP 服务返回固定内容，再检查响应、持久化请求记录和导出的 CA 公钥证书，最后停止代理并启动主界面。[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40058540465) 的模拟器测试已通过（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`、主界面启动成功）。后续[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40062698192) 已通过系统 VPN 授权、隧道建立、状态读取、停止清理和主界面启动测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`）；对应[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40062698108) 四项全绿。[独立 App 原始 TCP 流量测试](https://github.com/godstealer/http-capture/actions/runs/40063791577) 也已通过：另一 UID 的测试 App 经 VPN 向模拟器宿主机发送 HTTP 请求，宿主机收到 `/vpn-smoke`，抓包数据库出现对应记录，随后 VPN 停止及主界面启动成功；对应[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40063791572) 四项全绿。模拟器结果不能替代真机 HTTPS、证书信任、切网、IPv6、UDP/QUIC 和长期运行验收。
 
+下一批 Android 模拟器测试已增加 HTTPS 拦截检查：回环代理测试以导出的 CA 公钥建立只信任该 CA 的 TLS 客户端，通过 CONNECT 发起请求并启用仅匹配该路径的阻止规则，检查 TLS 主机名验证、解密后的 HTTP 403 响应和持久化记录。独立 UID 的测试 App 也会经 VPN 向模拟器宿主地址发起 TLS 请求，以同一 CA 验证证书并检查解密后的规则命中记录。这两条测试均不依赖公网服务；它们仍未证明真实上游 TLS 握手成功或手机系统证书安装。测试 APK 与独立探针 APK 已在本机编译，运行结果待批量 CI 验证。
+
 ## Android 当前代码
 
 - `apps/mobile/android/native` 是独立 Rust `cdylib`，通过 JNI 打开 `capture-core`、启动手机本机回环 HTTP(S) 代理、读取不含正文的流量元数据以及导出 CA **公钥证书**。CA 私钥仍留在应用私有数据目录。
@@ -48,7 +50,7 @@ Android 和 iOS 手动请求可选择原生自动协商、HTTP/1.1、HTTP/2 或 
 Android 的 `VpnService` 只负责获得虚拟网卡与用户授权；包转发层应将可抓取的 HTTP/TLS 连接转给手机上的 `capture-core` 代理，非目标流量保持正常连通。核心拦截、规则、持久化和证书逻辑尽量由现有 Rust crate 维护。不能用 `setHttpProxy` 冒充全流量接管，因为应用可以忽略系统代理。
 Android 原生桥接在解析本机透明代理地址失败时会停止已打开的桥接监听，避免下次启动遇到遗留端口；这一分支仍待 Android 目标交叉编译验证。
 Android 手动请求头编辑器现保留复制来源中普通请求头的停用状态与重复顺序；可粘贴浏览器请求头，点“逐项启用或停用请求头”切换发送状态。自动补充正文 `Content-Type` 时忽略已停用的同名头。独立 Java 请求头解析测试与离线调试 APK 编译已通过，实际点击与发送待设备验收。
-首次提交的 Android 模拟器冒烟在已有抓包记录、上游请求尚未完成时停止 VPN，导致脚本随后查不到目标服务的 `/vpn-smoke` 访问日志。instrumentation 现等待记录出现响应状态才停止 VPN；离线测试 APK 编译通过，该调整仍待同一模拟器工作流再次运行验证。
+首次提交的 Android 模拟器冒烟在已有抓包记录、上游请求尚未完成时停止 VPN，导致脚本随后查不到目标服务的 `/vpn-smoke` 访问日志。instrumentation 现只检查本次新请求，并等待记录出现响应状态才停止 VPN；离线测试 APK 编译和单独运行的 [Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40078795556) 均已通过，包括模拟器内的原始 VPN TCP 到目标服务及抓包记录检查。
 
 ## iOS 当前代码与构建入口
 

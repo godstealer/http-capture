@@ -5,6 +5,7 @@
         <receiver android:name=".ProbeReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="dev.httpcapture.probe.RUN" />
+                <action android:name="dev.httpcapture.probe.RUN_TLS" />
             </intent-filter>
         </receiver>
     </application>

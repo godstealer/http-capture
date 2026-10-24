@@ -22,6 +22,13 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManagerFactory;
+import java.security.KeyStore;
+import java.security.cert.CertificateFactory;
+
 /** Exercises the packaged JNI library, loopback proxy and persistent capture on an emulator. */
 public final class CaptureSmokeInstrumentation extends Instrumentation {
     @Override public void onCreate(Bundle arguments) {
@@ -123,6 +130,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 Thread.sleep(200);
             }
             if (!captured) throw new AssertionError("VPN raw TCP request did not finish: " + lastState);
+            runVpnTlsSmoke();
         } finally {
             Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
             stop.setAction(CaptureVpnService.ACTION_STOP);
@@ -134,6 +142,47 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (CaptureVpnService.isManaged()) {
                 throw new AssertionError("VPN did not stop: " + CaptureVpnService.message());
             }
+        }
+    }
+
+    private void runVpnTlsSmoke() throws Exception {
+        JSONObject previousBlocking = expectOk(NativeCapture.blocking());
+        try {
+            JSONObject rule = new JSONObject().put("id", "vpn-tls-smoke")
+                    .put("enabled", true).put("matchType", "urlContains")
+                    .put("pattern", "/vpn-tls-smoke").put("method", "GET");
+            JSONObject config = new JSONObject().put("enabled", true)
+                    .put("scope", "capture").put("rules", new JSONArray().put(rule));
+            expectOk(NativeCapture.configureBlocking(config.toString()));
+            Set<String> previousIDs = new HashSet<>();
+            JSONArray previous = expectOk(NativeCapture.recent("", "vpn-tls-smoke"))
+                    .getJSONArray("requests");
+            for (int i = 0; i < previous.length(); i++) {
+                previousIDs.add(previous.getJSONObject(i).optString("id"));
+            }
+            Intent probe = new Intent("dev.httpcapture.probe.RUN_TLS");
+            probe.setComponent(new ComponentName("dev.httpcapture.probe",
+                    "dev.httpcapture.probe.ProbeReceiver"));
+            probe.putExtra("caPem", new JSONObject(NativeCapture.certificate()).getString("value"));
+            getTargetContext().sendBroadcast(probe);
+            long deadline = System.currentTimeMillis() + 30_000;
+            String lastState = "TLS 请求尚未出现";
+            while (System.currentTimeMillis() < deadline) {
+                JSONArray page = expectOk(NativeCapture.recent("", "vpn-tls-smoke"))
+                        .getJSONArray("requests");
+                for (int i = 0; i < page.length(); i++) {
+                    JSONObject summary = page.getJSONObject(i);
+                    if (previousIDs.contains(summary.optString("id"))) continue;
+                    lastState = summary.optString("state") + " · HTTP " + summary.optString("status")
+                            + " · " + summary.optString("error");
+                    if ("blocked".equals(summary.optString("state"))
+                            && summary.optInt("status") == 403) return;
+                }
+                Thread.sleep(200);
+            }
+            throw new AssertionError("VPN TLS interception failed: " + lastState);
+        } finally {
+            expectOk(NativeCapture.configureBlocking(previousBlocking.toString()));
         }
     }
 
@@ -242,8 +291,82 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     Thread.sleep(100);
                 }
                 if (!recorded) throw new AssertionError("proxy response was not recorded");
+                runTlsSmoke(proxyPort, certificate);
             } finally {
                 expectOk(NativeCapture.stop());
+            }
+        }
+    }
+
+    private void runTlsSmoke(int proxyPort, String certificate) throws Exception {
+        JSONObject previousBlocking = expectOk(NativeCapture.blocking());
+        try (ServerSocket reservation = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            int unusedOriginPort = reservation.getLocalPort();
+            reservation.close();
+            String target = "127.0.0.1:" + unusedOriginPort;
+            String path = "/mobile-tls-smoke";
+            JSONObject rule = new JSONObject().put("id", "mobile-tls-smoke")
+                    .put("enabled", true).put("matchType", "urlContains")
+                    .put("pattern", path).put("method", "GET");
+            JSONObject blocking = new JSONObject().put("enabled", true)
+                    .put("scope", "capture").put("rules", new JSONArray().put(rule));
+            expectOk(NativeCapture.configureBlocking(blocking.toString()));
+            try {
+                CertificateFactory parser = CertificateFactory.getInstance("X.509");
+                KeyStore roots = KeyStore.getInstance(KeyStore.getDefaultType());
+                roots.load(null);
+                roots.setCertificateEntry("capture-test-ca", parser.generateCertificate(
+                        new java.io.ByteArrayInputStream(certificate.getBytes(StandardCharsets.US_ASCII))));
+                TrustManagerFactory trust = TrustManagerFactory.getInstance(
+                        TrustManagerFactory.getDefaultAlgorithm());
+                trust.init(roots);
+                SSLContext tls = SSLContext.getInstance("TLS");
+                tls.init(null, trust.getTrustManagers(), null);
+
+                try (Socket proxy = new Socket("127.0.0.1", proxyPort)) {
+                    proxy.setSoTimeout(10_000);
+                    proxy.getOutputStream().write(("CONNECT " + target + " HTTP/1.1\r\n"
+                            + "Host: " + target + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                    ByteArrayOutputStream connectHead = new ByteArrayOutputStream();
+                    InputStream input = proxy.getInputStream();
+                    int next;
+                    while ((next = input.read()) != -1) {
+                        connectHead.write(next);
+                        String head = connectHead.toString(StandardCharsets.US_ASCII.name());
+                        if (head.endsWith("\r\n\r\n")) break;
+                        if (connectHead.size() > 4096) throw new AssertionError("oversized CONNECT response");
+                    }
+                    if (!connectHead.toString(StandardCharsets.US_ASCII.name())
+                            .startsWith("HTTP/1.1 200")) throw new AssertionError("CONNECT failed");
+                    try (SSLSocket client = (SSLSocket) tls.getSocketFactory()
+                            .createSocket(proxy, "127.0.0.1", unusedOriginPort, false)) {
+                        client.setSoTimeout(10_000);
+                        SSLParameters params = client.getSSLParameters();
+                        params.setEndpointIdentificationAlgorithm("HTTPS");
+                        client.setSSLParameters(params);
+                        client.startHandshake();
+                        client.getOutputStream().write(("GET " + path + " HTTP/1.1\r\n"
+                                + "Host: " + target + "\r\nConnection: close\r\n\r\n")
+                                .getBytes(StandardCharsets.US_ASCII));
+                        ByteArrayOutputStream response = new ByteArrayOutputStream();
+                        byte[] buffer = new byte[4096];
+                        int count;
+                        while ((count = client.getInputStream().read(buffer)) != -1) {
+                            response.write(buffer, 0, count);
+                            if (response.size() > 64 * 1024) throw new AssertionError("oversized TLS response");
+                        }
+                        String text = response.toString(StandardCharsets.US_ASCII.name());
+                        if (!text.startsWith("HTTP/1.1 403") || !text.contains("X-HTTP-Capture-Blocked: mobile-tls-smoke")) {
+                            throw new AssertionError("decrypted TLS request was not blocked: " + text);
+                        }
+                    }
+                }
+                JSONArray captured = expectOk(NativeCapture.recent("", path)).getJSONArray("requests");
+                if (captured.length() == 0 || !"blocked".equals(captured.getJSONObject(0).optString("state"))) {
+                    throw new AssertionError("decrypted TLS request was not recorded");
+                }
+            } finally {
+                expectOk(NativeCapture.configureBlocking(previousBlocking.toString()));
             }
         }
     }
