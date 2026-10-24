@@ -67,6 +67,7 @@ public final class CaptureVpnService extends VpnService {
     private ConnectivityManager connectivity;
     private ConnectivityManager.NetworkCallback networkCallback;
     private Network underlyingNetwork;
+    private boolean underlyingNetworkLost;
     private volatile int networkGeneration;
     private volatile boolean destroyed;
     private boolean shutdownStarted;
@@ -190,35 +191,45 @@ public final class CaptureVpnService extends VpnService {
         connectivity = getSystemService(ConnectivityManager.class);
         if (connectivity == null) return;
         networkCallback = new ConnectivityManager.NetworkCallback() {
-            @Override public void onAvailable(Network network) { updateUnderlyingNetwork(network); }
-            // Keep the previous network until its replacement is known. Android
-            // may deliver onLost before onAvailable during a handoff.
-            @Override public void onLost(Network network) { }
+            // Android 8+ follows onAvailable with ordered capabilities. Reading
+            // getNetworkCapabilities here can return stale data during a handoff.
+            @Override public void onAvailable(Network network) { }
+            @Override public void onLost(Network network) {
+                if (destroyed || !network.equals(underlyingNetwork)) return;
+                underlyingNetwork = null;
+                underlyingNetworkLost = true;
+                ++networkGeneration;
+                if (!setUnderlyingNetworks(null)) {
+                    Log.w("HttpCaptureVpn", "Android did not clear the lost underlying network");
+                }
+                if (active) message = "网络已断开，等待连接…";
+            }
             @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
-                updateUnderlyingNetwork(network);
+                updateUnderlyingNetwork(network, capabilities);
             }
         };
         try {
             connectivity.registerDefaultNetworkCallback(networkCallback, main);
-            updateUnderlyingNetwork(connectivity.getActiveNetwork());
+            Network initial = connectivity.getActiveNetwork();
+            if (initial != null) updateUnderlyingNetwork(initial, connectivity.getNetworkCapabilities(initial));
         } catch (RuntimeException error) {
             Log.w("HttpCaptureVpn", "Could not watch underlying networks", error);
             networkCallback = null;
         }
     }
 
-    private void updateUnderlyingNetwork(Network network) {
+    private void updateUnderlyingNetwork(Network network, NetworkCapabilities capabilities) {
         if (destroyed || tunnel == null || connectivity == null || network == null) return;
         try {
-            NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
             if (capabilities == null || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) return;
             if (!setUnderlyingNetworks(new Network[] {network})) {
                 Log.w("HttpCaptureVpn", "Android did not accept the underlying network update");
             }
             if (network.equals(underlyingNetwork)) return;
-            boolean switched = underlyingNetwork != null;
+            boolean switched = underlyingNetwork != null || underlyingNetworkLost;
             underlyingNetwork = network;
+            underlyingNetworkLost = false;
             int generation = ++networkGeneration;
             if (switched && active) {
                 message = "网络已切换，正在重建连接…";
