@@ -1612,9 +1612,7 @@ public final class MainActivity extends Activity {
         if (replacement == null) return false;
         try {
             String bodyBase64 = replacement.getString("bodyBase64");
-            if (bodyBase64.length() > 96 * 1024) return false;
-            byte[] bytes = Base64.decode(bodyBase64, Base64.DEFAULT);
-            if (bytes.length > 64 * 1024) return false;
+            ResponseBodyCodec.decodeBase64(bodyBase64);
             JSONArray headers = replacement.getJSONArray("headers");
             int length = 0;
             for (int i = 0; i < headers.length(); i++) {
@@ -1719,7 +1717,7 @@ public final class MainActivity extends Activity {
             bodyModeHint.setText("两种格式使用独立输入框；保存时只采用当前显示的内容");
             if (editing) {
                 String savedBase64 = original.optJSONObject("replacement").optString("bodyBase64");
-                byte[] savedBytes = Base64.decode(savedBase64, Base64.DEFAULT);
+                byte[] savedBytes = ResponseBodyCodec.decodeBase64(savedBase64);
                 boolean utf8 = java.util.Arrays.equals(savedBytes,
                     new String(savedBytes, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8));
                 if (utf8) body.setText(new String(savedBytes, StandardCharsets.UTF_8));
@@ -1795,13 +1793,7 @@ public final class MainActivity extends Activity {
                         throw new IllegalArgumentException("响应头最多 16 KiB");
                     byte[] responseBody;
                     if (finalBinaryMode.isChecked()) {
-                        String encoded = finalBinaryBody.getText().toString().replaceAll("\\s", "");
-                        if (encoded.length() > 96 * 1024)
-                            throw new IllegalArgumentException("Base64 正文最多对应 64 KiB 原始字节");
-                        try { responseBody = Base64.decode(encoded, Base64.DEFAULT); }
-                        catch (IllegalArgumentException error) {
-                            throw new IllegalArgumentException("正文不是有效的 Base64 编码");
-                        }
+                        responseBody = ResponseBodyCodec.decodeBase64(finalBinaryBody.getText().toString());
                     } else responseBody = finalBody.getText().toString().getBytes(StandardCharsets.UTF_8);
                     if (responseBody.length > 64 * 1024)
                         throw new IllegalArgumentException("响应正文最多 64 KiB");

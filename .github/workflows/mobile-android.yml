@@ -29,16 +29,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.0.2'
-      - name: Verify manual request body and headers
+      - name: Verify mobile request and response body codecs
         run: |
           mkdir -p "$RUNNER_TEMP/http-capture-body-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/http-capture-body-tests" \
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/RequestBodyCodec.java \
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/RequestHeaderCodec.java \
+            apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/ResponseBodyCodec.java \
             apps/mobile/android/tests/RequestBodyCodecTest.java \
-            apps/mobile/android/tests/RequestHeaderCodecTest.java
+            apps/mobile/android/tests/RequestHeaderCodecTest.java \
+            apps/mobile/android/tests/ResponseBodyCodecTest.java
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RequestBodyCodecTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RequestHeaderCodecTest
+          java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.ResponseBodyCodecTest
       - name: Install native dependencies
         run: |
           sudo apt-get update
