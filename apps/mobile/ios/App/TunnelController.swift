@@ -203,6 +203,7 @@ final class TunnelController: ObservableObject {
     private var manualSendGeneration: UInt64 = 0
     private var manualUploadToken: UInt64?
     private var manualSaving = false
+    private var manualSendOffline = false
     private var savedOpenGeneration: UInt64 = 0
     private var savedListGeneration: UInt64 = 0
     private var savedCollectionGeneration: UInt64 = 0
@@ -271,8 +272,8 @@ final class TunnelController: ObservableObject {
 
     func start() {
         if busy || shouldOfferStop || tunnelStopping { return }
-        if manualSaving || savedCollectionSaving || savedDeleteBusy {
-            message = "请等待离线请求库保存完成后再启动 VPN"
+        if sendingManualRequest || savedCollectionSaving || savedDeleteBusy {
+            message = "请等待离线请求操作完成后再启动 VPN"
             return
         }
         guard (1...65535).contains(port) else {
@@ -976,7 +977,7 @@ final class TunnelController: ObservableObject {
 
     func sendManualRequest(method: String, url: String, engine: ManualSendEngine,
                            headers: String, body: PreparedRequestBody) {
-        guard !sendingManualRequest else { return }
+        guard !tunnelStarting, !tunnelStopping, !sendingManualRequest else { return }
         manualSaving = false
         let method = method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1019,14 +1020,19 @@ final class TunnelController: ObservableObject {
         manualSendGeneration &+= 1
         let generation = manualSendGeneration
         sendingManualRequest = true
+        manualSendOffline = !connected
         canCancelManualUpload = false
         manualUploadToken = nil
         message = "正在发送请求…"
-        if body.bytes.count <= 48 * 1024 {
+        if !connected || body.bytes.count <= 48 * 1024 {
             draft["bodyBase64"] = body.bytes.base64EncodedString()
             let direct: [String: Any] = ["method": "send_request", "request": draft]
-            if let data = try? JSONSerialization.data(withJSONObject: direct), data.count <= 128 * 1024 {
-                send(direct, onFailure: { [weak self] in self?.sendingManualRequest = false },
+            if let data = try? JSONSerialization.data(withJSONObject: direct),
+               data.count <= (connected ? 128 * 1024 : 2 * 1024 * 1024) {
+                send(direct, onFailure: { [weak self] in
+                    self?.sendingManualRequest = false
+                    self?.manualSendOffline = false
+                },
                      accept: { [weak self] in self?.manualSendGeneration == generation }) {
                     [weak self] value in self?.finishManualRequest(value)
                 }
@@ -1114,6 +1120,7 @@ final class TunnelController: ObservableObject {
         let generation = manualSendGeneration
         manualSaving = true
         sendingManualRequest = true
+        manualSendOffline = !connected
         canCancelManualUpload = false
         manualUploadToken = nil
         message = "正在保存请求…"
@@ -1164,6 +1171,7 @@ final class TunnelController: ObservableObject {
 
     private func failManualSave() {
         sendingManualRequest = false
+        manualSendOffline = false
         canCancelManualUpload = false
         manualSaving = false
         manualUploadToken = nil
@@ -1201,6 +1209,7 @@ final class TunnelController: ObservableObject {
         let token = manualUploadToken
         manualSendGeneration &+= 1
         sendingManualRequest = false
+        manualSendOffline = false
         canCancelManualUpload = false
         manualUploadToken = nil
         manualSaving = false
@@ -1239,6 +1248,7 @@ final class TunnelController: ObservableObject {
 
     private func finishManualRequest(_ value: Any?) {
         sendingManualRequest = false
+        manualSendOffline = false
         canCancelManualUpload = false
         manualUploadToken = nil
         if manualSaving {
@@ -1600,7 +1610,8 @@ final class TunnelController: ObservableObject {
             guard let method = command["method"] as? String,
                   ["recent", "metadata", "body_preview", "list_saved_collections",
                    "change_saved_collection", "list_saved_requests", "save_request",
-                   "delete_saved_request", "open_saved_request", "saved_request_body"].contains(method),
+                   "delete_saved_request", "open_saved_request", "saved_request_body",
+                   "send_request"].contains(method),
                   !tunnelStarting, !tunnelStopping else {
                 message = "请先启动 VPN"
                 onFailure?()
@@ -1651,6 +1662,7 @@ final class TunnelController: ObservableObject {
         switch manager?.connection.status {
         case .connected:
             if sessionExportOffline { abandonSessionExport() }
+            if manualSendOffline { abandonManualSend() }
             if tunnelStopping {
                 manager?.connection.stopVPNTunnel()
                 connected = false
@@ -1694,9 +1706,10 @@ final class TunnelController: ObservableObject {
             requestPageLoading = false
             message = "正在停止 VPN…"
         default:
+            let wasActive = connected || tunnelStarting || tunnelStopping
             if !sessionExportOffline { abandonSessionExport() }
-            abandonManualSend()
-            resetSavedRequestUI()
+            if !manualSendOffline { abandonManualSend() }
+            if wasActive { resetSavedRequestUI() }
             connected = false
             tunnelStarting = false
             tunnelStopping = false
@@ -1705,7 +1718,7 @@ final class TunnelController: ObservableObject {
             cursor = nil
             requestPageCursors = [nil]
             requestPageLoading = false
-            message = "VPN 未启动"
+            if !manualSendOffline && !sessionExportOffline { message = "VPN 未启动" }
             clearDetail()
             refreshRequests()
         }

@@ -26,7 +26,9 @@ iOS 宿主与 Packet Tunnel 现使用同一个 App Group 保存抓包数据库�
 
 iOS 停止 VPN 后也可从共享数据库导出完整抓包记录 JSON；宿主直接写入应用临时文件供系统分享，不需要将大文件分块传过扩展消息。Rust 测试核对导出包含请求 ID 和正文，并确认已有目标文件不会被覆盖。导出期间允许取消，取消后的结果文件会清理；这一轮 Swift 界面仍待 Mac 编译与设备验收。
 
-iOS 停抓时现在可打开请求库、按集合与关键词搜索、读取分段正文、保存或删除请求，并重命名或删除空集合；从历史记录复制出的请求也可在停抓状态编辑和保存。离线保存由宿主直接写入 App Group 数据库，最多支持 1 MiB 正文；发送按钮仍要求 VPN 运行。为了避免升级时先创建空共享库而跳过扩展旧数据迁移，首次使用请求库需要先启动一次 VPN。Rust 桥接测试 11 项通过，覆盖 160 KiB 原始正文的离线保存、分段还原、集合管理和删除；Swift/Xcode 编译及 iPhone 操作尚待验证。
+iOS 停抓时现在可打开请求库、按集合与关键词搜索、读取分段正文、保存或删除请求，并重命名或删除空集合；从历史记录复制出的请求也可在停抓状态编辑和保存。离线保存由宿主直接写入 App Group 数据库，最多支持 1 MiB 正文。为了避免升级时先创建空共享库而跳过扩展旧数据迁移，首次使用请求库需要先启动一次 VPN。Rust 桥接测试覆盖 160 KiB 原始正文的离线保存、分段还原、集合管理和删除；Swift/Xcode 编译及 iPhone 操作尚待验证。
+
+iOS 手动 HTTP(S) 请求也可在停抓时发送：宿主用同一 `Engine::replay` 路径直连上游，将请求和响应存入 App Group 历史；运行时仍由 Packet Tunnel 处理。离线发送直接通过宿主 Rust 桥接传入最多 1 MiB 正文，无须受扩展 128 KiB 消息限制。首次使用仍需启动一次 VPN 完成共享目录迁移。本机回环服务器测试验证停抓时收到请求、返回 200 并写入可检索历史；Swift/Xcode 与 iPhone 网络验收尚待完成。
 
 2026-10-24 首次远端构建：同一提交的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/40053342564)前端、Linux、macOS 和 Windows 全部通过；[Android 构建](https://github.com/godstealer/http-capture/actions/runs/40053342578)在 SDK 安装阶段因 action 默认请求已移除的 `tools` 包而失败，未编译 APK；[iOS 构建](https://github.com/godstealer/http-capture/actions/runs/40053342628)通过 Swift 测试、Xcode 工程生成和无签名模拟器 App/Packet Tunnel 编译，随后因 `lipo` 校验命令参数顺序错误而中止，尚未编译 iPhone 目标或上传附件。两处工作流脚本随后一并修复并完成重跑。
 

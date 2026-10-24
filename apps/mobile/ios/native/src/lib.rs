@@ -1,6 +1,6 @@
 //! C ABI for the iOS Packet Tunnel extension and host-side history access.
-//! The host uses provider messages while the tunnel is connected and a
-//! separate SQLite reader in the App Group when it is stopped.
+//! The host uses provider messages while the tunnel is connected and the
+//! shared App Group store and replay engine when it is stopped.
 use capture_core::store::McpRequestFilter;
 use capture_core::store::{Collection, SavedRequest};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
@@ -278,6 +278,24 @@ fn replay_request(draft: RequestDraft) -> Result<serde_json::Value, String> {
     let flow = handle
         .block_on(runtime.engine.replay(draft, None, None))
         .map_err(|e| format!("{e:#}"))?;
+    Ok(serde_json::json!({
+        "id": flow.id,
+        "status": flow.response.as_ref().map(|response| response.status),
+        "error": flow.error,
+    }))
+}
+
+fn replay_request_offline(data_dir: &Path, draft: RequestDraft)
+    -> Result<serde_json::Value, String> {
+    // The Packet Tunnel performs the first-run migration before the host may
+    // open this directory. Do not create a new shared database ahead of it.
+    offline_store(data_dir)?;
+    let executor = tokio::runtime::Builder::new_multi_thread()
+        .enable_all().build().map_err(|error| error.to_string())?;
+    let engine = Engine::open(data_dir).map_err(|error| format!("{error:#}"))?;
+    let result = executor.block_on(engine.replay(draft, None, None));
+    executor.shutdown_background();
+    let flow = result.map_err(|error| format!("{error:#}"))?;
     Ok(serde_json::json!({
         "id": flow.id,
         "status": flow.response.as_ref().map(|response| response.status),
@@ -615,8 +633,13 @@ fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, 
     if request_size > 2 * 1024 * 1024 { return Err("Request exceeds 2 MiB".into()); }
     let request: serde_json::Value = serde_json::from_str(request).map_err(|error| error.to_string())?;
     let method = request.get("method").and_then(|value| value.as_str()).ok_or("Missing method")?;
-    if method != "save_request" && request_size > 128 * 1024 {
+    if !matches!(method, "save_request" | "send_request") && request_size > 128 * 1024 {
         return Err("Request exceeds 128 KiB".into());
+    }
+    if method == "send_request" {
+        let draft: RequestDraft = serde_json::from_value(request.get("request").cloned()
+            .ok_or("Missing request draft")?).map_err(|error| error.to_string())?;
+        return replay_request_offline(data_dir, draft);
     }
     let store = offline_store(data_dir)?;
     if matches!(method, "recent" | "metadata" | "body_preview") {
@@ -668,7 +691,7 @@ fn offline_command(data_dir: &Path, request: &str) -> Result<serde_json::Value, 
                 .lock().map_err(|_| "Saved request reader is unavailable")?;
             saved_request_body_in(&mut read, token, offset)
         }
-        _ => Err("Offline command is limited to capture history and saved requests".into()),
+        _ => Err("Offline command is limited to capture history, saved requests and manual sending".into()),
     }
 }
 
@@ -1056,6 +1079,31 @@ mod tests {
         assert_eq!(offline_command(dir.path(), r#"{"method":"list_saved_requests"}"#).unwrap()["total"], 0);
         offline_command(dir.path(), &serde_json::json!({"method":"change_saved_collection",
             "action":"delete","id":collection_id}).to_string()).unwrap();
+    }
+
+    #[test]
+    fn offline_manual_send_records_the_upstream_response() {
+        let dir = tempfile::tempdir().unwrap();
+        capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/ios-offline-send", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            let mut input = [0; 1024];
+            let length = socket.read(&mut input).unwrap();
+            assert!(String::from_utf8_lossy(&input[..length]).contains("GET /ios-offline-send"));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        });
+        let sent = offline_command(dir.path(), &serde_json::json!({"method":"send_request",
+            "request":{"engine":"auto","method":"GET","url":url,
+                "headers":[],"bodyBase64":""}}).to_string()).unwrap();
+        server.join().unwrap();
+        assert_eq!(sent["status"], 200);
+        assert!(sent["error"].is_null());
+        let page = offline_command(dir.path(), r#"{"method":"recent","urlContains":"ios-offline-send"}"#).unwrap();
+        assert_eq!(page["requests"][0]["id"], sent["id"]);
+        assert_eq!(page["requests"][0]["status"], 200);
     }
 
     fn tunnel_to(

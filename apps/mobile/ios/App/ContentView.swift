@@ -622,7 +622,7 @@ private struct ManualRequestView: View {
                 }
                 Section("保存请求") {
                     if !tunnel.connected {
-                        Text("停抓时可以编辑和保存请求；发送需要先启动 VPN。首次使用请先启动一次 VPN 创建共享请求库。")
+                        Text("停抓时也可以保存和发送请求。首次使用请先启动一次 VPN 创建共享请求库。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     TextField("请求名称（留空自动生成）", text: $requestName)
@@ -698,7 +698,7 @@ private struct ManualRequestView: View {
                         } catch {
                             inputError = error.localizedDescription
                         }
-                    }.disabled(!tunnel.connected || tunnel.sendingManualRequest)
+                    }.disabled(tunnel.tunnelStarting || tunnel.tunnelStopping || tunnel.sendingManualRequest)
                 }
             }
             .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.item]) { result in
