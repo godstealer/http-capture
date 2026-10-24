@@ -196,6 +196,39 @@ do {
             preconditionFailure("无效或超限响应正文应被拒绝")
         } catch ResponseBodyCodec.BodyError.invalid(_) { }
     }
+    let savedBody = Data(repeating: 255, count: 12 * 1024 + 1)
+    let savedValue: [String: Any] = [
+        "request": ["id": "saved-1", "name": "保存的请求", "draft": [
+            "method": "POST", "url": "https://example.test/saved", "engine": "h2",
+            "headers": [["name": "X-Order", "value": "first"],
+                        ["name": "x-order", "value": "second"],
+                        ["name": "X-Disabled", "value": "off", "disabled": true]],
+            "bodyBase64": ""]],
+        "totalBytes": NSNumber(value: savedBody.count), "readToken": NSNumber(value: UInt64(7))
+    ]
+    var savedCopy = try SavedRequestCopy(savedValue)
+    expect(savedCopy.headers == "X-Order: first\nx-order: second\n# X-Disabled: off",
+           "已保存请求的请求头顺序、重复项或停用状态丢失")
+    let firstSaved = try savedCopy.append(["offset": 0, "totalBytes": savedBody.count,
+        "bodyBase64": Data(savedBody.prefix(12 * 1024)).base64EncodedString(),
+        "nextOffset": 12 * 1024])
+    expect(!firstSaved, "已保存请求第一页正文提前结束")
+    let lastSaved = try savedCopy.append(["offset": 12 * 1024, "totalBytes": savedBody.count,
+        "bodyBase64": Data(savedBody.suffix(1)).base64EncodedString(), "nextOffset": NSNull()])
+    let editableSaved = try savedCopy.draft()
+    expect(lastSaved && editableSaved.savedID == "saved-1" && editableSaved.bodyMode == .base64
+           && Data(base64Encoded: editableSaved.body) == savedBody,
+           "已保存请求的分段二进制正文不能无损编辑")
+    var lossySaved = savedValue
+    var lossyRequest = lossySaved["request"] as! [String: Any]
+    var lossyDraft = lossyRequest["draft"] as! [String: Any]
+    lossyDraft["headers"] = [["name": "X-Test", "value": " leading"]]
+    lossyRequest["draft"] = lossyDraft
+    lossySaved["request"] = lossyRequest
+    do {
+        _ = try SavedRequestCopy(lossySaved)
+        preconditionFailure("已保存请求头的前导空格不能被静默删除")
+    } catch SavedRequestCopy.CopyError.invalid(_) { }
     print("iOS request and response body codecs: PASS")
 } catch {
     fatalError(error.localizedDescription)

@@ -21,7 +21,7 @@ jobs:
         run: cargo test --locked -p http-capture-ios --lib
       - name: Test mobile request and response body codecs
         run: |
-          swiftc apps/mobile/ios/App/RequestBodyCodec.swift apps/mobile/ios/App/ResponseBodyCodec.swift apps/mobile/ios/App/RecordedRequestCopy.swift apps/mobile/ios/App/FlowDetailFormatter.swift apps/mobile/ios/tests/main.swift -o /tmp/http-capture-ios-body-tests
+          swiftc apps/mobile/ios/App/RequestBodyCodec.swift apps/mobile/ios/App/ResponseBodyCodec.swift apps/mobile/ios/App/RecordedRequestCopy.swift apps/mobile/ios/App/SavedRequestCopy.swift apps/mobile/ios/App/FlowDetailFormatter.swift apps/mobile/ios/tests/main.swift -o /tmp/http-capture-ios-body-tests
           /tmp/http-capture-ios-body-tests
       - name: Install XcodeGen
         run: brew install xcodegen
