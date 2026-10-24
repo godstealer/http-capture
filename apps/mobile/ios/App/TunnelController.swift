@@ -107,11 +107,17 @@ struct ResponseRule: Identifiable {
               let headers = response["headers"] as? [[String: Any]] else { return false }
         var length = 0
         for header in headers {
-            guard header["disabled"] as? Bool != true,
-                  let name = header["name"] as? String,
+            guard let name = header["name"] as? String,
                   let value = header["value"] as? String,
                   value == value.trimmingCharacters(in: .whitespaces) else { return false }
-            length += name.utf8.count + value.utf8.count + 4
+            let disabled = header["disabled"] as? Bool == true
+            let rendered = (disabled ? "# " : "") + name + ": " + value
+            guard let roundtrip = try? RequestHeaderText.parseResponse(rendered),
+                  roundtrip.count == 1,
+                  roundtrip[0]["name"] as? String == name,
+                  roundtrip[0]["value"] as? String == value,
+                  roundtrip[0]["disabled"] as? Bool == disabled else { return false }
+            length += rendered.utf8.count + 1
         }
         return length <= 16 * 1024
     }
@@ -667,16 +673,9 @@ final class TunnelController: ObservableObject {
                 message = "响应正文最多 64 KiB"
                 return
             }
-            var rows: [[String: String]] = []
-            for line in headers.components(separatedBy: .newlines)
-                where !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                guard let colon = line.firstIndex(of: ":"), colon != line.startIndex else {
-                    message = "响应头需要按 名称: 值 填写"
-                    return
-                }
-                rows.append(["name": String(line[..<colon]).trimmingCharacters(in: .whitespaces),
-                             "value": String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)])
-            }
+            let rows: [[String: Any]]
+            do { rows = try RequestHeaderText.parseResponse(headers) }
+            catch { message = error.localizedDescription; return }
             rule["action"] = "replace"
             rule["modifications"] = nil
             rule["replacement"] = ["status": Int(code), "headers": rows,

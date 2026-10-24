@@ -78,6 +78,20 @@ do {
         _ = try RequestHeaderText.parse("X-Bad Name: value")
         preconditionFailure("非法请求头名称应被拒绝")
     } catch RequestHeaderText.HeaderError.invalid(_) { }
+    let responseHeaders = try RequestHeaderText.parseResponse(
+        "Content-Type: text/plain\n# X-Debug: hidden\nX-Debug: visible")
+    expect(responseHeaders.count == 3 && responseHeaders[1]["disabled"] as? Bool == true
+           && responseHeaders[2]["disabled"] as? Bool == false,
+           "响应头顺序、重复项或停用状态丢失")
+    let enabledResponse = try RequestHeaderText.parseResponse(RequestHeaderText.toggle(
+        "Content-Type: text/plain\n# X-Debug: hidden", line: 1))
+    expect(enabledResponse[1]["disabled"] as? Bool == false, "响应头启用状态未更新")
+    do {
+        _ = try RequestHeaderText.parseResponse(":status: 200")
+        preconditionFailure("响应伪头应拒绝编辑")
+    } catch RequestHeaderText.HeaderError.invalidResponse(let line) {
+        expect(line == 1, "响应头错误应包含行号")
+    }
     let firstComplete = try copy.append(["offset": 0, "totalBytes": 3,
                                          "bodyBase64": "AP8=", "nextOffset": 2])
     expect(!firstComplete, "第一页提前结束")

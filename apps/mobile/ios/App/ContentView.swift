@@ -207,6 +207,7 @@ private struct ResponseRewriteRulesView: View {
     @State private var replacement = ""
     @State private var regex = false
     @State private var editingID: String?
+    private var headerLines: [String] { headers.components(separatedBy: "\n") }
 
     var body: some View {
         NavigationStack {
@@ -266,8 +267,24 @@ private struct ResponseRewriteRulesView: View {
                         Toggle("正则表达式", isOn: $regex)
                     } else {
                         TextField("状态码，例如 200", text: $status).keyboardType(.numberPad)
-                        Text("响应头，每行 名称: 值").font(.footnote).foregroundStyle(.secondary)
+                        Text("响应头，每行 名称: 值；行首 # 表示停用")
+                            .font(.footnote).foregroundStyle(.secondary)
                         TextEditor(text: $headers).frame(minHeight: 100)
+                        DisclosureGroup("逐项启用或停用响应头") {
+                            ForEach(headerLines.indices, id: \.self) { index in
+                                let line = headerLines[index].trimmingCharacters(in: .whitespaces)
+                                if RequestHeaderText.isHeaderLine(line) {
+                                    let disabled = line.hasPrefix("# ")
+                                    Button {
+                                        headers = RequestHeaderText.toggle(headers, line: index)
+                                    } label: {
+                                        Label(disabled ? String(line.dropFirst(2)) : line,
+                                              systemImage: disabled ? "square" : "checkmark.square.fill")
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+                        }
                         Toggle("按 Base64 输入二进制正文", isOn: $binaryResponseBody)
                         Text("两种格式使用独立输入框；保存时只采用当前显示的内容")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -318,7 +335,10 @@ private struct ResponseRewriteRulesView: View {
             let response = rule.raw["replacement"] as? [String: Any] ?? [:]
             status = String(response["status"] as? Int ?? 200)
             let rows = response["headers"] as? [[String: Any]] ?? []
-            headers = rows.map { "\($0["name"] as? String ?? ""): \($0["value"] as? String ?? "")" }
+            headers = rows.map {
+                let prefix = $0["disabled"] as? Bool == true ? "# " : ""
+                return prefix + "\($0["name"] as? String ?? ""): \($0["value"] as? String ?? "")"
+            }
                 .joined(separator: "\n")
             let bytes = Data(base64Encoded: response["bodyBase64"] as? String ?? "") ?? Data()
             let readable = ResponseBodyCodec.readableText(bytes)

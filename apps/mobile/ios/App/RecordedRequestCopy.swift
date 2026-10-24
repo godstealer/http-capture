@@ -120,13 +120,23 @@ struct RecordedRequestCopy {
 enum RequestHeaderText {
     enum HeaderError: LocalizedError {
         case invalid(Int)
+        case invalidResponse(Int)
         var errorDescription: String? {
             if case .invalid(let line) = self { return "第 \(line) 行请求头无效，请按 名称: 值 填写" }
+            if case .invalidResponse(let line) = self { return "第 \(line) 行响应头无效，请按 名称: 值 填写" }
             return nil
         }
     }
 
     static func parse(_ text: String) throws -> [[String: Any]] {
+        try parse(text, ignoreBrowserRequestMetadata: true)
+    }
+
+    static func parseResponse(_ text: String) throws -> [[String: Any]] {
+        try parse(text, ignoreBrowserRequestMetadata: false)
+    }
+
+    private static func parse(_ text: String, ignoreBrowserRequestMetadata: Bool) throws -> [[String: Any]] {
         var rows: [[String: Any]] = []
         for (index, rawLine) in text.components(separatedBy: .newlines).enumerated() {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -135,19 +145,21 @@ enum RequestHeaderText {
             let content = disabled ? String(line.dropFirst(2)) : line
             // Browser copies can include a request line and HTTP/2 pseudo headers.
             let parts = content.split(separator: " ", omittingEmptySubsequences: true)
-            if parts.count >= 3, parts.last?.hasPrefix("HTTP/") == true,
+            if ignoreBrowserRequestMetadata, parts.count >= 3, parts.last?.hasPrefix("HTTP/") == true,
                ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE"]
                 .contains(String(parts[0])) { continue }
-            if content.hasPrefix(":"), content.dropFirst().contains(":") { continue }
+            if ignoreBrowserRequestMetadata, content.hasPrefix(":"), content.dropFirst().contains(":") { continue }
             guard let colon = content.firstIndex(of: ":"), colon != content.startIndex else {
-                throw HeaderError.invalid(index + 1)
+                throw (ignoreBrowserRequestMetadata ? HeaderError.invalid(index + 1)
+                    : HeaderError.invalidResponse(index + 1))
             }
             let name = String(content[..<colon]).trimmingCharacters(in: .whitespaces)
             let value = String(content[content.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty, name.utf8.allSatisfy({ Self.isTokenByte($0) }),
                   !value.unicodeScalars.contains(where: { $0.value < 0x20 && $0.value != 0x09 }),
                   !value.unicodeScalars.contains(where: { $0.value == 0x7F }) else {
-                throw HeaderError.invalid(index + 1)
+                throw (ignoreBrowserRequestMetadata ? HeaderError.invalid(index + 1)
+                    : HeaderError.invalidResponse(index + 1))
             }
             rows.append(["name": name, "value": value, "disabled": disabled])
         }
