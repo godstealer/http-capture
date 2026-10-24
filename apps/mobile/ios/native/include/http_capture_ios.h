@@ -6,13 +6,17 @@
 #include <stdint.h>
 
 // The callback must copy packet bytes before returning. It can be called from a
-// Rust runtime thread and must remain valid until hc_ios_stop has returned.
+// Rust runtime thread. On successful start, Rust owns context and calls
+// release_context exactly once when packet forwarding has actually stopped;
+// on failed start, the caller still owns context and must release it.
 typedef void (*hc_ios_packet_callback)(const uint8_t *packet, size_t length, void *context);
+typedef void (*hc_ios_context_release)(void *context);
 
 // Every char* result is a JSON object {"ok":true,"value":...} or
 // {"ok":false,"error":"..."}. Release it with hc_ios_free_string.
 char *hc_ios_start(const char *data_dir, uint16_t port, bool capture_quic,
-                   hc_ios_packet_callback callback, void *context);
+                   hc_ios_packet_callback callback,
+                   hc_ios_context_release release_context, void *context);
 char *hc_ios_stop(void);
 char *hc_ios_command(const char *request_json);
 // Host access to shared history, saved requests, rules, certificates and manual sending while the

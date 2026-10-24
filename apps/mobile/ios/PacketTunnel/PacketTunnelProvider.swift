@@ -92,12 +92,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         // Keep the final check and native start atomic: otherwise stopTunnel
         // could finish before hc_ios_start and leave a listener running.
+        let callbackContext = Unmanaged.passRetained(self).toOpaque()
         let pointer = dataDirectory.withCString { path in
-            hc_ios_start(path, UInt16(port), captureQuic, Self.outputPacket, Unmanaged.passUnretained(self).toOpaque())
+            hc_ios_start(path, UInt16(port), captureQuic, Self.outputPacket,
+                         Self.releasePacketContext, callbackContext)
         }
         let response = consumeResponse(pointer)
         lifecycleLock.unlock()
         guard response["ok"] as? Bool == true else {
+            // Rust only takes the retained context after all fallible startup
+            // work succeeds. Failed starts leave it owned by this call.
+            Unmanaged<PacketTunnelProvider>.fromOpaque(callbackContext).release()
             finishStartup(startGeneration)
             completionHandler(tunnelError(response["error"] as? String ?? "Capture engine failed to start"))
             return
@@ -234,6 +239,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let packet = Data(bytes: bytes, count: length)
         _ = provider.packetFlow.writePackets([packet], withProtocols: [NSNumber(value: family)])
+    }
+
+    private static let releasePacketContext: @convention(c) (UnsafeMutableRawPointer?) -> Void = { context in
+        guard let context else { return }
+        Unmanaged<PacketTunnelProvider>.fromOpaque(context).release()
     }
 
     private func makeDataDirectory() throws -> String {

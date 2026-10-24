@@ -140,6 +140,7 @@ iOS 请求库列表增加左滑删除和确认；扩展删除记录后会使该�
 
 - `apps/mobile/ios/native` 是 Rust `staticlib`，提供 C ABI：在 Packet Tunnel 扩展中启动同一个 `capture-core` 回环代理，将 `NEPacketTunnelFlow` 的 IP 包通过有界队列送入 `tun2proxy::run`，并将生成的包写回扩展。它支持虚拟 DNS、IPv4/IPv6、非 DNS UDP 直连及每页最多 50 条的请求摘要、请求元数据、按偏移每段 16 KiB 的正文读取、CA 公钥证书读取。VPN 运行时宿主不另开代理，通过 `sendProviderMessage` 与扩展通信；停抓后宿主可读取 App Group 中的历史并编辑请求库、规则和证书，离线手动发送复用内核重放路径。
 - `apps/mobile/ios/PacketTunnel` 配置 IPv4/IPv6 默认路由、虚拟 DNS 和 HTTP/HTTPS 代理提示；先启动回环代理监听，再应用系统隧道设置和读取 IP 包，失败时关闭内核，停止与启动回调交错时不重新进入读包循环；运行时每两秒检查 Rust 包转发任务，异常退出则由扩展向系统取消 VPN。`apps/mobile/ios/App` 提供 VPN 启停、端口、每页 50 条的历史请求列表与 URL 包含搜索、请求元数据、请求与响应正文前后翻段、CA 公钥证书分享、阻止规则增删与启停、多种正文格式的手动 HTTP(S) 请求入口。正文按 16 KiB 有界读取，不一次载入整份；高级重放编辑器仍未实现；基础界面此前通过 iOS Simulator 目标编译，近期离线能力与列表界面改动仍待 Mac 重编，全部界面尚未经过真机验收。
+- Packet Tunnel 传给 Rust 的输出包回调上下文现在由 Rust 包设备持有，并在设备真正销毁时释放；启动失败时仍由 Swift 释放。这样停止隧道超时或异步任务迟到时，不会因扩展提前释放 `PacketTunnelProvider` 而留下未保留的回调指针。Windows 主机侧 iOS Rust 桥接 20 项测试通过，包括失败启动、设备销毁及完整启动/停止的回调所有权测试；Swift 与 C ABI 改动仍待 Mac 编译和设备快速启停验收。
 - iOS 首次启动若需复制旧扩展数据库，文件复制不再持有 VPN 生命周期锁；停止请求可先标记启动代次失效，复制完成后不会再启动代理。原生代理启动前的最终状态检查仍与启动操作串行，防止停止刚完成就遗漏一个新监听器。此项 Swift 改动待 Mac 编译及设备快速启停验收。
 - `apps/mobile/ios/project.yml` 由 XcodeGen 生成宿主和 Packet Tunnel 扩展工程；扩展构建前 `build-native.sh` 根据 iPhoneOS/Simulator 与架构编译 Rust 静态库。Rust 本地测试已覆盖扩展启停、阻止规则，以及本机 HTTP 请求发送、记录详情、正文预览，2026-10-24 共 4 项通过；扩展消息限长 128 KiB。需要 macOS、Xcode、Rust Apple target、XcodeGen，以及能用于 Packet Tunnel 的 Apple 签名权限。当前 Windows 环境无法执行 Xcode 编译，更不能证明扩展启动、系统流量、内存限制、证书信任或 App Store 分发通过。
 

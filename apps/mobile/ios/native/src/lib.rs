@@ -20,6 +20,7 @@ use tun2proxy::{ArgDns, ArgProxy, Args, CancellationToken};
 use uuid::Uuid;
 
 type PacketCallback = unsafe extern "C" fn(*const u8, usize, *mut c_void);
+type ContextRelease = unsafe extern "C" fn(*mut c_void);
 const MTU: u16 = 1500;
 const MAX_PACKET: usize = MTU as usize;
 const QUEUE_DEPTH: usize = 256;
@@ -66,6 +67,15 @@ struct PacketDevice {
     pending: Option<Vec<u8>>,
     callback: PacketCallback,
     context: usize,
+    release_context: Option<ContextRelease>,
+}
+
+impl Drop for PacketDevice {
+    fn drop(&mut self) {
+        if let Some(release) = self.release_context {
+            unsafe { release(self.context as *mut c_void) };
+        }
+    }
 }
 
 impl AsyncRead for PacketDevice {
@@ -146,6 +156,7 @@ fn start(
     capture_quic: bool,
     callback: PacketCallback,
     context: usize,
+    release_context: Option<ContextRelease>,
 ) -> Result<serde_json::Value, String> {
     if port == 0 {
         return Err("Port must be between 1 and 65535".into());
@@ -163,6 +174,14 @@ fn start(
     let runtime = CaptureRuntime::new(Engine::open(path).map_err(|e| format!("{e:#}"))?);
     executor.block_on(runtime.start_proxy("127.0.0.1".into(), port))?;
     let status = executor.block_on(runtime.status());
+    let status = match serde_json::to_value(status) {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = executor.block_on(runtime.shutdown_network());
+            executor.shutdown_background();
+            return Err(error.to_string());
+        }
+    };
     // VPN-originated TCP uses CONNECT for both HTTP and HTTPS. Only the
     // transparent bridge can distinguish plain HTTP after CONNECT from TLS.
     let bridge = match executor.block_on(capture_core::proxy::start_tun_bridge(
@@ -174,13 +193,6 @@ fn start(
             executor.shutdown_background();
             return Err(format!("Transparent bridge could not start: {error:#}"));
         }
-    };
-    let (sender, incoming) = mpsc::channel(QUEUE_DEPTH);
-    let device = PacketDevice {
-        incoming,
-        pending: None,
-        callback,
-        context,
     };
     let mut args = Args::default();
     args.proxy = match ArgProxy::try_from(format!("http://{}", bridge.address).as_str()) {
@@ -212,6 +224,17 @@ fn start(
     } else {
         None
     };
+    // No fallible setup remains after this point. A successful start transfers
+    // ownership of the retained Swift context to PacketDevice::drop; failures
+    // above leave ownership with the caller.
+    let (sender, incoming) = mpsc::channel(QUEUE_DEPTH);
+    let device = PacketDevice {
+        incoming,
+        pending: None,
+        callback,
+        context,
+        release_context,
+    };
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let task = executor.spawn(async move {
@@ -231,7 +254,7 @@ fn start(
         saved_read: None,
         session_export: None,
     });
-    serde_json::to_value(status).map_err(|e| e.to_string())
+    Ok(status)
 }
 
 fn stop() -> Result<serde_json::Value, String> {
@@ -1097,12 +1120,13 @@ pub unsafe extern "C" fn hc_ios_start(
     port: u16,
     capture_quic: bool,
     callback: Option<PacketCallback>,
+    release_context: Option<ContextRelease>,
     context: *mut c_void,
 ) -> *mut c_char {
     reply((|| {
         let path = input_string(path)?;
         let callback = callback.ok_or("Missing packet callback")?;
-        start(Path::new(path), port, capture_quic, callback, context as usize)
+        start(Path::new(path), port, capture_quic, callback, context as usize, release_context)
     })())
 }
 
@@ -1555,7 +1579,71 @@ mod tests {
     fn rejects_bad_port() {
         let dir = tempfile::tempdir().unwrap();
         unsafe extern "C" fn packet(_: *const u8, _: usize, _: *mut c_void) {}
-        assert!(start(dir.path(), 0, false, packet, 0).is_err());
+        assert!(start(dir.path(), 0, false, packet, 0, None).is_err());
+    }
+
+    #[test]
+    fn failed_start_leaves_callback_context_with_caller() {
+        use std::sync::atomic::AtomicUsize;
+        unsafe extern "C" fn packet(_: *const u8, _: usize, _: *mut c_void) {}
+        unsafe extern "C" fn release(context: *mut c_void) {
+            (*(context as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let calls = Box::new(AtomicUsize::new(0));
+        let context = Box::into_raw(calls);
+        assert!(start(dir.path(), 0, false, packet, context as usize, Some(release)).is_err());
+        assert_eq!(unsafe { &*context }.load(Ordering::SeqCst), 0);
+        unsafe { release(context as *mut c_void); }
+        let calls = unsafe { Box::from_raw(context) };
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn packet_device_releases_owned_context_once() {
+        use std::sync::atomic::AtomicUsize;
+        unsafe extern "C" fn packet(_: *const u8, _: usize, _: *mut c_void) {}
+        unsafe extern "C" fn release(context: *mut c_void) {
+            (*(context as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+        }
+        let calls = Box::new(AtomicUsize::new(0));
+        let context = Box::into_raw(calls);
+        {
+            let (_, incoming) = mpsc::channel(1);
+            let _device = PacketDevice {
+                incoming,
+                pending: None,
+                callback: packet,
+                context: context as usize,
+                release_context: Some(release),
+            };
+            assert_eq!(unsafe { &*context }.load(Ordering::SeqCst), 0);
+        }
+        let calls = unsafe { Box::from_raw(context) };
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn tunnel_stop_releases_packet_context() {
+        use std::sync::atomic::AtomicUsize;
+        let _guard = ACTIVE_TEST.lock().unwrap();
+        unsafe extern "C" fn packet(_: *const u8, _: usize, _: *mut c_void) {}
+        unsafe extern "C" fn release(context: *mut c_void) {
+            (*(context as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let calls = Box::new(AtomicUsize::new(0));
+        let context = Box::into_raw(calls);
+        start(directory.path(), port, false, packet, context as usize, Some(release)).unwrap();
+        assert_eq!(unsafe { &*context }.load(Ordering::SeqCst), 0);
+        assert!(stop().is_ok());
+        // On failure, leave the allocation alive in case teardown still has
+        // a delayed callback; freeing it would turn a test failure into UAF.
+        assert_eq!(unsafe { &*context }.load(Ordering::SeqCst), 1);
+        unsafe { drop(Box::from_raw(context)); }
     }
 
     #[test]
@@ -1574,6 +1662,7 @@ mod tests {
             pending: None,
             callback: packet,
             context: 0,
+            release_context: None,
         };
         sender.send(vec![0x45, 1, 2]).await.unwrap();
         sender.send(vec![0x60, 3]).await.unwrap();
@@ -1608,7 +1697,7 @@ mod tests {
         let (input, incoming) = mpsc::channel(8);
         let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
         let context = Box::into_raw(Box::new(output_sender)) as usize;
-        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let device = PacketDevice { incoming, pending: None, callback: output, context, release_context: None };
         let mut args = Args::default();
         args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
             .unwrap();
@@ -1719,7 +1808,7 @@ mod tests {
         let (input, incoming) = mpsc::channel(8);
         let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
         let context = Box::into_raw(Box::new(output_sender)) as usize;
-        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let device = PacketDevice { incoming, pending: None, callback: output, context, release_context: None };
         let mut args = Args::default();
         args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
             .unwrap();
@@ -1774,7 +1863,7 @@ mod tests {
         let (input, incoming) = mpsc::channel(8);
         let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
         let context = Box::into_raw(Box::new(output_sender)) as usize;
-        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let device = PacketDevice { incoming, pending: None, callback: output, context, release_context: None };
         let mut args = Args::default();
         args.proxy = ArgProxy::try_from("http://127.0.0.1:1").unwrap();
         args.dns = ArgDns::Virtual;
@@ -1836,7 +1925,7 @@ mod tests {
         let (input, incoming) = mpsc::channel(8);
         let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
         let context = Box::into_raw(Box::new(output_sender)) as usize;
-        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let device = PacketDevice { incoming, pending: None, callback: output, context, release_context: None };
         let mut args = Args::default();
         args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
             .unwrap();
@@ -1923,7 +2012,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        let result = start(directory.path(), port, false, packet, 0).unwrap();
+        let result = start(directory.path(), port, false, packet, 0, None).unwrap();
         assert!(result.is_object());
         assert!(command(r#"{"method":"status"}"#).is_ok());
         let certificates = command(r#"{"method":"certificates"}"#).unwrap();
@@ -2501,7 +2590,7 @@ mod tests {
         assert!(command(r#"{"method":"blocking"}"#).is_err());
 
         // The optional HTTP/3 listener is owned by the extension lifecycle.
-        start(directory.path(), port, true, packet, 0).unwrap();
+        start(directory.path(), port, true, packet, 0, None).unwrap();
         let quic_address = active()
             .lock()
             .unwrap()
