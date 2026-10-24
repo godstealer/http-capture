@@ -244,6 +244,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             getTargetContext().sendBroadcast(udpProbe);
             runVpnTlsSmoke();
             stopVpnFromNotification();
+            verifySessionExport(capturedID);
         } finally {
             if (CaptureVpnService.isManaged()) {
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
@@ -264,7 +265,8 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         File destination = new File(getTargetContext().getCacheDir(),
                 "vpn-session-" + System.nanoTime() + ".json");
         try {
-            JSONObject result = expectOk(NativeCapture.exportSession(destination.getAbsolutePath()));
+            JSONObject result = expectOk(NativeCapture.exportSession(
+                getTargetContext().getFilesDir().getAbsolutePath(), destination.getAbsolutePath()));
             if (result.optInt("count", 0) < 1) throw new AssertionError("Session export is empty");
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             try (InputStream input = new FileInputStream(destination)) {

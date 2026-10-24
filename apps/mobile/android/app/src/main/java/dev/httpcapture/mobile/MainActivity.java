@@ -185,7 +185,7 @@ public final class MainActivity extends Activity {
         savedRequestsButton = button(layout, "已保存请求", view -> showSavedRequests());
         stop.setEnabled(false);
         exportCa.setEnabled(false);
-        exportSessionButton.setEnabled(false);
+        exportSessionButton.setEnabled(true);
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
         manualRequest.setEnabled(false);
@@ -562,7 +562,7 @@ public final class MainActivity extends Activity {
             start.setEnabled(false);
             setAppSelectionEnabled(false);
             exportCa.setEnabled(false);
-            exportSessionButton.setEnabled(false);
+            exportSessionButton.setEnabled(true);
             blockingRules.setEnabled(false);
             responseRewriteRules.setEnabled(false);
             manualRequest.setEnabled(false);
@@ -580,7 +580,7 @@ public final class MainActivity extends Activity {
                 start.setEnabled(true);
                 setAppSelectionEnabled(true);
                 exportCa.setEnabled(false);
-                exportSessionButton.setEnabled(false);
+                exportSessionButton.setEnabled(true);
                 blockingRules.setEnabled(false);
                 responseRewriteRules.setEnabled(false);
                 manualRequest.setEnabled(false);
@@ -599,7 +599,7 @@ public final class MainActivity extends Activity {
         setAppSelectionEnabled(true);
         stop.setEnabled(false);
         exportCa.setEnabled(false);
-        exportSessionButton.setEnabled(false);
+        exportSessionButton.setEnabled(true);
         blockingRules.setEnabled(false);
         responseRewriteRules.setEnabled(false);
         manualRequest.setEnabled(false);
@@ -635,7 +635,7 @@ public final class MainActivity extends Activity {
                         setAppSelectionEnabled(false);
                         stop.setEnabled(false);
                         exportCa.setEnabled(false);
-                        exportSessionButton.setEnabled(false);
+                        exportSessionButton.setEnabled(true);
                         blockingRules.setEnabled(false);
                         responseRewriteRules.setEnabled(false);
                         manualRequest.setEnabled(false);
@@ -2426,7 +2426,6 @@ public final class MainActivity extends Activity {
     }
 
     private void chooseSessionExport() {
-        if (!running) { status.setText("请先启动抓包，再导出记录"); return; }
         Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         save.addCategory(Intent.CATEGORY_OPENABLE);
         save.setType("application/json");
@@ -2440,7 +2439,8 @@ public final class MainActivity extends Activity {
         worker.execute(() -> {
             File temporary = new File(getCacheDir(), "capture-" + UUID.randomUUID() + ".json");
             try {
-                JSONObject reply = parseReply(NativeCapture.exportSession(temporary.getAbsolutePath()));
+                JSONObject reply = parseReply(NativeCapture.exportSession(
+                    getFilesDir().getAbsolutePath(), temporary.getAbsolutePath()));
                 if (!reply.optBoolean("ok")) throw new IllegalStateException(reply.optString("error"));
                 int count = reply.getJSONObject("value").getInt("count");
                 try (InputStream input = new FileInputStream(temporary);
@@ -2457,7 +2457,7 @@ public final class MainActivity extends Activity {
             } finally {
                 if (temporary.exists() && !temporary.delete())
                     android.util.Log.w("HttpCapture", "Could not remove temporary session export");
-                main.post(() -> exportSessionButton.setEnabled(running));
+                main.post(() -> exportSessionButton.setEnabled(true));
             }
         });
     }

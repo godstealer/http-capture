@@ -284,10 +284,15 @@ fn recent(cursor: &str, url_contains: &str) -> Result<serde_json::Value, String>
     .map_err(|error| error.to_string())
 }
 
-fn export_session(path: &Path) -> Result<serde_json::Value, String> {
+fn export_session(data_dir: &Path, path: &Path) -> Result<serde_json::Value, String> {
     let store = {
         let current = capture().lock().map_err(|_| "Capture state is unavailable")?;
-        current.as_ref().ok_or("Capture is not running")?.runtime.engine.store.clone()
+        if let Some(active) = current.as_ref() {
+            active.runtime.engine.store.clone()
+        } else {
+            std::sync::Arc::new(capture_core::store::Store::open(&data_dir.join("sessions.db"))
+                .map_err(|error| format!("{error:#}"))?)
+        }
     };
     let result = (|| {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
@@ -681,11 +686,12 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_recent(
 
 #[no_mangle]
 pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_exportSession(
-    mut env: JNIEnv<'_>, _class: JClass<'_>, path: JString<'_>,
+    mut env: JNIEnv<'_>, _class: JClass<'_>, data_dir: JString<'_>, path: JString<'_>,
 ) -> jstring {
     let result = (|| {
+        let data_dir: String = env.get_string(&data_dir).map_err(|error| error.to_string())?.into();
         let path: String = env.get_string(&path).map_err(|error| error.to_string())?.into();
-        export_session(Path::new(&path))
+        export_session(Path::new(&data_dir), Path::new(&path))
     })();
     jni_reply(env, result)
 }
@@ -942,8 +948,11 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_tunnelStatus(
 #[cfg(test)]
 mod tests {
     use super::*;
+    static SERIAL: Mutex<()> = Mutex::new(());
+
     #[test]
     fn rejects_invalid_port_without_opening_state() {
+        let _guard = SERIAL.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         assert!(start(dir.path(), 0).is_err());
         assert!(capture().lock().unwrap().is_none());
@@ -951,6 +960,7 @@ mod tests {
 
     #[test]
     fn response_rewrite_roundtrip_rejects_stale_version() {
+        let _guard = SERIAL.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap().local_addr().unwrap().port();
@@ -969,5 +979,30 @@ mod tests {
         assert_eq!(response_rewrite().unwrap()["config"]["rules"][0]["replacement"]["status"], 201);
         assert!(configure_response_rewrite(&update.to_string()).is_err());
         stop().unwrap();
+    }
+
+    #[test]
+    fn exports_saved_session_after_capture_stops() {
+        let _guard = SERIAL.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = capture_core::store::Store::open(&dir.path().join("sessions.db")).unwrap();
+        let flow = serde_json::from_value(serde_json::json!({
+            "id": "offline-flow", "parentId": null, "startedAt": 1,
+            "durationMs": 2, "source": "capture", "request": {
+                "method": "GET", "url": "https://example.test/offline",
+                "headers": [], "bodyBase64": ""
+            },
+            "response": null, "error": null, "rawRequestHeadBase64": null, "notes": []
+        })).unwrap();
+        store.insert(&flow).unwrap();
+        drop(store);
+
+        let destination = dir.path().join("saved-session.json");
+        let result = export_session(dir.path(), &destination).unwrap();
+        assert_eq!(result["count"], 1);
+        let session: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&destination).unwrap()).unwrap();
+        assert_eq!(session["format"], "http-capture-session");
+        assert_eq!(session["flows"][0]["id"], "offline-flow");
     }
 }
