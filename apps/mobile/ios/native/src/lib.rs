@@ -3,10 +3,11 @@
 //! shared App Group store and replay engine when it is stopped.
 use capture_core::store::McpRequestFilter;
 use capture_core::store::{Collection, SavedRequest};
+use capture_core::config_migration::{self, ExportOptions};
 use capture_core::{model::RequestDraft, CaptureRuntime, Engine};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -795,6 +796,68 @@ fn offline_export_session(data_dir: &Path, output: &Path) -> Result<serde_json::
     result
 }
 
+fn configuration_store(data_dir: &Path) -> Result<Arc<capture_core::store::Store>, String> {
+    std::fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    let path = data_dir.join("sessions.db");
+    let mut cached = OFFLINE_STORE.get_or_init(|| Mutex::new(HashMap::new()))
+        .lock().map_err(|_| "Offline configuration is unavailable")?;
+    if let Some(store) = cached.get(&path) { return Ok(store.clone()); }
+    let store = Arc::new(capture_core::store::Store::open(&path)
+        .map_err(|error| format!("{error:#}"))?);
+    cached.insert(path, store.clone());
+    Ok(store)
+}
+
+fn export_configuration(data_dir: &Path, output: &Path, options_json: &str,
+    passphrase: &str) -> Result<serde_json::Value, String> {
+    let store = configuration_store(data_dir)?;
+    let options: ExportOptions = serde_json::from_str(options_json)
+        .map_err(|error| format!("Invalid export options: {error}"))?;
+    let exported = config_migration::export_protected(
+        &store, BTreeMap::new(), options, env!("CARGO_PKG_VERSION"),
+        (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    config_migration::save_atomic(output, &exported.document)
+        .map_err(|error| format!("{error:#}"))?;
+    serde_json::to_value(exported.summary).map_err(|error| error.to_string())
+}
+
+fn read_configuration(path: &Path) -> Result<String, String> {
+    let length = std::fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if length == 0 || length > config_migration::MAX_ENCRYPTED_DOCUMENT_BYTES as u64 {
+        return Err("Configuration file must be 1 byte–24 MiB".into());
+    }
+    std::fs::read_to_string(path).map_err(|error| error.to_string())
+}
+
+fn preview_configuration(data_dir: &Path, path: &Path, passphrase: &str)
+    -> Result<serde_json::Value, String> {
+    let document = read_configuration(path)?;
+    let store = configuration_store(data_dir)?;
+    let preview = config_migration::preview_protected(
+        &store, &document, (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    serde_json::to_value(preview).map_err(|error| error.to_string())
+}
+
+fn import_configuration(data_dir: &Path, path: &Path, selected_json: &str,
+    expected_revision: &str, passphrase: &str) -> Result<serde_json::Value, String> {
+    let current = active().lock().map_err(|_| "Capture state is unavailable")?;
+    if current.is_some() { return Err("Stop VPN capture before importing configuration".into()); }
+    let selected: Vec<String> = serde_json::from_str(selected_json)
+        .map_err(|error| format!("Invalid selected categories: {error}"))?;
+    let document = read_configuration(path)?;
+    let store = configuration_store(data_dir)?;
+    let prepared = config_migration::prepare_import_protected(
+        &store, &document, &selected, expected_revision, BTreeMap::new(),
+        env!("CARGO_PKG_VERSION"), (!passphrase.is_empty()).then_some(passphrase),
+    ).map_err(|error| format!("{error:#}"))?;
+    let imported = config_migration::commit_import(&store, prepared)
+        .map_err(|error| format!("{error:#}"))?;
+    drop(current);
+    serde_json::to_value(imported).map_err(|error| error.to_string())
+}
+
 fn command(request: &str) -> Result<serde_json::Value, String> {
     let request: serde_json::Value = serde_json::from_str(request).map_err(|e| e.to_string())?;
     let method = request
@@ -1065,6 +1128,49 @@ pub unsafe extern "C" fn hc_ios_offline_export_session(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn hc_ios_config_export(
+    data_dir: *const c_char, output_path: *const c_char,
+    options_json: *const c_char, passphrase: *const c_char,
+) -> *mut c_char {
+    reply((|| {
+        let data_dir = input_string(data_dir)?;
+        let output_path = input_string(output_path)?;
+        let options_json = input_string(options_json)?;
+        let passphrase = input_string(passphrase)?;
+        export_configuration(Path::new(data_dir), Path::new(output_path), options_json, passphrase)
+    })())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hc_ios_config_preview(
+    data_dir: *const c_char, input_path: *const c_char, passphrase: *const c_char,
+) -> *mut c_char {
+    reply((|| {
+        let data_dir = input_string(data_dir)?;
+        let input_path = input_string(input_path)?;
+        let passphrase = input_string(passphrase)?;
+        preview_configuration(Path::new(data_dir), Path::new(input_path), passphrase)
+    })())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hc_ios_config_import(
+    data_dir: *const c_char, input_path: *const c_char,
+    sections_json: *const c_char, expected_revision: *const c_char,
+    passphrase: *const c_char,
+) -> *mut c_char {
+    reply((|| {
+        let data_dir = input_string(data_dir)?;
+        let input_path = input_string(input_path)?;
+        let sections_json = input_string(sections_json)?;
+        let expected_revision = input_string(expected_revision)?;
+        let passphrase = input_string(passphrase)?;
+        import_configuration(Path::new(data_dir), Path::new(input_path), sections_json,
+            expected_revision, passphrase)
+    })())
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn hc_ios_input_packet(packet: *const u8, length: usize) -> bool {
     if packet.is_null() || length < 20 || length > MAX_PACKET {
         return false;
@@ -1096,6 +1202,43 @@ mod tests {
     use super::*;
     use std::io::{BufRead, Read, Write};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    static ACTIVE_TEST: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn portable_configuration_uses_desktop_format_and_requires_restart() {
+        let _guard = ACTIVE_TEST.lock().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        offline_command(source.path(), &serde_json::json!({
+            "method": "configure_blocking",
+            "config": {"enabled": true, "scope": "capture", "rules": [{
+                "id": "ios-portable", "enabled": true, "matchType": "host",
+                "pattern": "ios.example", "method": ""
+            }]}
+        }).to_string()).unwrap_err();
+        configuration_store(source.path()).unwrap();
+        offline_command(source.path(), &serde_json::json!({
+            "method": "configure_blocking",
+            "config": {"enabled": true, "scope": "capture", "rules": [{
+                "id": "ios-portable", "enabled": true, "matchType": "host",
+                "pattern": "ios.example", "method": ""
+            }]}
+        }).to_string()).unwrap();
+        let file = source.path().join("portable.hccfg");
+        export_configuration(source.path(), &file, "{}", "ios-secret-123").unwrap();
+        assert!(preview_configuration(target.path(), &file, "wrong").is_err());
+        let preview = preview_configuration(target.path(), &file, "ios-secret-123").unwrap();
+        let revision = preview["expectedRevision"].as_str().unwrap();
+        assert!(import_configuration(target.path(), &file, r#"["blocking"]"#, "wrong", "ios-secret-123").is_err());
+        let imported = import_configuration(target.path(), &file, r#"["blocking"]"#,
+            revision, "ios-secret-123").unwrap();
+        assert_eq!(imported["requiresRestart"], true);
+        assert!(configuration_store(target.path()).unwrap().configuration_ready().is_err());
+        let reopened = capture_core::store::Store::open(&target.path().join("sessions.db")).unwrap();
+        let blocking: serde_json::Value = reopened.setting("blocking.v1").unwrap().unwrap();
+        assert_eq!(blocking["rules"][0]["id"], "ios-portable");
+        assert_eq!(blocking["enabled"], false);
+    }
 
     #[test]
     fn offline_history_is_read_only_and_keeps_body_revision_valid() {
@@ -1743,6 +1886,7 @@ mod tests {
 
     #[test]
     fn extension_lifecycle_and_blocking_commands() {
+        let _guard = ACTIVE_TEST.lock().unwrap();
         unsafe extern "C" fn packet(_: *const u8, _: usize, _: *mut c_void) {}
         let directory = tempfile::tempdir().unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

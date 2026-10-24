@@ -135,6 +135,8 @@ final class TunnelController: ObservableObject {
     @Published private(set) var tunnelStarting = false
     @Published private(set) var tunnelStopping = false
     @Published private(set) var busy = true
+    @Published private(set) var configurationBusy = false
+    @Published private(set) var configurationRequiresRestart = false
     @Published private(set) var message = "正在读取 VPN 配置…"
     @Published private(set) var requests: [CapturedRequest] = []
     @Published private(set) var requestPageLoading = false
@@ -283,6 +285,14 @@ final class TunnelController: ObservableObject {
 
     func start() {
         if busy || shouldOfferStop || tunnelStopping { return }
+        if configurationRequiresRestart {
+            message = "配置已导入，请完全关闭并重新打开应用"
+            return
+        }
+        if configurationBusy {
+            message = "请等待配置导入或导出完成"
+            return
+        }
         if sendingManualRequest || savedCollectionSaving || savedDeleteBusy ||
            blockingSaving || responseSaving || trustedCertificatesBusy {
             message = "请等待离线操作完成后再启动 VPN"
@@ -324,6 +334,28 @@ final class TunnelController: ObservableObject {
                     }
                 }
             }
+        }
+    }
+
+    func beginConfigurationOperation() -> Bool {
+        let vpnStatus = manager?.connection.status
+        guard !configurationBusy, !configurationRequiresRestart,
+              !connected, !tunnelStarting, !tunnelStopping,
+              vpnStatus == nil || vpnStatus == .disconnected || vpnStatus == .invalid else {
+            message = configurationRequiresRestart
+                ? "配置已导入，请完全关闭并重新打开应用"
+                : "请先停止 VPN，再迁移配置"
+            return false
+        }
+        configurationBusy = true
+        return true
+    }
+
+    func endConfigurationOperation(imported: Bool = false) {
+        configurationBusy = false
+        if imported {
+            configurationRequiresRestart = true
+            message = "配置已导入，请完全关闭并重新打开应用"
         }
     }
 

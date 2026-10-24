@@ -21,6 +21,15 @@ char *hc_ios_offline_command(const char *data_dir, const char *request_json);
 // Export the stopped tunnel's shared history to a new file in the host app's
 // temporary directory. An existing output file is never overwritten.
 char *hc_ios_offline_export_session(const char *data_dir, const char *output_path);
+// Portable configuration uses the same v1 JSON/.hccfg format as desktop and
+// Android. Import only while the tunnel is stopped; restart the app after commit.
+char *hc_ios_config_export(const char *data_dir, const char *output_path,
+                           const char *options_json, const char *passphrase);
+char *hc_ios_config_preview(const char *data_dir, const char *input_path,
+                            const char *passphrase);
+char *hc_ios_config_import(const char *data_dir, const char *input_path,
+                           const char *sections_json, const char *expected_revision,
+                           const char *passphrase);
 bool hc_ios_input_packet(const uint8_t *packet, size_t length);
 void hc_ios_free_string(char *result);
 

@@ -2525,6 +2525,13 @@ public final class MainActivity extends Activity {
                         .put("includeWorkspace", workspace.isChecked())
                         .put("includeProxyUsernames", usernames.isChecked()).toString();
                     pendingConfigurationExportPassphrase = password.getText().toString();
+                    int passwordBytes = pendingConfigurationExportPassphrase.getBytes(StandardCharsets.UTF_8).length;
+                    if (passwordBytes > 0 && (passwordBytes < 12 || passwordBytes > 1024)) {
+                        pendingConfigurationExportOptions = null;
+                        pendingConfigurationExportPassphrase = null;
+                        status.setText("加密密码需为 12–1024 字节；或留空导出普通 JSON");
+                        return;
+                    }
                     launchConfigurationSavePicker(!pendingConfigurationExportPassphrase.isEmpty());
                 } catch (JSONException error) { status.setText("导出选项无效：" + error.getMessage()); }
             }).show();
