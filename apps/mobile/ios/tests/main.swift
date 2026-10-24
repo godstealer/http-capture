@@ -138,7 +138,27 @@ do {
     let controlDraft = try control.draft()
     expect(controlComplete && controlDraft.bodyMode == .base64,
            "含控制字节的 UTF-8 正文应通过 Base64 编辑")
-    print("iOS request body codec: PASS")
+    let responseBinary = Data([0, 255, 10, 0])
+    let decodedResponse = try ResponseBodyCodec.decodeBase64(
+        " \n" + responseBinary.base64EncodedString() + "\r")
+    expect(decodedResponse == responseBinary, "二进制响应正文被 Base64 解码改动")
+    expect(ResponseBodyCodec.readableText(Data("中文\ntext".utf8)) == "中文\ntext",
+           "普通 UTF-8 响应应使用文本编辑器")
+    expect(ResponseBodyCodec.readableText(Data([65, 0, 66])) == nil,
+           "含 NUL 的响应应使用 Base64 编辑器")
+    expect(ResponseBodyCodec.readableText(Data([255])) == nil,
+           "无效 UTF-8 响应应使用 Base64 编辑器")
+    let maximumResponse = Data(repeating: 255, count: ResponseBodyCodec.maxBodyBytes)
+    let decodedMaximum = try ResponseBodyCodec.decodeBase64(maximumResponse.base64EncodedString())
+    expect(decodedMaximum == maximumResponse, "64 KiB 响应正文边界错误")
+    for invalidResponse in ["!!!!", "a", Data(count: ResponseBodyCodec.maxBodyBytes + 1)
+        .base64EncodedString()] {
+        do {
+            _ = try ResponseBodyCodec.decodeBase64(invalidResponse)
+            preconditionFailure("无效或超限响应正文应被拒绝")
+        } catch ResponseBodyCodec.BodyError.invalid(_) { }
+    }
+    print("iOS request and response body codecs: PASS")
 } catch {
     fatalError(error.localizedDescription)
 }

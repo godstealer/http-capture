@@ -103,8 +103,7 @@ struct ResponseRule: Identifiable {
               (raw["modifications"] as? [Any] ?? []).isEmpty,
               let response = raw["replacement"] as? [String: Any],
               let base64 = response["bodyBase64"] as? String,
-              base64.utf8.count <= 96 * 1024,
-               let body = Data(base64Encoded: base64), body.count <= 64 * 1024,
+              (try? ResponseBodyCodec.decodeBase64(base64)) != nil,
               let headers = response["headers"] as? [[String: Any]] else { return false }
         var length = 0
         for header in headers {
@@ -629,9 +628,7 @@ final class TunnelController: ObservableObject {
             }
             let responseBytes: Data
             if let bodyBase64 {
-                let encoded = bodyBase64.filter { !$0.isWhitespace }
-                guard encoded.utf8.count <= 96 * 1024,
-                      let decoded = Data(base64Encoded: encoded) else {
+                guard let decoded = try? ResponseBodyCodec.decodeBase64(bodyBase64) else {
                     message = "正文不是有效的 Base64 编码，最多对应 64 KiB 原始字节"
                     return
                 }
@@ -639,7 +636,7 @@ final class TunnelController: ObservableObject {
             } else {
                 responseBytes = Data(body.utf8)
             }
-            guard responseBytes.count <= 64 * 1024 else {
+            guard responseBytes.count <= ResponseBodyCodec.maxBodyBytes else {
                 message = "响应正文最多 64 KiB"
                 return
             }

@@ -312,20 +312,11 @@ private struct ResponseRewriteRulesView: View {
             headers = rows.map { "\($0["name"] as? String ?? ""): \($0["value"] as? String ?? "")" }
                 .joined(separator: "\n")
             let bytes = Data(base64Encoded: response["bodyBase64"] as? String ?? "") ?? Data()
-            let readable = readableResponseBody(bytes)
+            let readable = ResponseBodyCodec.readableText(bytes)
             responseBody = readable ?? ""
             responseBodyBase64 = response["bodyBase64"] as? String ?? ""
             binaryResponseBody = readable == nil
         }
-    }
-
-    private func readableResponseBody(_ bytes: Data) -> String? {
-        guard let text = String(data: bytes, encoding: .utf8),
-              text.unicodeScalars.allSatisfy({ scalar in
-                  !CharacterSet.controlCharacters.contains(scalar)
-                      || scalar.value == 9 || scalar.value == 10 || scalar.value == 13
-              }) else { return nil }
-        return text
     }
 
     private func resetEditor() {
