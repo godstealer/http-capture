@@ -47,6 +47,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             runSmoke();
+            runBodyBoundarySmoke();
             runVpnLifecycleSmoke();
             runSelectedAppSmoke();
             result.putString("smokeStatus", "ok");
@@ -577,6 +578,35 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 expectOk(NativeCapture.stop());
             }
         }
+    }
+
+    private void runBodyBoundarySmoke() throws Exception {
+        byte[] body = new byte[1024 * 1024];
+        for (int index = 0; index < body.length; index++) body[index] = (byte) (index % 251);
+        JSONObject draft = new JSONObject().put("method", "POST")
+            .put("url", "http://127.0.0.1:1/mobile-body-boundary")
+            .put("engine", "native").put("headers", new JSONArray())
+            .put("bodyBase64", Base64.encodeToString(body, Base64.NO_WRAP));
+        JSONObject saved = expectOk(saveRequest(new JSONObject()
+            .put("name", "mobile-body-boundary-" + System.nanoTime())
+            .put("draft", draft).toString()));
+        String id = saved.getString("id");
+        try {
+            JSONObject reopened = expectOk(savedRequest(id)).getJSONObject("draft");
+            if (!Arrays.equals(body, Base64.decode(reopened.getString("bodyBase64"), Base64.DEFAULT)))
+                throw new AssertionError("1 MiB saved request changed its body");
+        } finally {
+            expectOk(deleteSavedRequest(id));
+        }
+        draft.put("bodyBase64", Base64.encodeToString(new byte[body.length + 1], Base64.NO_WRAP));
+        JSONObject rejectedSave = new JSONObject(saveRequest(new JSONObject()
+            .put("name", "oversized").put("draft", draft).toString()));
+        if (rejectedSave.optBoolean("ok") || !rejectedSave.optString("error").contains("1 MiB"))
+            throw new AssertionError("Oversized saved request was accepted: " + rejectedSave);
+        JSONObject rejectedSend = new JSONObject(NativeCapture.sendRequest(
+            getTargetContext().getFilesDir().getAbsolutePath(), draft.toString()));
+        if (rejectedSend.optBoolean("ok") || !rejectedSend.optString("error").contains("1 MiB"))
+            throw new AssertionError("Oversized direct replay was accepted: " + rejectedSend);
     }
 
     private void runSavedRequestSmoke() throws Exception {
