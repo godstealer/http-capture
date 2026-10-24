@@ -94,7 +94,6 @@ public final class MainActivity extends Activity {
     private boolean vpnWasManaged;
     private boolean vpnPermissionPending;
     private int pendingVpnPort;
-    private String certificatePem;
     private String pendingConfigurationExportOptions;
     private String pendingConfigurationExportPassphrase;
     private String pendingConfigurationRecoveryPassphrase;
@@ -2490,7 +2489,8 @@ public final class MainActivity extends Activity {
                 return;
             }
             try {
-                certificatePem = reply.getString("value");
+                if (reply.getString("value").isEmpty())
+                    throw new IllegalStateException("CA 证书内容为空");
                 main.post(() -> {
                     Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                     save.addCategory(Intent.CATEGORY_OPENABLE);
@@ -3010,13 +3010,20 @@ public final class MainActivity extends Activity {
                 previewConfiguration(data.getData());
             return;
         }
-        if (requestCode != SAVE_CA_REQUEST || resultCode != RESULT_OK || data == null || data.getData() == null || certificatePem == null) return;
-        final String pem = certificatePem;
-        certificatePem = null;
+        if (requestCode != SAVE_CA_REQUEST || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         worker.execute(() -> {
-            try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
-                if (output == null) throw new IllegalStateException("无法打开目标文件");
-                output.write(pem.getBytes(StandardCharsets.UTF_8));
+            try {
+                // The system document picker can recreate this Activity. Read
+                // the persistent CA again instead of depending on an old field.
+                JSONObject reply = parseReply(NativeCapture.certificate(getFilesDir().getAbsolutePath()));
+                if (!reply.optBoolean("ok"))
+                    throw new IllegalStateException(reply.optString("error", "读取 CA 失败"));
+                String pem = reply.getString("value");
+                if (pem.isEmpty()) throw new IllegalStateException("CA 证书内容为空");
+                try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
+                    if (output == null) throw new IllegalStateException("无法打开目标文件");
+                    output.write(pem.getBytes(StandardCharsets.UTF_8));
+                }
                 main.post(() -> {
                     status.setText("CA 公钥证书已保存");
                     new AlertDialog.Builder(this)
