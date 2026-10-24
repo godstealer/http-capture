@@ -144,6 +144,8 @@ final class TunnelController: ObservableObject {
     private var cursor: String?
     private var urlFilter = ""
     private var requestGeneration: UInt64 = 0
+    private var requestPollID: UInt64?
+    private var nextRequestPollID: UInt64 = 0
     private var detailGeneration: UInt64 = 0
     private var replayGeneration: UInt64 = 0
     private var bodyOffsetHistory: [Int] = []
@@ -239,6 +241,7 @@ final class TunnelController: ObservableObject {
             command["cursor"] = value
         } else {
             cursor = nil
+            requestPollID = nil
         }
         requestGeneration &+= 1
         let generation = requestGeneration
@@ -248,6 +251,32 @@ final class TunnelController: ObservableObject {
             let incoming = ((page["requests"] as? [[String: Any]]) ?? []).compactMap(CapturedRequest.init)
             self.requests = loadMore ? self.requests + incoming : incoming
             self.cursor = page["nextCursor"] as? String
+        }
+    }
+
+    func pollRequests() {
+        guard connected, requestPollID == nil else { return }
+        nextRequestPollID &+= 1
+        let pollID = nextRequestPollID
+        requestPollID = pollID
+        var command: [String: Any] = ["method": "recent"]
+        if !urlFilter.isEmpty { command["urlContains"] = urlFilter }
+        let generation = requestGeneration
+        send(command, onFailure: { [weak self] in
+            if self?.requestPollID == pollID { self?.requestPollID = nil }
+        }) { [weak self] result in
+            guard let self, self.requestPollID == pollID else { return }
+            self.requestPollID = nil
+            guard self.connected, self.requestGeneration == generation,
+                  let page = result as? [String: Any] else { return }
+            let incoming = ((page["requests"] as? [[String: Any]]) ?? []).compactMap(CapturedRequest.init)
+            if self.requests.isEmpty {
+                self.requests = incoming
+                self.cursor = page["nextCursor"] as? String
+                return
+            }
+            let incomingIDs = Set(incoming.map(\.id))
+            self.requests = Array((incoming + self.requests.filter { !incomingIDs.contains($0.id) }).prefix(500))
         }
     }
 
@@ -814,6 +843,7 @@ final class TunnelController: ObservableObject {
             tunnelStarting = true
             tunnelStopping = false
             requestGeneration &+= 1
+            requestPollID = nil
             cursor = nil
             message = "正在建立 VPN…"
         case .disconnecting:
@@ -821,6 +851,7 @@ final class TunnelController: ObservableObject {
             tunnelStarting = false
             tunnelStopping = true
             requestGeneration &+= 1
+            requestPollID = nil
             cursor = nil
             message = "正在停止 VPN…"
         default:
@@ -828,6 +859,7 @@ final class TunnelController: ObservableObject {
             tunnelStarting = false
             tunnelStopping = false
             requestGeneration &+= 1
+            requestPollID = nil
             cursor = nil
             message = "VPN 未启动"
         }

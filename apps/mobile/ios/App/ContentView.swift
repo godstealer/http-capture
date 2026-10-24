@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 struct ContentView: View {
     @EnvironmentObject private var tunnel: TunnelController
@@ -101,6 +102,9 @@ struct ContentView: View {
             .onAppear { portInput = String(tunnel.port) }
             .onChange(of: tunnel.port) { port in
                 if validPort != port { portInput = String(port) }
+            }
+            .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+                tunnel.pollRequests()
             }
             .sheet(isPresented: Binding(get: { tunnel.detailOpen },
                                         set: { if !$0 { tunnel.clearDetail() } })) {

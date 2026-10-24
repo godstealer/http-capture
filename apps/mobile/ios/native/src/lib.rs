@@ -132,11 +132,16 @@ fn start(
     let status = executor.block_on(runtime.status());
     // VPN-originated TCP uses CONNECT for both HTTP and HTTPS. Only the
     // transparent bridge can distinguish plain HTTP after CONNECT from TLS.
-    let bridge = executor
-        .block_on(capture_core::proxy::start_tun_bridge(
-            runtime.engine.clone(),
-        ))
-        .map_err(|e| format!("{e:#}"))?;
+    let bridge = match executor.block_on(capture_core::proxy::start_tun_bridge(
+        runtime.engine.clone(),
+    )) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            let _ = executor.block_on(runtime.shutdown_network());
+            executor.shutdown_background();
+            return Err(format!("Transparent bridge could not start: {error:#}"));
+        }
+    };
     let (sender, incoming) = mpsc::channel(QUEUE_DEPTH);
     let device = PacketDevice {
         incoming,
@@ -145,8 +150,15 @@ fn start(
         context,
     };
     let mut args = Args::default();
-    args.proxy = ArgProxy::try_from(format!("http://{}", bridge.address).as_str())
-        .map_err(|e| e.to_string())?;
+    args.proxy = match ArgProxy::try_from(format!("http://{}", bridge.address).as_str()) {
+        Ok(proxy) => proxy,
+        Err(error) => {
+            executor.block_on(bridge.stop());
+            let _ = executor.block_on(runtime.shutdown_network());
+            executor.shutdown_background();
+            return Err(format!("Transparent bridge address is invalid: {error}"));
+        }
+    };
     args.dns = ArgDns::Virtual;
     args.direct_udp_for_http = true;
     args.ipv6_enabled = true;
@@ -640,6 +652,217 @@ mod tests {
             }
         }).await.expect("iOS packet callback did not receive TCP response");
         assert_eq!(payload, b"world");
+
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await.expect("TUN loop did not stop").unwrap().unwrap();
+        unsafe { drop(Box::from_raw(context as *mut mpsc::UnboundedSender<Vec<u8>>)); }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn packet_device_forwards_udp_without_http_proxy() {
+        use etherparse::{PacketBuilder, SlicedPacket, TransportSlice};
+        use tokio::net::{TcpListener, UdpSocket};
+
+        unsafe extern "C" fn output(packet: *const u8, length: usize, context: *mut c_void) {
+            let sender = &*(context as *const mpsc::UnboundedSender<Vec<u8>>);
+            sender.send(std::slice::from_raw_parts(packet, length).to_vec()).unwrap();
+        }
+
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (input, incoming) = mpsc::channel(8);
+        let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
+        let context = Box::into_raw(Box::new(output_sender)) as usize;
+        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let mut args = Args::default();
+        args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
+            .unwrap();
+        args.dns = ArgDns::Virtual;
+        args.direct_udp_for_http = true;
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(tun2proxy::run(device, MTU, args, cancel.clone()));
+
+        let source = [10, 111, 0, 2];
+        let destination = [127, 0, 0, 1];
+        let origin_port = origin.local_addr().unwrap().port();
+        let request = PacketBuilder::ipv4(source, destination, 64).udp(41004, origin_port);
+        let mut packet = Vec::with_capacity(request.size(4));
+        request.write(&mut packet, b"ping").unwrap();
+        input.send(packet).await.unwrap();
+
+        let mut buffer = [0_u8; 16];
+        let (size, sender) = tokio::time::timeout(std::time::Duration::from_secs(5), origin.recv_from(&mut buffer))
+            .await.expect("UDP origin did not receive packet").unwrap();
+        assert_eq!(&buffer[..size], b"ping");
+        origin.send_to(b"pong", sender).await.unwrap();
+
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Udp(udp)) = packet.transport {
+                    break udp.payload().to_vec();
+                }
+            }
+        }).await.expect("iOS packet callback did not receive UDP response");
+        assert_eq!(payload, b"pong");
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), proxy.accept()).await.is_err());
+
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await.expect("TUN loop did not stop").unwrap().unwrap();
+        unsafe { drop(Box::from_raw(context as *mut mpsc::UnboundedSender<Vec<u8>>)); }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn packet_device_forwards_ipv6_udp() {
+        use etherparse::{PacketBuilder, SlicedPacket, TransportSlice};
+        use tokio::net::UdpSocket;
+
+        unsafe extern "C" fn output(packet: *const u8, length: usize, context: *mut c_void) {
+            let sender = &*(context as *const mpsc::UnboundedSender<Vec<u8>>);
+            sender.send(std::slice::from_raw_parts(packet, length).to_vec()).unwrap();
+        }
+
+        let origin = UdpSocket::bind("[::1]:0").await.unwrap();
+        let (input, incoming) = mpsc::channel(8);
+        let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
+        let context = Box::into_raw(Box::new(output_sender)) as usize;
+        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let mut args = Args::default();
+        args.proxy = ArgProxy::try_from("http://127.0.0.1:1").unwrap();
+        args.dns = ArgDns::Virtual;
+        args.direct_udp_for_http = true;
+        args.ipv6_enabled = true;
+        args.virtual_dns_pool_v6 = Some("fd00:198:19::/96".parse().unwrap());
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(tun2proxy::run(device, MTU, args, cancel.clone()));
+
+        let mut source = [0_u8; 16];
+        source[0] = 0xfd;
+        source[2] = 0x01;
+        source[3] = 0x98;
+        source[5] = 0x18;
+        source[15] = 2;
+        let mut destination = [0_u8; 16];
+        destination[15] = 1;
+        let request = PacketBuilder::ipv6(source, destination, 64)
+            .udp(41005, origin.local_addr().unwrap().port());
+        let mut packet = Vec::with_capacity(request.size(4));
+        request.write(&mut packet, b"ping").unwrap();
+        input.send(packet).await.unwrap();
+
+        let mut buffer = [0_u8; 16];
+        let (size, sender) = tokio::time::timeout(std::time::Duration::from_secs(5), origin.recv_from(&mut buffer))
+            .await.expect("IPv6 UDP origin did not receive packet").unwrap();
+        assert_eq!(&buffer[..size], b"ping");
+        origin.send_to(b"pong", sender).await.unwrap();
+
+        let payload = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Udp(udp)) = packet.transport {
+                    assert_eq!(bytes[0] >> 4, 6);
+                    break udp.payload().to_vec();
+                }
+            }
+        }).await.expect("iOS packet callback did not receive IPv6 UDP response");
+        assert_eq!(payload, b"pong");
+
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await.expect("TUN loop did not stop").unwrap().unwrap();
+        unsafe { drop(Box::from_raw(context as *mut mpsc::UnboundedSender<Vec<u8>>)); }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn packet_device_answers_virtual_dns() {
+        use etherparse::{PacketBuilder, SlicedPacket, TransportSlice};
+        use tokio::net::TcpListener;
+
+        unsafe extern "C" fn output(packet: *const u8, length: usize, context: *mut c_void) {
+            let sender = &*(context as *const mpsc::UnboundedSender<Vec<u8>>);
+            sender.send(std::slice::from_raw_parts(packet, length).to_vec()).unwrap();
+        }
+
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (input, incoming) = mpsc::channel(8);
+        let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
+        let context = Box::into_raw(Box::new(output_sender)) as usize;
+        let device = PacketDevice { incoming, pending: None, callback: output, context };
+        let mut args = Args::default();
+        args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
+            .unwrap();
+        args.dns = ArgDns::Virtual;
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(tun2proxy::run(device, MTU, args, cancel.clone()));
+
+        let query = [
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e',
+            0x07, b'i', b'n', b'v', b'a', b'l', b'i', b'd', 0x00,
+            0x00, 0x01, 0x00, 0x01,
+        ];
+        let request = PacketBuilder::ipv4([10, 111, 0, 2], [10, 111, 0, 1], 64)
+            .udp(41006, 53);
+        let mut packet = Vec::with_capacity(request.size(query.len()));
+        request.write(&mut packet, &query).unwrap();
+        input.send(packet).await.unwrap();
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Udp(udp)) = packet.transport {
+                    if udp.source_port() == 53 { break udp.payload().to_vec(); }
+                }
+            }
+        }).await.expect("virtual DNS did not return an IP packet");
+        assert_eq!(&response[..2], &[0x12, 0x34]);
+        assert_ne!(response[2] & 0x80, 0, "DNS response bit missing");
+        assert_eq!(&response[6..8], &[0x00, 0x01], "expected one virtual A answer");
+        let virtual_ip: [u8; 4] = response[response.len() - 4..].try_into().unwrap();
+
+        let syn = PacketBuilder::ipv4([10, 111, 0, 2], virtual_ip, 64)
+            .tcp(41007, 443, 42, 65535).syn();
+        let mut packet = Vec::with_capacity(syn.size(0));
+        syn.write(&mut packet, &[]).unwrap();
+        input.send(packet).await.unwrap();
+        let server_sequence = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Tcp(tcp)) = packet.transport {
+                    if tcp.syn() { break tcp.sequence_number(); }
+                }
+            }
+        }).await.expect("virtual IP did not receive SYN-ACK");
+        let ack = PacketBuilder::ipv4([10, 111, 0, 2], virtual_ip, 64)
+            .tcp(41007, 443, 43, 65535).ack(server_sequence.wrapping_add(1));
+        let mut packet = Vec::with_capacity(ack.size(0));
+        ack.write(&mut packet, &[]).unwrap();
+        input.send(packet).await.unwrap();
+        let data = PacketBuilder::ipv4([10, 111, 0, 2], virtual_ip, 64)
+            .tcp(41007, 443, 43, 65535).psh().ack(server_sequence.wrapping_add(1));
+        let mut packet = Vec::with_capacity(data.size(5));
+        data.write(&mut packet, b"hello").unwrap();
+        input.send(packet).await.unwrap();
+
+        let (mut upstream, _) = tokio::time::timeout(std::time::Duration::from_secs(5), proxy.accept())
+            .await.expect("virtual IP did not connect to proxy").unwrap();
+        let mut buffer = [0_u8; 1024];
+        let head = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let size = upstream.read(&mut buffer).await.unwrap();
+                assert!(size > 0 && head.len() + size <= 4096, "invalid CONNECT head");
+                head.extend_from_slice(&buffer[..size]);
+            }
+            head
+        }).await.expect("proxy did not receive virtual DNS CONNECT");
+        assert!(head.starts_with(b"CONNECT example.invalid:443 HTTP/1.1\r\n"), "{head:?}");
 
         cancel.cancel();
         tokio::time::timeout(std::time::Duration::from_secs(5), task)
