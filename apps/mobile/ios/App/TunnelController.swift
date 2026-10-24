@@ -152,6 +152,7 @@ final class TunnelController: ObservableObject {
     @Published private(set) var responseSaving = false
     @Published private(set) var sendingManualRequest = false
     @Published private(set) var canCancelManualUpload = false
+    @Published private(set) var manualResultID: String?
     @Published var port = UserDefaults.standard.object(forKey: "capture_port") as? Int ?? 8899 {
         didSet { UserDefaults.standard.set(port, forKey: "capture_port") }
     }
@@ -871,7 +872,10 @@ final class TunnelController: ObservableObject {
         if let error = result["error"] as? String { message = "请求失败：" + error }
         else { message = "请求已发送，状态 \(result["status"] ?? "未知")" }
         refreshRequests()
-        if let id = result["id"] as? String { showDetail(id: id) }
+        if let id = result["id"] as? String {
+            manualResultID = id
+            showDetail(id: id)
+        }
     }
 
     func exportCertificate() {

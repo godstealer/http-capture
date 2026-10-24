@@ -444,6 +444,9 @@ private struct ManualRequestView: View {
                     ProgressView("正在发送请求…")
                     if tunnel.canCancelManualUpload {
                         Button("取消正文上传", role: .cancel) { tunnel.cancelManualUpload() }
+                    } else {
+                        Text("请求正在处理；可返回首页等待结果。")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 if let inputError { Text(inputError).foregroundStyle(.red) }
@@ -451,7 +454,13 @@ private struct ManualRequestView: View {
             }
             .navigationTitle("新建请求")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(tunnel.canCancelManualUpload ? "取消并关闭" :
+                           tunnel.sendingManualRequest ? "后台等待" : "关闭") {
+                        if tunnel.canCancelManualUpload { tunnel.cancelManualUpload() }
+                        dismiss()
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("发送") {
                         do {
@@ -481,6 +490,10 @@ private struct ManualRequestView: View {
                 } catch {
                     inputError = error.localizedDescription
                 }
+            }
+            .interactiveDismissDisabled(tunnel.sendingManualRequest)
+            .onChange(of: tunnel.manualResultID) { resultID in
+                if resultID != nil { dismiss() }
             }
         }
     }
