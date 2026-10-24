@@ -10,12 +10,34 @@ use jni::{
     JavaVM,
 };
 use std::{
+    io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
+
+const MAX_MOBILE_BODY: usize = 1024 * 1024;
+
+fn validate_mobile_body(draft: &RequestDraft) -> Result<(), String> {
+    if draft.body_base64.len() > MAX_MOBILE_BODY.div_ceil(3) * 4 {
+        return Err("Request body exceeds the 1 MiB mobile limit".into());
+    }
+    let mut decoder = base64::read::DecoderReader::new(
+        draft.body_base64.as_bytes(), &base64::engine::general_purpose::STANDARD);
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut length = 0;
+    loop {
+        let count = decoder.read(&mut buffer).map_err(|error| format!("Invalid body base64: {error}"))?;
+        if count == 0 { break; }
+        length += count;
+        if length > MAX_MOBILE_BODY {
+            return Err("Request body exceeds the 1 MiB mobile limit".into());
+        }
+    }
+    Ok(())
+}
 
 #[cfg(target_os = "android")]
 use tun2proxy::{ArgDns, ArgProxy, Args, CancellationToken, TcpProxyObserver};
@@ -425,9 +447,7 @@ fn saved_request(data_dir: &Path, id: &str) -> Result<serde_json::Value, String>
     let library = session_store(data_dir)?.library().map_err(|error| error.to_string())?;
     let request = library.requests.iter().find(|request| request.id == id)
         .ok_or("Saved request not found")?;
-    if request.draft.body_base64.len() > (1024 * 1024 + 2) / 3 * 4 {
-        return Err("Saved request body exceeds the mobile editor limit".into());
-    }
+    validate_mobile_body(&request.draft)?;
     serde_json::to_value(request).map_err(|error| error.to_string())
 }
 
@@ -446,9 +466,7 @@ fn save_request(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String>
     let input: SaveMobileRequest = serde_json::from_str(raw).map_err(|error| error.to_string())?;
     let name = input.name.trim();
     if name.is_empty() || name.len() > 512 { return Err("Request name must be 1–512 bytes".into()); }
-    if input.draft.body_base64.len() > (1024 * 1024 + 2) / 3 * 4 {
-        return Err("Request body exceeds the 1 MiB mobile limit".into());
-    }
+    validate_mobile_body(&input.draft)?;
     capture_core::http1::validate_draft(&input.draft).map_err(|error| error.to_string())?;
     let store = session_store(data_dir)?;
     let mut library = store.library().map_err(|error| error.to_string())?;
@@ -654,7 +672,9 @@ fn configure_response_rewrite(data_dir: &Path, raw: &str) -> Result<serde_json::
 }
 
 fn send_request(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String> {
+    if raw.len() > 2 * 1024 * 1024 { return Err("Request exceeds 2 MiB".into()); }
     let request: RequestDraft = serde_json::from_str(raw).map_err(|error| error.to_string())?;
+    validate_mobile_body(&request)?;
     let active = {
         let current = capture()
             .lock()
@@ -1203,6 +1223,19 @@ mod tests {
         server.join().unwrap();
         assert_eq!(result["status"], 200);
         assert!(result["error"].is_null());
+        let mut oversized_draft = saved["draft"].clone();
+        oversized_draft["bodyBase64"] = json!(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD, vec![0_u8; MAX_MOBILE_BODY + 1]));
+        assert!(send_request(dir.path(), &oversized_draft.to_string())
+            .unwrap_err().contains("1 MiB"));
+        assert!(save_request(dir.path(), &json!({"name":"oversized",
+            "draft":oversized_draft}).to_string()).unwrap_err().contains("1 MiB"));
+        let store = session_store(dir.path()).unwrap();
+        let mut library = store.library().unwrap();
+        library.requests.iter_mut().find(|request| request.id == id).unwrap()
+            .draft.body_base64 = oversized_draft["bodyBase64"].as_str().unwrap().to_owned().into();
+        store.save_library(library).unwrap();
+        assert!(saved_request(dir.path(), &id).unwrap_err().contains("1 MiB"));
     }
 
     #[test]
