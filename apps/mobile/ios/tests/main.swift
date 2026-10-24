@@ -24,17 +24,24 @@ do {
 
     let binary = Data([0, 255, 10])
     let multipart = try RequestBodyCodec.compose(mode: .multipart, text: "city=台北", file: binary,
-                                                 fileName: "test\".bin", mimeType: "bad\r\ntype")
+                                                 fileName: "test\".bin", mimeType: "bad\r\ntype",
+                                                 multipartFileField: "upload")
     let boundary = String(multipart.contentType!.split(separator: "=").last!)
     expect(multipart.replaceContentType, "Multipart 必须更新旧 Content-Type")
     expect(multipart.bytes.starts(with: Data("--\(boundary)\r\n".utf8)), "Multipart 起始边界错误")
-    expect(multipart.bytes.range(of: Data("name=\"file\"; filename=\"test_.bin\"".utf8)) != nil,
-           "文件名没有安全编码")
+    expect(multipart.bytes.range(of: Data("name=\"upload\"; filename=\"test_.bin\"".utf8)) != nil,
+           "文件字段名或文件名没有正确编码")
     expect(multipart.bytes.range(of: Data("Content-Type: application/octet-stream".utf8)) != nil,
            "非法 MIME 未回退")
     expect(multipart.bytes.range(of: binary) != nil, "文件原始字节丢失")
     expect(Data(multipart.bytes.suffix(Data("--\(boundary)--\r\n".utf8).count)) == Data("--\(boundary)--\r\n".utf8),
            "Multipart 结束边界错误")
+    do {
+        _ = try RequestBodyCodec.compose(mode: .multipart, text: "", file: binary,
+                                         fileName: "test.bin", mimeType: "text/plain",
+                                         multipartFileField: "")
+        preconditionFailure("空文件字段名应被拒绝")
+    } catch RequestBodyCodec.BodyError.invalid(_) { }
 
     let raw = try RequestBodyCodec.compose(mode: .base64, text: "AP8K\n", file: nil,
                                            fileName: nil, mimeType: nil)

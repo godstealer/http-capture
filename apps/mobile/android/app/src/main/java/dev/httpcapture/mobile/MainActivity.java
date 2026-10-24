@@ -121,6 +121,7 @@ public final class MainActivity extends Activity {
         int bodyMode;
         Uri fileUri;
         String fileName;
+        String multipartFileField = "file";
     }
 
     @Override public void onCreate(Bundle state) {
@@ -130,6 +131,9 @@ public final class MainActivity extends Activity {
             pendingVpnPort = state.getInt("pendingVpnPort", 0);
             if (state.getBoolean("requestFilePending", false)) {
                 pendingFileRequest = new ManualRequestDraft();
+                pendingFileRequest.savedId = state.getString("requestSavedId");
+                pendingFileRequest.savedName = state.getString("requestSavedName");
+                pendingFileRequest.savedCollectionId = state.getString("requestSavedCollectionId");
                 pendingFileRequest.method = state.getString("requestMethod", "GET");
                 pendingFileRequest.url = state.getString("requestUrl", "");
                 pendingFileRequest.headers = state.getString("requestHeaders", "");
@@ -139,6 +143,7 @@ public final class MainActivity extends Activity {
                 String fileUri = state.getString("requestFileUri");
                 if (fileUri != null) pendingFileRequest.fileUri = Uri.parse(fileUri);
                 pendingFileRequest.fileName = state.getString("requestFileName");
+                pendingFileRequest.multipartFileField = state.getString("requestMultipartFileField", "file");
             }
         }
         LinearLayout layout = new LinearLayout(this);
@@ -1071,6 +1076,11 @@ public final class MainActivity extends Activity {
         fileLabel.setText(draft.fileUri == null ? "未选择文件" : "文件："
             + (draft.fileName == null ? "attachment.bin" : draft.fileName));
         content.addView(fileLabel);
+        EditText multipartFileField = new EditText(this);
+        multipartFileField.setHint("文件字段名，例如 upload");
+        multipartFileField.setSingleLine(true);
+        multipartFileField.setText(draft.multipartFileField);
+        content.addView(multipartFileField);
         Button pickFile = new Button(this);
         pickFile.setText("选择文件（文件 / Multipart）");
         content.addView(pickFile);
@@ -1090,6 +1100,7 @@ public final class MainActivity extends Activity {
             draft.body = body.getText().toString();
             draft.engine = SEND_ENGINES[engine.getSelectedItemPosition()];
             draft.bodyMode = bodyMode.getSelectedItemPosition();
+            draft.multipartFileField = multipartFileField.getText().toString();
             pendingFileRequest = draft;
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             pick.addCategory(Intent.CATEGORY_OPENABLE);
@@ -1104,16 +1115,17 @@ public final class MainActivity extends Activity {
                 int fileVisibility = position == 3 || position == 4 ? View.VISIBLE : View.GONE;
                 pickFile.setVisibility(fileVisibility);
                 fileLabel.setVisibility(fileVisibility);
+                multipartFileField.setVisibility(position == 4 ? View.VISIBLE : View.GONE);
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
         dialog.setOnShowListener(ignored -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-                copyManualInputs(draft, method, url, headers, body, engine, bodyMode);
+                copyManualInputs(draft, method, url, headers, body, multipartFileField, engine, bodyMode);
                 if (sendManualRequest(draft)) dialog.dismiss();
             });
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
-                copyManualInputs(draft, method, url, headers, body, engine, bodyMode);
+                copyManualInputs(draft, method, url, headers, body, multipartFileField, engine, bodyMode);
                 saveManualRequest(draft, dialog);
             });
         });
@@ -1122,11 +1134,13 @@ public final class MainActivity extends Activity {
 
     private static void copyManualInputs(ManualRequestDraft draft, EditText method,
                                          EditText url, EditText headers, EditText body,
+                                         EditText multipartFileField,
                                          Spinner engine, Spinner bodyMode) {
         draft.method = method.getText().toString();
         draft.url = url.getText().toString();
         draft.headers = headers.getText().toString();
         draft.body = body.getText().toString();
+        draft.multipartFileField = multipartFileField.getText().toString();
         draft.engine = SEND_ENGINES[engine.getSelectedItemPosition()];
         draft.bodyMode = bodyMode.getSelectedItemPosition();
     }
@@ -1766,7 +1780,7 @@ public final class MainActivity extends Activity {
                 break;
             case 4: // Multipart form fields and optional file
                 String boundary = "----HttpCapture" + UUID.randomUUID().toString().replace("-", "");
-                bytes = RequestBodyCodec.multipart(draft.body, boundary, draft.fileName,
+                bytes = RequestBodyCodec.multipart(draft.body, boundary, draft.multipartFileField, draft.fileName,
                     draft.fileUri == null ? null : getContentResolver().getType(draft.fileUri),
                     draft.fileUri == null ? null : readRequestFile(draft.fileUri));
                 contentType = "multipart/form-data; boundary=" + boundary;
@@ -2707,6 +2721,9 @@ public final class MainActivity extends Activity {
         state.putInt("pendingVpnPort", pendingVpnPort);
         if (pendingFileRequest != null) {
             state.putBoolean("requestFilePending", true);
+            state.putString("requestSavedId", pendingFileRequest.savedId);
+            state.putString("requestSavedName", pendingFileRequest.savedName);
+            state.putString("requestSavedCollectionId", pendingFileRequest.savedCollectionId);
             state.putString("requestMethod", pendingFileRequest.method);
             state.putString("requestUrl", pendingFileRequest.url);
             state.putString("requestHeaders", pendingFileRequest.headers);
@@ -2716,6 +2733,7 @@ public final class MainActivity extends Activity {
             state.putString("requestFileUri", pendingFileRequest.fileUri == null
                 ? null : pendingFileRequest.fileUri.toString());
             state.putString("requestFileName", pendingFileRequest.fileName);
+            state.putString("requestMultipartFileField", pendingFileRequest.multipartFileField);
         }
         super.onSaveInstanceState(state);
     }

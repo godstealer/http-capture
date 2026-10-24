@@ -550,6 +550,7 @@ private struct ManualRequestView: View {
     @State private var fileData: Data?
     @State private var fileName: String?
     @State private var fileMimeType: String?
+    @State private var multipartFileField = "file"
     @State private var showingFileImporter = false
     @State private var inputError: String?
     private let savedID: String?
@@ -622,6 +623,11 @@ private struct ManualRequestView: View {
                         TextEditor(text: $requestBody).frame(minHeight: 150)
                     }
                     if bodyMode == .file || bodyMode == .multipart {
+                        if bodyMode == .multipart {
+                            TextField("文件字段名，例如 upload", text: $multipartFileField)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
                         Button("选择文件") { showingFileImporter = true }
                         if let fileName {
                             Text("已选择：\(fileName)（\(fileData?.count ?? 0) 字节）")
@@ -657,7 +663,8 @@ private struct ManualRequestView: View {
                         do {
                             let prepared = try RequestBodyCodec.compose(
                                 mode: bodyMode, text: requestBody, file: fileData,
-                                fileName: fileName, mimeType: fileMimeType)
+                                fileName: fileName, mimeType: fileMimeType,
+                                multipartFileField: multipartFileField)
                             let entered = requestName.trimmingCharacters(in: .whitespacesAndNewlines)
                             let generated = method.trimmingCharacters(in: .whitespacesAndNewlines)
                                 .uppercased() + " " + url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -707,7 +714,8 @@ private struct ManualRequestView: View {
                         do {
                             let prepared = try RequestBodyCodec.compose(
                                 mode: bodyMode, text: requestBody, file: fileData,
-                                fileName: fileName, mimeType: fileMimeType)
+                                fileName: fileName, mimeType: fileMimeType,
+                                multipartFileField: multipartFileField)
                             inputError = nil
                             tunnel.sendManualRequest(method: method, url: url, engine: engine,
                                                      headers: headers, body: prepared)

@@ -12,10 +12,10 @@ public final class RequestBodyCodecTest {
 
         byte[] file = {0, 10, (byte) 255};
         byte[] actual = RequestBodyCodec.multipart("city=北九州", "----Test",
-            "a\".bin", "text/plain", file);
+            "upload", "a\".bin", "text/plain", file);
         ByteArrayOutputStream expected = new ByteArrayOutputStream();
         expected.write(("------Test\r\nContent-Disposition: form-data; name=\"city\"\r\n\r\n"
-            + "北九州\r\n------Test\r\nContent-Disposition: form-data; name=\"file\"; "
+            + "北九州\r\n------Test\r\nContent-Disposition: form-data; name=\"upload\"; "
             + "filename=\"a_.bin\"\r\nContent-Type: text/plain\r\n\r\n")
             .getBytes(StandardCharsets.UTF_8));
         expected.write(file);
@@ -24,11 +24,17 @@ public final class RequestBodyCodecTest {
         check(RequestBodyCodec.safeMimeType("text/plain\r\nX-Test: bad")
             .equals("application/octet-stream"), "unsafe MIME fallback");
         try {
-            RequestBodyCodec.multipart("", "----Test", "big.bin", "application/octet-stream",
+            RequestBodyCodec.multipart("", "----Test", "file", "big.bin", "application/octet-stream",
                 new byte[RequestBodyCodec.MAX_BODY_BYTES]);
             throw new AssertionError("oversize multipart accepted");
         } catch (IllegalArgumentException expectedFailure) {
             check(expectedFailure.getMessage().contains("1 MiB"), "size error");
+        }
+        try {
+            RequestBodyCodec.multipart("", "----Test", "", "a.bin", "text/plain", file);
+            throw new AssertionError("empty file field accepted");
+        } catch (IllegalArgumentException expectedFailure) {
+            check(expectedFailure.getMessage().contains("字段名"), "file field error");
         }
         System.out.println("RequestBodyCodecTest passed");
     }

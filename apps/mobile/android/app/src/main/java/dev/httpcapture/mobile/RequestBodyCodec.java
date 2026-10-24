@@ -27,7 +27,7 @@ final class RequestBodyCodec {
         return encoded.toString().getBytes(StandardCharsets.US_ASCII);
     }
 
-    static byte[] multipart(String fields, String boundary, String fileName,
+    static byte[] multipart(String fields, String boundary, String fileFieldName, String fileName,
                             String mimeType, byte[] file) throws Exception {
         if (!boundary.matches("[A-Za-z0-9-]{1,70}")) {
             throw new IllegalArgumentException("Multipart 边界无效");
@@ -43,8 +43,10 @@ final class RequestBodyCodec {
             checkSize(output.size());
         }
         if (file != null) {
+            String fieldName = safeMultipartToken(fileFieldName == null ? "file" : fileFieldName);
             String name = safeMultipartToken(fileName == null ? "attachment.bin" : fileName);
-            writeUtf8(output, "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\""
+            writeUtf8(output, "--" + boundary + "\r\nContent-Disposition: form-data; name=\""
+                + fieldName + "\"; filename=\""
                 + name + "\"\r\nContent-Type: " + safeMimeType(mimeType) + "\r\n\r\n");
             checkSize(output.size() + file.length);
             output.write(file);

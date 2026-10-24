@@ -50,7 +50,8 @@ enum RequestBodyCodec {
     }
 
     static func compose(mode: ManualBodyMode, text: String, file: Data?,
-                        fileName: String?, mimeType: String?) throws -> PreparedRequestBody {
+                        fileName: String?, mimeType: String?,
+                        multipartFileField: String = "file") throws -> PreparedRequestBody {
         let maxInputBytes = mode == .base64 ? maxBodyBytes * 3 / 2 : maxTextBytes
         guard mode == .file || text.utf8.count <= maxInputBytes else {
             throw BodyError.invalid(mode == .base64 ? "Base64 输入最多 1.5 MiB" : "文本输入最多 64 KiB")
@@ -86,7 +87,7 @@ enum RequestBodyCodec {
                 try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(safeToken(name))\"\r\n\r\n\(value)\r\n", to: &body)
             }
             if let file {
-                try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeToken(fileName ?? "attachment.bin"))\"\r\nContent-Type: \(safeMimeType(mimeType))\r\n\r\n", to: &body)
+                try append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(safeToken(multipartFileField))\"; filename=\"\(safeToken(fileName ?? "attachment.bin"))\"\r\nContent-Type: \(safeMimeType(mimeType))\r\n\r\n", to: &body)
                 guard body.count + file.count <= maxBodyBytes else { throw BodyError.invalid("请求正文最多 1 MiB") }
                 body.append(file)
                 try append("\r\n", to: &body)
