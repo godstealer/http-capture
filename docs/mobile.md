@@ -227,6 +227,8 @@ Android 8–10 增加“通过系统安装 CA 证书”入口，将内核生成�
 
 Android 手动请求的 Multipart `Content-Type` 现在在首个启用的同名头原位置替换边界值，保留已停用的同名头，并移除其余启用的重复项；只有原请求没有启用的同名头时才追加一个新头。调试 APK 和测试 APK 离线编译通过，顺序与停用状态断言待模拟器执行。
 
+iOS 手动请求的发送和保存现共用同一段 `Content-Type` 处理：Multipart 在原位置更新首个启用头、保留停用头、移除多余启用头；非 Multipart 正文保留已有启用头。已补 Swift 回归断言，当前 Windows 无 Swift 编译器，须在下一次集中 Mac CI 中编译并执行。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。

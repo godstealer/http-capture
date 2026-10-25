@@ -1079,20 +1079,9 @@ final class TunnelController: ObservableObject {
             message = error.localizedDescription
             return
         }
-        if let contentType = body.contentType {
-            if body.replaceContentType {
-                headerRows.removeAll {
-                    ($0["name"] as? String)?.lowercased() == "content-type"
-                }
-            }
-            let hasContentType = headerRows.contains {
-                $0["disabled"] as? Bool != true &&
-                ($0["name"] as? String)?.lowercased() == "content-type"
-            }
-            if !hasContentType {
-                headerRows.append(["name": "Content-Type", "value": contentType])
-            }
-        }
+        headerRows = RequestHeaderText.applyingContentType(body.contentType,
+                                                            replace: body.replaceContentType,
+                                                            to: headerRows)
         var draft: [String: Any] = ["method": method, "url": url, "engine": engine.rawValue,
                                     "headers": headerRows, "bodyBase64": ""]
         manualSendGeneration &+= 1
@@ -1181,17 +1170,9 @@ final class TunnelController: ObservableObject {
         var headerRows: [[String: Any]]
         do { headerRows = try RequestHeaderText.parse(headers) }
         catch { message = error.localizedDescription; return }
-        if let contentType = body.contentType {
-            if body.replaceContentType {
-                headerRows.removeAll { ($0["name"] as? String)?.lowercased() == "content-type" }
-            }
-            if !headerRows.contains(where: {
-                $0["disabled"] as? Bool != true &&
-                ($0["name"] as? String)?.lowercased() == "content-type"
-            }) {
-                headerRows.append(["name": "Content-Type", "value": contentType])
-            }
-        }
+        headerRows = RequestHeaderText.applyingContentType(body.contentType,
+                                                            replace: body.replaceContentType,
+                                                            to: headerRows)
         var draft: [String: Any] = ["method": method, "url": url, "engine": engine.rawValue,
                                     "headers": headerRows, "bodyBase64": ""]
         manualSendGeneration &+= 1

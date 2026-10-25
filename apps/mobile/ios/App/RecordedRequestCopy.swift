@@ -202,6 +202,29 @@ enum RequestHeaderText {
         return lines.joined(separator: "\n")
     }
 
+    static func applyingContentType(_ contentType: String?, replace: Bool,
+                                    to rows: [[String: Any]]) -> [[String: Any]] {
+        guard let contentType else { return rows }
+        func isEnabledContentType(_ row: [String: Any]) -> Bool {
+            row["disabled"] as? Bool != true &&
+                (row["name"] as? String)?.lowercased() == "content-type"
+        }
+        if !replace && rows.contains(where: isEnabledContentType) { return rows }
+
+        var result: [[String: Any]] = []
+        var inserted = false
+        for var row in rows {
+            if replace && isEnabledContentType(row) {
+                if inserted { continue }
+                row["value"] = contentType
+                inserted = true
+            }
+            result.append(row)
+        }
+        if !inserted { result.append(["name": "Content-Type", "value": contentType]) }
+        return result
+    }
+
     private static func isTokenByte(_ byte: UInt8) -> Bool {
         switch byte {
         case 48...57, 65...90, 97...122: return true

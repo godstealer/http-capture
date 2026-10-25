@@ -81,6 +81,30 @@ do {
     let browserHeaders = try RequestHeaderText.parse("GET /upload HTTP/2\n:authority: example.test\nX-Test: one\nX-Test: two")
     expect(browserHeaders.count == 2 && browserHeaders[0]["value"] as? String == "one",
            "浏览器请求头粘贴未保留普通请求头顺序")
+    let multipartHeaders = try RequestHeaderText.parse(
+        "X-Before: one\n# Content-Type: disabled\ncontent-type: old\nX-Middle: two\nContent-Type: duplicate\nX-After: three")
+    let replacedHeaders = RequestHeaderText.applyingContentType(multipart.contentType,
+                                                                 replace: multipart.replaceContentType,
+                                                                 to: multipartHeaders)
+    expect(replacedHeaders.count == 5 &&
+           replacedHeaders.map { $0["name"] as? String ?? "" } ==
+               ["X-Before", "Content-Type", "content-type", "X-Middle", "X-After"] &&
+           replacedHeaders[1]["disabled"] as? Bool == true &&
+           replacedHeaders[1]["value"] as? String == "disabled" &&
+           replacedHeaders[2]["value"] as? String == multipart.contentType,
+           "Multipart 替换应保留停用头与首个启用头的位置，并移除多余启用头")
+    let appendedHeaders = RequestHeaderText.applyingContentType(multipart.contentType,
+                                                                 replace: true,
+                                                                 to: Array(multipartHeaders.prefix(2)))
+    expect(appendedHeaders.count == 3 && appendedHeaders[1]["disabled"] as? Bool == true &&
+           appendedHeaders[2]["value"] as? String == multipart.contentType,
+           "只有停用 Content-Type 时应追加启用头")
+    let preservedHeaders = RequestHeaderText.applyingContentType("application/json",
+                                                                  replace: false,
+                                                                  to: multipartHeaders)
+    expect(preservedHeaders.count == multipartHeaders.count &&
+           preservedHeaders[2]["value"] as? String == "old",
+           "非 Multipart 正文不应覆盖现有启用 Content-Type")
     do {
         _ = try RequestHeaderText.parse("X-Bad Name: value")
         preconditionFailure("非法请求头名称应被拒绝")
