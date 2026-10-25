@@ -65,8 +65,12 @@ final class RequestBodyCodec {
     }
 
     private static String safeMultipartToken(String value) {
-        String cleaned = value.replace('"', '_').replace('\r', '_').replace('\n', '_')
-            .replace('\\', '_').replace('/', '_').trim();
+        for (int index = 0; index < value.length(); index++) {
+            if (Character.isISOControl(value.charAt(index))) {
+                throw new IllegalArgumentException("Multipart 字段名或文件名含控制字符");
+            }
+        }
+        String cleaned = value.replace('"', '_').replace('\\', '_').replace('/', '_').trim();
         if (cleaned.isEmpty() || cleaned.length() > 128) {
             throw new IllegalArgumentException("Multipart 字段名或文件名无效");
         }

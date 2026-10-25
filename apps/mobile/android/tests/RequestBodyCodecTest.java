@@ -36,6 +36,20 @@ public final class RequestBodyCodecTest {
         } catch (IllegalArgumentException expectedFailure) {
             check(expectedFailure.getMessage().contains("字段名"), "file field error");
         }
+        for (String invalidName : new String[] {"upload\tother", "bad\u0000name"}) {
+            try {
+                RequestBodyCodec.multipart("", "----Test", invalidName, "a.bin", "text/plain", file);
+                throw new AssertionError("control character in multipart field accepted");
+            } catch (IllegalArgumentException expectedFailure) {
+                check(expectedFailure.getMessage().contains("控制字符"), "control character error");
+            }
+        }
+        try {
+            RequestBodyCodec.multipart("", "----Test", "file", "a\rb.bin", "text/plain", file);
+            throw new AssertionError("control character in multipart filename accepted");
+        } catch (IllegalArgumentException expectedFailure) {
+            check(expectedFailure.getMessage().contains("控制字符"), "filename control character error");
+        }
         System.out.println("RequestBodyCodecTest passed");
     }
 
