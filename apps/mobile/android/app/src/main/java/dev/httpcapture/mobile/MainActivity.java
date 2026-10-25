@@ -14,6 +14,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.security.KeyChain;
 import android.text.InputType;
 import android.provider.OpenableColumns;
 import android.util.Base64;
@@ -110,6 +111,7 @@ public final class MainActivity extends Activity {
     private static final int SAVE_CONFIG_REQUEST = 1207;
     private static final int PICK_CONFIG_REQUEST = 1208;
     private static final int SAVE_CONFIG_RECOVERY_REQUEST = 1209;
+    private static final int INSTALL_CA_REQUEST = 1210;
     private static final String[] BODY_MODES = {
         "文本", "JSON", "URL 表单", "文件", "Multipart 表单", "Base64"
     };
@@ -201,6 +203,8 @@ public final class MainActivity extends Activity {
         start = button(layout, "启动 VPN 抓包", view -> startCapture());
         stop = button(layout, "停止", view -> stopCapture());
         exportCa = button(layout, "保存 CA 公钥证书", view -> saveCertificate());
+        if (Build.VERSION.SDK_INT < 30)
+            button(layout, "通过系统安装 CA 证书", view -> installCertificate());
         exportSessionButton = button(layout, "导出抓包记录 JSON", view -> chooseSessionExport());
         exportConfigButton = button(layout, "导出全局配置", view -> chooseConfigurationExport());
         button(layout, "导入全局配置", view -> chooseConfigurationImport());
@@ -2527,6 +2531,37 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void installCertificate() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            status.setText("Android 11 及以上请先保存 CA，再从系统设置安装");
+            return;
+        }
+        worker.execute(() -> {
+            JSONObject reply = parseReply(NativeCapture.certificate(getFilesDir().getAbsolutePath()));
+            if (!reply.optBoolean("ok")) {
+                main.post(() -> status.setText("读取 CA 失败：" + reply.optString("error")));
+                return;
+            }
+            try {
+                String pem = reply.getString("value");
+                if (pem.isEmpty()) throw new IllegalStateException("CA 证书内容为空");
+                main.post(() -> {
+                    try {
+                        Intent install = KeyChain.createInstallIntent();
+                        install.putExtra(KeyChain.EXTRA_CERTIFICATE,
+                            pem.getBytes(StandardCharsets.US_ASCII));
+                        install.putExtra(KeyChain.EXTRA_NAME, "HTTP Capture CA");
+                        startActivityForResult(install, INSTALL_CA_REQUEST);
+                    } catch (RuntimeException error) {
+                        status.setText("无法打开证书安装界面：" + error.getMessage());
+                    }
+                });
+            } catch (Exception error) {
+                main.post(() -> status.setText("安装 CA 失败：" + error.getMessage()));
+            }
+        });
+    }
+
     private void chooseSessionExport() {
         Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         save.addCategory(Intent.CATEGORY_OPENABLE);
@@ -2993,6 +3028,12 @@ public final class MainActivity extends Activity {
                 pendingVpnPort = 0;
                 status.setText("VPN 未授权；本机代理仍在运行，可继续导出 CA 证书");
             }
+            return;
+        }
+        if (requestCode == INSTALL_CA_REQUEST) {
+            status.setText(resultCode == RESULT_OK
+                ? "CA 已由系统安装；目标 App 仍需信任用户 CA 才能解密 HTTPS"
+                : "未安装 CA；可保存证书后从系统设置安装");
             return;
         }
         if (requestCode == PICK_REQUEST_FILE) {

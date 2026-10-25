@@ -223,6 +223,8 @@ iOS 也新增同名开关，默认保留原有 `NEProxySettings`；关闭时 Pac
 
 iOS 宿主现在区分用户主动停止与启动失败、意外断开；后者通过 `NEVPNConnection.fetchLastDisconnectError` 尝试显示系统或 Packet Tunnel 返回的原因，迟到的错误回调不会覆盖新状态。系统未提供具体错误时显示“VPN 意外断开”。该 Swift 改动仍待 Mac 编译，并需在设备上触发启动失败、运行时断开及主动停止分别验收。依据：[Apple 断开错误接口](https://developer.apple.com/documentation/networkextension/nevpnconnection/fetchlastdisconnecterror%28completionhandler%3A%29)。
 
+Android 8–10 增加“通过系统安装 CA 证书”入口，将内核生成的公开 CA 交给系统 `KeyChain` 安装界面，并根据用户结果显示提示；Android 11 及以上继续使用“保存 CA 公钥证书”后从系统设置安装，因平台不再允许应用通过该 Intent 安装 CA。APK 离线编译通过，旧系统安装对话框和实际信任状态仍待设备验收。即使安装成功，目标 App 仍需信任用户 CA；证书固定不受此设置改变。依据：[Android KeyChain 安装接口](https://developer.android.com/reference/android/security/KeyChain#createInstallIntent())。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。
