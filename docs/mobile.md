@@ -14,7 +14,7 @@ iOS 请求列表现按已有来源字段标注抓包或手动重放，并在无�
 
 iOS 导出界面显示按字节计算的进度，可在分块传输中取消；取消与失败会关闭并删除宿主临时文件，扩展侧通过导出令牌释放文件。取消发生在扩展生成文件期间时，界面会等待该操作返回并清理旧令牌后才允许重新导出；VPN 断开时会废弃宿主暂存与迟到回调。开始下一次导出时会删除上一次尚未分享出去的临时副本。此 Swift 增量尚未经过 Mac 编译或设备验收。
 
-2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,486,441 字节，SHA-256 `09E41634423A7DF72C1614EA1C980DC411DCE72DFE65E4ACF430F1F087A868C6`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认应用图标引用桌面版现有图标；包内有 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。此包尚未安装到设备，本地包也未作为正式发行附件上传。
+2026-10-25 最新本地 Android 调试 APK：`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`，125,487,590 字节，SHA-256 `A8CEF5F071365C243DA1FC951D03E0804C34BC92A3C4DA47F2C78C694B3ED5C8`。`apksigner verify` 确认 v2 签名有效，`aapt` 确认目标 API 36；先前包结构检查确认应用图标引用桌面版现有图标、含 arm64-v8a 与 x86_64 两份原生库，manifest 含 VPN 服务及前台服务、通知权限。Android Lint 无错误，应用图标缺失告警已消除。当前 Android Rust 内核源码离线测试 9 项全部通过；此包尚未安装到设备，本地包也未作为正式发行附件上传。
 
 Android 的历史会话 JSON 现在可在停止 VPN 和本机代理后导出。运行时复用当前存储，停止后按应用私有目录打开 `sessions.db`，将记录写入同一种桌面可导入格式；首次尚无记录时会导出空会话。Rust 定向测试验证关闭存储后仍能导出已保存的抓包记录；Java 与 instrumentation 源码离线编译、双架构 APK 重建及 v2 签名验证通过。设备上的系统文件选择器、停止后导出以及大文件复制仍待验收。
 
