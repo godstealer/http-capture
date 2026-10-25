@@ -1,13 +1,18 @@
 package dev.httpcapture.mobile;
 
 import android.app.Activity;
+import android.annotation.SuppressLint;
 import android.app.Instrumentation;
 import android.app.Notification;
 import android.app.NotificationManager;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.VpnService;
 import android.os.Bundle;
+import android.os.Build;
 import android.service.notification.StatusBarNotification;
 import android.util.Base64;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -28,6 +33,8 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -442,6 +449,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             udpProbe.setComponent(new ComponentName("dev.httpcapture.probe",
                     "dev.httpcapture.probe.ProbeReceiver"));
             getTargetContext().sendBroadcast(udpProbe);
+            verifyIPv6Dns();
             runVpnTlsSmoke();
             String runningCa = new JSONObject(NativeCapture.certificate(
                 getTargetContext().getFilesDir().getAbsolutePath())).getString("value");
@@ -476,6 +484,34 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (CaptureVpnService.isManaged()) {
                 throw new AssertionError("VPN did not stop: " + CaptureVpnService.message());
             }
+        }
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag") // Android 12 and older lack the flag overload.
+    private void verifyIPv6Dns() throws Exception {
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicReference<String> failure = new AtomicReference<>();
+        BroadcastReceiver result = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                failure.set(intent.getStringExtra("error"));
+                completed.countDown();
+            }
+        };
+        IntentFilter filter = new IntentFilter("dev.httpcapture.mobile.DNS_V6_RESULT");
+        if (Build.VERSION.SDK_INT >= 33)
+            getTargetContext().registerReceiver(result, filter, Context.RECEIVER_EXPORTED);
+        else getTargetContext().registerReceiver(result, filter);
+        try {
+            Intent probe = new Intent("dev.httpcapture.probe.RUN_DNS_V6");
+            probe.setComponent(new ComponentName("dev.httpcapture.probe",
+                    "dev.httpcapture.probe.ProbeReceiver"));
+            getTargetContext().sendBroadcast(probe);
+            if (!completed.await(15, TimeUnit.SECONDS))
+                throw new AssertionError("VPN IPv6 virtual DNS probe timed out");
+            if (failure.get() != null)
+                throw new AssertionError("VPN IPv6 virtual DNS failed: " + failure.get());
+        } finally {
+            getTargetContext().unregisterReceiver(result);
         }
     }
 

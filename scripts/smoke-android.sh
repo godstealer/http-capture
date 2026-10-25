@@ -95,6 +95,22 @@ if [ "$udp_ok" != true ]; then
 fi
 echo 'VPN raw UDP reached the origin and returned unchanged'
 
+dns_v6_ok=false
+for _ in $(seq 1 20); do
+  probe_log="$(adb logcat -d -s 'HttpCaptureProbe:I' '*:S')"
+  if grep -Fq 'VPN IPv6 virtual DNS AAAA succeeded' <<<"$probe_log"; then
+    dns_v6_ok=true
+    break
+  fi
+  sleep 1
+done
+if [ "$dns_v6_ok" != true ]; then
+  adb logcat -d -s 'HttpCaptureProbe:V' '*:S' || true
+  echo 'VPN IPv6 virtual DNS did not answer the probe' >&2
+  exit 1
+fi
+echo 'VPN IPv6 DNS query received a virtual AAAA answer'
+
 adb shell am start -W -n dev.httpcapture.mobile/.MainActivity
 sleep 3
 for _ in $(seq 1 20); do

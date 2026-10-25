@@ -161,7 +161,8 @@ public final class CaptureVpnService extends VpnService {
                 .addRoute("0.0.0.0", 0)
                 .addAddress("fd00:198:18::2", 128)
                 .addRoute("::", 0)
-                .addDnsServer("10.111.0.1");
+                .addDnsServer("10.111.0.1")
+                .addDnsServer("fd00:198:18::1");
             if (allowedPackages == null || allowedPackages.length == 0) {
                 builder.addDisallowedApplication(getPackageName());
             } else {

@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.HttpURLConnection;
 import java.net.Socket;
 import java.net.URL;
@@ -36,6 +37,9 @@ public final class ProbeReceiver extends BroadcastReceiver {
                     runTls(intent.getStringExtra("caPem"));
                 } else if ("dev.httpcapture.probe.RUN_UDP".equals(intent.getAction())) {
                     runUdp();
+                } else if ("dev.httpcapture.probe.RUN_DNS_V6".equals(intent.getAction())) {
+                    runDnsV6();
+                    sendDnsV6Result(context, null);
                 } else if ("dev.httpcapture.probe.RUN_HTTP_STACK".equals(intent.getAction())) {
                     runHttpStack(context, intent);
                 } else {
@@ -43,6 +47,8 @@ public final class ProbeReceiver extends BroadcastReceiver {
                 }
             } catch (Exception error) {
                 Log.e("HttpCaptureProbe", "raw TCP request failed", error);
+                if ("dev.httpcapture.probe.RUN_DNS_V6".equals(intent.getAction()))
+                    sendDnsV6Result(context, error.toString());
             } finally {
                 pending.finish();
             }
@@ -115,6 +121,55 @@ public final class ProbeReceiver extends BroadcastReceiver {
             }
             Log.i("HttpCaptureProbe", "raw VPN UDP echo succeeded");
         }
+    }
+
+    private static void runDnsV6() throws Exception {
+        String name = "vpn-smoke.invalid";
+        byte[] query = new byte[12 + name.length() + 2 + 4];
+        query[0] = (byte) 0xCA;
+        query[1] = (byte) 0xFE;
+        query[2] = 1; // Recursion desired.
+        query[5] = 1; // One question.
+        int offset = 12;
+        for (String label : name.split("\\.")) {
+            byte[] bytes = label.getBytes(StandardCharsets.US_ASCII);
+            query[offset++] = (byte) bytes.length;
+            System.arraycopy(bytes, 0, query, offset, bytes.length);
+            offset += bytes.length;
+        }
+        query[offset++] = 0;
+        query[offset++] = 0;
+        query[offset++] = 28; // AAAA.
+        query[offset++] = 0;
+        query[offset++] = 1; // IN.
+        if (offset != query.length) throw new IllegalStateException("invalid DNS query length");
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.bind(new InetSocketAddress(InetAddress.getByName("::"), 0));
+            socket.connect(InetAddress.getByName("fd00:198:18::1"), 53);
+            socket.setSoTimeout(10_000);
+            socket.send(new DatagramPacket(query, query.length));
+            byte[] buffer = new byte[512];
+            DatagramPacket reply = new DatagramPacket(buffer, buffer.length);
+            socket.receive(reply);
+            int size = reply.getLength();
+            if (size < query.length + 16 || buffer[0] != query[0] || buffer[1] != query[1]
+                    || (buffer[2] & 0x80) == 0 || (buffer[3] & 0x0f) != 0
+                    || (buffer[6] & 0xff) == 0)
+                throw new IllegalStateException("virtual IPv6 DNS did not answer AAAA query");
+            byte[] answer = Arrays.copyOfRange(buffer, size - 16, size);
+            byte[] expectedPrefix = Arrays.copyOfRange(
+                InetAddress.getByName("fd00:198:19::").getAddress(), 0, 12);
+            if (!Arrays.equals(expectedPrefix, Arrays.copyOfRange(answer, 0, 12)))
+                throw new IllegalStateException("virtual IPv6 DNS returned wrong AAAA pool");
+            Log.i("HttpCaptureProbe", "VPN IPv6 virtual DNS AAAA succeeded");
+        }
+    }
+
+    private static void sendDnsV6Result(Context context, String error) {
+        Intent result = new Intent("dev.httpcapture.mobile.DNS_V6_RESULT")
+            .setPackage("dev.httpcapture.mobile");
+        result.putExtra("error", error);
+        context.sendBroadcast(result);
     }
 
     private static void runTls(String caPem) throws Exception {
