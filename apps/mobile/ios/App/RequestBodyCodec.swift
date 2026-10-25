@@ -125,7 +125,10 @@ enum RequestBodyCodec {
     }
 
     private static func safeToken(_ value: String) throws -> String {
-        let cleaned = value.map { "\"\r\n\\/".contains($0) ? "_" : String($0) }.joined()
+        guard !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw BodyError.invalid("Multipart 字段名或文件名含控制字符")
+        }
+        let cleaned = value.map { "\"\\/".contains($0) ? "_" : String($0) }.joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, cleaned.count <= 128 else { throw BodyError.invalid("Multipart 字段名或文件名无效") }
         return cleaned

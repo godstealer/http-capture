@@ -152,6 +152,8 @@ iOS 导出抓包 CA 公钥时现用系统 Security 框架校验证书 DER，拒�
 iOS 新建请求的正文编辑已增加文本、JSON、URL 表单、Base64、原始文件和带普通字段及单个文件的 Multipart。文件经系统文件选择器授权，最多读取 1 MiB；文本输入最多 64 KiB，最终正文最多 1 MiB。较小请求可直接通过扩展消息发送，较大请求使用带上传令牌和偏移校验的 16 KiB 分段消息，完成后再提交给内核；扩展同一时间仅暂存一份最多 1 MiB 的正文，新的上传会替换未完成的旧上传。Rust 本机测试已验证 160 KiB 二进制请求分段、错误偏移与未完成提交的拒绝、实际 HTTP POST 字节一致性，以及完整 1 MiB 分段接收和旧令牌失效；JSON 语法、表单编码、Multipart 边界/文件字节和非法 MIME 回退有独立 Swift 测试，已接入手动 iOS 构建工作流。Mac CI 已通过宿主编译与 Swift 测试，设备实际发送仍待 iPhone 验证；Multipart 文件字段名可修改；本次 Swift 源码和回归用例仍待 Mac 编译，设备实际发送仍需 iPhone 验证。超过 1 MiB 的流式上传尚未实现。
 2026-10-25：iOS 离线重放补验完整 1 MiB 二进制 POST：本机上游逐字节核对请求，离线抓包记录再按 16 KiB 读取并与原文比较；恰好 1 MiB 可发送，超出 1 字节的直接发送和保存均拒绝。原生桥接 16 项测试全部通过。Swift/Xcode 与 iPhone 设备链路仍待 Mac/真机验证。
 分段上传取得令牌后，iOS 宿主现在允许用户取消；上传失败、偏移不一致或 VPN 状态变化时会尝试取消扩展内的临时正文，并使迟到的回调失效，避免继续分段或误提交。进入最终提交阶段后取消入口关闭，因为请求可能已交给内核发送。SwiftUI 改动尚待 Mac CI 编译和 iPhone 操作验收。
+
+iOS Multipart 编辑器与 Android 一样拒绝字段名、文件名中的控制字符，避免生成异常的 `Content-Disposition` 行；独立 Swift 测试覆盖制表符、NUL 和回车。Windows 当前不能编译 Swift，这项校验及测试仍待 Mac CI 执行。
 iOS 手动请求弹窗在上传阶段显示“取消并关闭”，会先取消暂存正文；请求已开始发送或进入最终提交后可明确选择“后台等待”，避免误以为关闭弹窗就撤回请求。发送返回记录 ID 时，弹窗会关闭并展示该请求详情；返回错误且没有记录 ID 时保留输入以便修改。此界面改动尚待 Mac 编译和 iPhone 操作验收。
 iOS Packet Tunnel 收到 App 消息后，先有界检查大小和 UTF-8，再把内核命令放到扩展工作队列；完成时通过 Network Extension 的消息完成回调返回结果。这样手动请求或上传提交等待上游时，不在系统调用 `handleAppMessage` 的线程上同步等待；多个命令的并发仍由内核状态锁与上传令牌校验约束。Rust 回归现让上游暂缓回复手动请求，同时查询扩展状态，确认状态查询在响应放行前完成；2026-10-24 本机定向测试通过。此项 Swift 改动尚待 Mac 编译及 iPhone 长请求、停止 VPN 交错验证。接口依据：[Apple `handleAppMessage(_:completionHandler:)`](https://developer.apple.com/documentation/networkextension/netunnelprovider/handleappmessage(_:completionhandler:))。
 同一 Rust 扩展回归还在手动请求等待上游响应时调用停止，并在上游放行前检查停止完成，再用相同端口重启；本机定向测试通过。该检查覆盖内核/转发任务的清理，仍需在 iPhone 验证系统停止回调与宿主界面行为。

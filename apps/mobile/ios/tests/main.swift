@@ -61,6 +61,24 @@ do {
                                          multipartFileField: "")
         preconditionFailure("空文件字段名应被拒绝")
     } catch RequestBodyCodec.BodyError.invalid(_) { }
+    for invalidName in ["upload\tother", "bad\u{0000}name"] {
+        do {
+            _ = try RequestBodyCodec.compose(mode: .multipart, text: "", file: binary,
+                                             fileName: "test.bin", mimeType: "text/plain",
+                                             multipartFileField: invalidName)
+            preconditionFailure("含控制字符的 Multipart 字段名应被拒绝")
+        } catch RequestBodyCodec.BodyError.invalid(let reason) {
+            expect(reason.contains("控制字符"), "Multipart 字段名错误说明不明确")
+        }
+    }
+    do {
+        _ = try RequestBodyCodec.compose(mode: .multipart, text: "", file: binary,
+                                         fileName: "bad\rname.bin", mimeType: "text/plain",
+                                         multipartFileField: "file")
+        preconditionFailure("含控制字符的 Multipart 文件名应被拒绝")
+    } catch RequestBodyCodec.BodyError.invalid(let reason) {
+        expect(reason.contains("控制字符"), "Multipart 文件名错误说明不明确")
+    }
 
     let raw = try RequestBodyCodec.compose(mode: .base64, text: "AP8K\n", file: nil,
                                            fileName: nil, mimeType: nil)
