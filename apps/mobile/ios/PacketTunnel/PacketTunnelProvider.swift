@@ -62,7 +62,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             NEIPv6Route(destinationAddress: "ff00::", networkPrefixLength: 8)
         ]
         settings.ipv6Settings = ipv6
-        let dns = NEDNSSettings(servers: ["10.111.0.1"])
+        let dns = NEDNSSettings(servers: ["10.111.0.1", "fd00:198:18::1"])
         dns.matchDomains = [""]
         settings.dnsSettings = dns
         if systemProxyHint {

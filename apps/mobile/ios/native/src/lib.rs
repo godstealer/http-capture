@@ -2008,6 +2008,105 @@ mod tests {
         unsafe { drop(Box::from_raw(context as *mut mpsc::UnboundedSender<Vec<u8>>)); }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn packet_device_answers_ipv6_virtual_dns() {
+        use etherparse::{PacketBuilder, SlicedPacket, TransportSlice};
+        use tokio::net::TcpListener;
+
+        unsafe extern "C" fn output(packet: *const u8, length: usize, context: *mut c_void) {
+            let sender = &*(context as *const mpsc::UnboundedSender<Vec<u8>>);
+            sender.send(std::slice::from_raw_parts(packet, length).to_vec()).unwrap();
+        }
+
+        let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (input, incoming) = mpsc::channel(8);
+        let (output_sender, mut returned) = mpsc::unbounded_channel::<Vec<u8>>();
+        let context = Box::into_raw(Box::new(output_sender)) as usize;
+        let device = PacketDevice { incoming, pending: None, callback: output, context, release_context: None };
+        let mut args = Args::default();
+        args.proxy = ArgProxy::try_from(format!("http://{}", proxy.local_addr().unwrap()).as_str())
+            .unwrap();
+        args.dns = ArgDns::Virtual;
+        args.ipv6_enabled = true;
+        args.virtual_dns_pool_v6 = Some("fd00:198:19::/96".parse().unwrap());
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(tun2proxy::run(device, MTU, args, cancel.clone()));
+
+        let query = [
+            0x12, 0x35, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e',
+            0x07, b'i', b'n', b'v', b'a', b'l', b'i', b'd', 0x00,
+            0x00, 0x1c, 0x00, 0x01,
+        ];
+        let source = "fd00:198:18::2".parse::<std::net::Ipv6Addr>().unwrap().octets();
+        let destination = "fd00:198:18::1".parse::<std::net::Ipv6Addr>().unwrap().octets();
+        let request = PacketBuilder::ipv6(source, destination, 64).udp(41008, 53);
+        let mut packet = Vec::with_capacity(request.size(query.len()));
+        request.write(&mut packet, &query).unwrap();
+        input.send(packet).await.unwrap();
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                assert_eq!(bytes[0] >> 4, 6, "DNS response must travel over IPv6");
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Udp(udp)) = packet.transport {
+                    if udp.source_port() == 53 { break udp.payload().to_vec(); }
+                }
+            }
+        }).await.expect("IPv6 virtual DNS did not return an IP packet");
+        assert_eq!(&response[..2], &[0x12, 0x35]);
+        assert_ne!(response[2] & 0x80, 0, "DNS response bit missing");
+        assert_eq!(&response[6..8], &[0x00, 0x01], "expected one virtual AAAA answer");
+        let virtual_ip: [u8; 16] = response[response.len() - 16..].try_into().unwrap();
+        let pool_prefix = "fd00:198:19::".parse::<std::net::Ipv6Addr>().unwrap().octets();
+        assert_eq!(&virtual_ip[..12], &pool_prefix[..12]);
+
+        let syn = PacketBuilder::ipv6(source, virtual_ip, 64)
+            .tcp(41009, 443, 42, 65535).syn();
+        let mut packet = Vec::with_capacity(syn.size(0));
+        syn.write(&mut packet, &[]).unwrap();
+        input.send(packet).await.unwrap();
+        let server_sequence = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let bytes = returned.recv().await.unwrap();
+                let packet = SlicedPacket::from_ip(&bytes).unwrap();
+                if let Some(TransportSlice::Tcp(tcp)) = packet.transport {
+                    if tcp.syn() { break tcp.sequence_number(); }
+                }
+            }
+        }).await.expect("virtual IPv6 address did not receive SYN-ACK");
+        let ack = PacketBuilder::ipv6(source, virtual_ip, 64)
+            .tcp(41009, 443, 43, 65535).ack(server_sequence.wrapping_add(1));
+        let mut packet = Vec::with_capacity(ack.size(0));
+        ack.write(&mut packet, &[]).unwrap();
+        input.send(packet).await.unwrap();
+        let data = PacketBuilder::ipv6(source, virtual_ip, 64)
+            .tcp(41009, 443, 43, 65535).psh().ack(server_sequence.wrapping_add(1));
+        let mut packet = Vec::with_capacity(data.size(5));
+        data.write(&mut packet, b"hello").unwrap();
+        input.send(packet).await.unwrap();
+
+        let (mut upstream, _) = tokio::time::timeout(std::time::Duration::from_secs(5), proxy.accept())
+            .await.expect("virtual IPv6 address did not connect to proxy").unwrap();
+        let mut buffer = [0_u8; 1024];
+        let head = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                let size = upstream.read(&mut buffer).await.unwrap();
+                assert!(size > 0 && head.len() + size <= 4096, "invalid CONNECT head");
+                head.extend_from_slice(&buffer[..size]);
+            }
+            head
+        }).await.expect("proxy did not receive virtual IPv6 DNS CONNECT");
+        assert!(head.starts_with(b"CONNECT example.invalid:443 HTTP/1.1\r\n"), "{head:?}");
+
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await.expect("TUN loop did not stop").unwrap().unwrap();
+        unsafe { drop(Box::from_raw(context as *mut mpsc::UnboundedSender<Vec<u8>>)); }
+    }
+
     #[test]
     fn extension_lifecycle_and_blocking_commands() {
         let _guard = ACTIVE_TEST.lock().unwrap();

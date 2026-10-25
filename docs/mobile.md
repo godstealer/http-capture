@@ -39,9 +39,9 @@ iOS 手动 HTTP(S) 请求也可在停抓时发送：宿主用同一 `Engine::rep
 
 iOS 停抓时还可查看和编辑请求阻止规则、整份响应替换与部分内容修改规则。宿主复用共享内核的配置校验和 App Group 数据库，响应规则更新继续检查配置版本，避免旧页面覆盖新版本；再次启动 VPN 时会载入离线保存的规则。Rust 测试覆盖离线保存、重新打开内核后的持久化和旧版本拒绝；Swift/Xcode 编译、界面交互及实际流量效果仍待验证。
 
-本机离线手动发送集成测试现进一步验证规则的实际效果：HTTP 上游返回 200 和 `real`，保存的响应替换规则让调用方收到 201 和 `ok`；另一条域名阻止规则让未连接目标主机的请求直接得到 403。iOS Rust 桥接当前 20 项测试通过。这证明宿主离线重放链路会应用规则，但仍不能代替 iPhone 系统 VPN 抓包流量的验收。
+本机离线手动发送集成测试现进一步验证规则的实际效果：HTTP 上游返回 200 和 `real`，保存的响应替换规则让调用方收到 201 和 `ok`；另一条域名阻止规则让未连接目标主机的请求直接得到 403。iOS Rust 桥接当前 21 项测试通过。这证明宿主离线重放链路会应用规则，但仍不能代替 iPhone 系统 VPN 抓包流量的验收。
 
-iOS 停抓后也可导出抓包 CA 公钥证书，并导入、启用、停用或删除上游 CA。宿主使用共享目录中的证书库，保持配置版本校验；CA 分享文件仅含公开证书，不含私钥。首次须启动一次 VPN 初始化共享目录并完成可能存在的旧目录迁移。Rust 离线入口原本已要求共享数据库存在；宿主现在也会在目录缺失时提前给出清晰提示。Rust 桥接当前 20 项测试通过，覆盖公开 CA、离线导入与启用、旧版本拒绝及重新打开内核后的配置。Swift/Mac 编译、系统证书安装和真实私有 CA 站点仍待设备验收。
+iOS 停抓后也可导出抓包 CA 公钥证书，并导入、启用、停用或删除上游 CA。宿主使用共享目录中的证书库，保持配置版本校验；CA 分享文件仅含公开证书，不含私钥。首次须启动一次 VPN 初始化共享目录并完成可能存在的旧目录迁移。Rust 离线入口原本已要求共享数据库存在；宿主现在也会在目录缺失时提前给出清晰提示。Rust 桥接当前 21 项测试通过，覆盖公开 CA、离线导入与启用、旧版本拒绝及重新打开内核后的配置。Swift/Mac 编译、系统证书安装和真实私有 CA 站点仍待设备验收。
 
 iOS 抓包 CA 分享文件现将内核返回的 PEM 公钥证书转换成 DER `.cer`，拒绝私钥或无效 Base64 文本；界面提示安装后在“设置 → 通用 → 关于本机 → 证书信任设置”开启完全信任，并链接 [Apple 官方说明](https://support.apple.com/zh-cn/102390)。转换逻辑已补 Swift 测试，仍待 Mac CI 编译和 iPhone 实际安装验收。
 
@@ -192,7 +192,7 @@ Android 设备冒烟测试已追加配置迁移的 JNI 全链路：加密导出�
 
 ## 上游 CA 证书
 
-Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 单张导入文件暂限 64 KiB，VPN 运行时通过扩展消息、停抓时通过宿主 Rust 桥接保存。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40086909266) 已通过模拟器证书导入/启停/删除、VPN 和 HTTPS 抓取测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），并上传双架构 APK。iOS Rust 桥接当前 20 项测试通过；近期 Swift 界面改动仍待 Mac CI，真机上游私有 CA 站点验收仍待设备测试。
+Android 与 iOS 已接入共享证书库的“上游 CA 证书”：可以从文件导入公开 PEM/DER CA，设置精确目标域名和端口或留空适用于所有 HTTPS 目标，再启用、停用或删除。此配置只影响代理连接目标服务器时的信任；手机端 HTTPS 解密仍需要另行安装并信任抓包 CA。Android 文件上限 1 MiB；iOS 单张导入文件暂限 64 KiB，VPN 运行时通过扩展消息、停抓时通过宿主 Rust 桥接保存。已完成 Android Java 编译、arm64/x86_64 原生库编译、两种架构调试 APK 与测试 APK 组装，确认 APK 含双架构库与新 JNI 符号；[Android mobile build](https://github.com/godstealer/http-capture/actions/runs/40086909266) 已通过模拟器证书导入/启停/删除、VPN 和 HTTPS 抓取测试（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），并上传双架构 APK。iOS Rust 桥接当前 21 项测试通过；近期 Swift 界面改动仍待 Mac CI，真机上游私有 CA 站点验收仍待设备测试。
 
 ## iOS 分发边界
 
@@ -216,6 +216,8 @@ Apple 的 [TN3120](https://developer.apple.com/documentation/technotes/tn3120-ex
 Android 模拟器冒烟现增加同一端口连续两次启动/停止 VPN，并在每次停止后检查回环代理端口已释放，覆盖快速重启时的资源清理。测试 APK 已在本地编译通过；当前 Windows 无可运行模拟器或连接设备，执行结果须等集中推送后的 Android CI。
 
 Android VPN 现在同时向系统公布 IPv4 和 IPv6 虚拟 DNS 地址。API 36 冒烟增加独立 App 经 IPv6 向虚拟 DNS 发送 AAAA 查询，并检查返回地址属于内核的 IPv6 虚拟地址池；测试在 VPN 停止前等待结果，避免把异步请求误判为成功。应用、仪器测试和独立探针 APK 已离线重编，Lint 通过；真实路由与响应仍待模拟器 CI 和设备验收。
+
+iOS Packet Tunnel 也向系统公布同一组 IPv4/IPv6 虚拟 DNS 地址。原生包适配器回归经 IPv6 UDP 获取虚拟 AAAA 地址，再向该地址建立 TCP 连接，确认代理收到原域名的 CONNECT；Windows 主机侧 iOS 原生桥接 21 项测试全部通过。仍须经过 Mac 上的 Swift/Xcode 编译，并在 iPhone 验证系统实际选择的 DNS 服务器及 VPN 路由。
 
 冒烟还增加端口已被其他监听器占用的启动失败场景：确认用户能看到失败原因、VPN 服务和内核退出，且占用结束后端口可重新绑定。测试 APK 离线编译通过；API 36 模拟器执行仍待集中 CI。此项只验证启动失败清理，不替代真机上的端口冲突和前台服务限制验收。
 
