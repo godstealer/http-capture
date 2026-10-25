@@ -1336,11 +1336,13 @@ final class TunnelController: ObservableObject {
     }
 
     func exportCertificate() {
+        certificateURL = nil
         send(["method": "certificate"]) { [weak self] value in
             guard let self, let pem = value as? String else { return }
             do {
-                let file = FileManager.default.temporaryDirectory.appendingPathComponent("http-capture-ca.pem")
-                try pem.write(to: file, atomically: true, encoding: .utf8)
+                let der = try CertificateExport.der(fromPEM: pem)
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("http-capture-ca.cer")
+                try der.write(to: file, options: .atomic)
                 self.certificateURL = file
             } catch {
                 self.message = error.localizedDescription

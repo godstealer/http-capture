@@ -71,8 +71,11 @@ struct ContentView: View {
                     }
                     Button("上游 CA 证书") { showingTrustedCertificates = true }
                         .disabled(tunnel.tunnelStarting || tunnel.tunnelStopping)
-                    Text("HTTPS 解密需要在设备设置中安装并信任该 CA；证书固定的应用可能拒绝解密。")
+                    Text("分享 .cer 证书后，在 iPhone 上打开并按系统提示安装；然后前往“设置 → 通用 → 关于本机 → 证书信任设置”，为 HTTP Capture Local CA 开启完全信任。证书固定的应用仍可能拒绝解密。")
                         .font(.footnote).foregroundStyle(.secondary)
+                    Link("查看 Apple 的证书信任说明",
+                         destination: URL(string: "https://support.apple.com/zh-cn/102390")!)
+                        .font(.footnote)
                     if !tunnel.connected {
                         Text("停抓时可管理证书；首次使用请先启动一次 VPN 创建共享证书目录。")
                             .font(.footnote).foregroundStyle(.secondary)

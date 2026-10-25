@@ -5,6 +5,18 @@ func expect(_ condition: @autoclosure () -> Bool, _ reason: String) {
 }
 
 do {
+    let certificate = try CertificateExport.der(fromPEM:
+        "-----BEGIN CERTIFICATE-----\r\nAQID\r\n-----END CERTIFICATE-----\r\n")
+    expect(certificate == Data([1, 2, 3]), "抓包 CA 分享文件没有使用 PEM 中的 DER 字节")
+    do {
+        _ = try CertificateExport.der(fromPEM: "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----")
+        preconditionFailure("私钥不能作为 CA 公钥证书导出")
+    } catch CertificateExport.ExportError.invalidCertificate { }
+    do {
+        _ = try CertificateExport.der(fromPEM: "-----BEGIN CERTIFICATE-----\ninvalid!\n-----END CERTIFICATE-----")
+        preconditionFailure("无效 Base64 证书应被拒绝")
+    } catch CertificateExport.ExportError.invalidCertificate { }
+
     let form = try RequestBodyCodec.compose(mode: .form, text: "城市=台北 桃园\nx=a+b", file: nil,
                                             fileName: nil, mimeType: nil)
     expect(String(data: form.bytes, encoding: .utf8) ==
