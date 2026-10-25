@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum CertificateExport {
     enum ExportError: LocalizedError {
@@ -19,7 +20,8 @@ enum CertificateExport {
             throw ExportError.invalidCertificate
         }
         let encoded = lines.dropFirst().dropLast().joined()
-        guard let der = Data(base64Encoded: encoded), !der.isEmpty else {
+        guard let der = Data(base64Encoded: encoded),
+              SecCertificateCreateWithData(nil, der as CFData) != nil else {
             throw ExportError.invalidCertificate
         }
         return der
