@@ -225,6 +225,8 @@ iOS 宿主现在区分用户主动停止与启动失败、意外断开；后者�
 
 Android 8–10 增加“通过系统安装 CA 证书”入口，将内核生成的公开 CA 交给系统 `KeyChain` 安装界面，并根据用户结果显示提示；Android 11 及以上继续使用“保存 CA 公钥证书”后从系统设置安装，因平台不再允许应用通过该 Intent 安装 CA。APK 离线编译通过，旧系统安装对话框和实际信任状态仍待设备验收。即使安装成功，目标 App 仍需信任用户 CA；证书固定不受此设置改变。依据：[Android KeyChain 安装接口](https://developer.android.com/reference/android/security/KeyChain#createInstallIntent())。
 
+Android 手动请求的 Multipart `Content-Type` 现在在首个启用的同名头原位置替换边界值，保留已停用的同名头，并移除其余启用的重复项；只有原请求没有启用的同名头时才追加一个新头。调试 APK 和测试 APK 离线编译通过，顺序与停用状态断言待模拟器执行。
+
 待完成顺序：
 
 1. 在 Android 真机安装 arm64-v8a APK；补验本机代理 HTTP/HTTPS、VPN TCP/DNS、停止清理与 CA 证书安装。模拟器已有部分 VPN、HTTPS 与证书导入测试通过，不能代替真机。

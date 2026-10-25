@@ -47,6 +47,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         try {
             runSmoke();
+            runMultipartHeaderOrderSmoke();
             runBodyBoundarySmoke();
             runVpnLifecycleSmoke();
             runSelectedAppSmoke();
@@ -794,6 +795,31 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             getTargetContext().getFilesDir().getAbsolutePath(), draft.toString()));
         if (rejectedSend.optBoolean("ok") || !rejectedSend.optString("error").contains("1 MiB"))
             throw new AssertionError("Oversized direct replay was accepted: " + rejectedSend);
+    }
+
+    private void runMultipartHeaderOrderSmoke() throws Exception {
+        JSONArray headers = new JSONArray()
+            .put(new JSONObject().put("name", "Content-Type").put("value", "disabled value")
+                .put("disabled", true))
+            .put(new JSONObject().put("name", "content-type").put("value", "old value"))
+            .put(new JSONObject().put("name", "X-After").put("value", "keep"))
+            .put(new JSONObject().put("name", "Content-Type").put("value", "duplicate"));
+        JSONArray prepared = MainActivity.applyContentType(headers,
+            "multipart/form-data; boundary=Test", true);
+        if (prepared.length() != 3
+                || !prepared.getJSONObject(0).optBoolean("disabled")
+                || !"disabled value".equals(prepared.getJSONObject(0).getString("value"))
+                || !"content-type".equals(prepared.getJSONObject(1).getString("name"))
+                || !"multipart/form-data; boundary=Test".equals(
+                    prepared.getJSONObject(1).getString("value"))
+                || !"X-After".equals(prepared.getJSONObject(2).getString("name")))
+            throw new AssertionError("Multipart Content-Type changed header order or disabled rows");
+        JSONArray onlyDisabled = MainActivity.applyContentType(new JSONArray()
+            .put(new JSONObject().put("name", "Content-Type").put("value", "hidden")
+                .put("disabled", true)), "multipart/form-data; boundary=Test", true);
+        if (onlyDisabled.length() != 2 || !onlyDisabled.getJSONObject(0).optBoolean("disabled")
+                || onlyDisabled.getJSONObject(1).optBoolean("disabled"))
+            throw new AssertionError("Multipart did not add an active Content-Type after disabled row");
     }
 
     private void runSavedRequestSmoke() throws Exception {

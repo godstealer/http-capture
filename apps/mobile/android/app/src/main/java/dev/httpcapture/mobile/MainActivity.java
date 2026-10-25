@@ -1867,16 +1867,24 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private static JSONArray applyContentType(JSONArray headers, String contentType,
-                                              boolean replace) throws JSONException {
+    static JSONArray applyContentType(JSONArray headers, String contentType,
+                                      boolean replace) throws JSONException {
         if (contentType == null) return headers;
         JSONArray result = new JSONArray();
         boolean found = false;
         for (int i = 0; i < headers.length(); i++) {
             JSONObject header = headers.getJSONObject(i);
             if ("Content-Type".equalsIgnoreCase(header.optString("name"))) {
-                if (replace) continue;
-                if (!header.optBoolean("disabled")) found = true;
+                if (!header.optBoolean("disabled")) {
+                    if (replace) {
+                        if (found) continue;
+                        result.put(new JSONObject().put("name", header.getString("name"))
+                            .put("value", contentType).put("disabled", false));
+                        found = true;
+                        continue;
+                    }
+                    found = true;
+                }
             }
             result.put(header);
         }
