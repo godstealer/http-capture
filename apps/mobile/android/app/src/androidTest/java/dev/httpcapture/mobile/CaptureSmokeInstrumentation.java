@@ -191,9 +191,15 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         probe.putExtra("path", "/?" + path);
         probe.putExtra("expectProxyHint", attempt == 0);
         probe.putExtra("proxyPort", port);
-        getTargetContext().sendBroadcast(probe);
         long deadline = System.currentTimeMillis() + 20_000;
+        // The emulator can hand off its default network while the VPN restarts.
+        // Require a completed capture after that transient connection settles.
+        long nextProbe = 0;
         while (System.currentTimeMillis() < deadline) {
+            if (System.currentTimeMillis() >= nextProbe) {
+                getTargetContext().sendBroadcast(probe);
+                nextProbe = System.currentTimeMillis() + 3_000;
+            }
             JSONArray rows = expectOk(recent("", path)).getJSONArray("requests");
             for (int index = 0; index < rows.length(); index++) {
                 JSONObject row = rows.getJSONObject(index);
@@ -303,11 +309,15 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 probe.setComponent(new ComponentName("dev.httpcapture.probe",
                         "dev.httpcapture.probe.ProbeReceiver"));
                 probe.putExtra("path", "/" + selectedPath);
-                getTargetContext().sendBroadcast(probe);
                 deadline = System.currentTimeMillis() + 20_000;
+                long nextProbe = 0;
                 boolean captured = false;
                 String lastState = "请求尚未出现";
                 while (System.currentTimeMillis() < deadline) {
+                    if (System.currentTimeMillis() >= nextProbe) {
+                        getTargetContext().sendBroadcast(probe);
+                        nextProbe = System.currentTimeMillis() + 3_000;
+                    }
                     JSONArray rows = expectOk(recent("", selectedPath))
                             .getJSONArray("requests");
                     for (int index = 0; index < rows.length(); index++) {
