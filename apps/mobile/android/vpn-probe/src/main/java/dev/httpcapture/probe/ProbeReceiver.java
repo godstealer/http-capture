@@ -154,7 +154,7 @@ public final class ProbeReceiver extends BroadcastReceiver {
             int size = reply.getLength();
             if (size < query.length + 16 || buffer[0] != query[0] || buffer[1] != query[1]
                     || (buffer[2] & 0x80) == 0 || (buffer[3] & 0x0f) != 0
-                    || (buffer[6] & 0xff) == 0)
+                    || (((buffer[6] & 0xff) << 8) | (buffer[7] & 0xff)) == 0)
                 throw new IllegalStateException("virtual IPv6 DNS did not answer AAAA query");
             byte[] answer = Arrays.copyOfRange(buffer, size - 16, size);
             byte[] expectedPrefix = Arrays.copyOfRange(
