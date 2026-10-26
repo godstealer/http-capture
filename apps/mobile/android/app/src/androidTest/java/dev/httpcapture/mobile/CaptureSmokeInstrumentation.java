@@ -306,12 +306,16 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                 getTargetContext().sendBroadcast(probe);
                 deadline = System.currentTimeMillis() + 20_000;
                 boolean captured = false;
+                String lastState = "请求尚未出现";
                 while (System.currentTimeMillis() < deadline) {
                     JSONArray rows = expectOk(recent("", selectedPath))
                             .getJSONArray("requests");
                     for (int index = 0; index < rows.length(); index++) {
                         JSONObject row = rows.getJSONObject(index);
-                        if (!previous.contains(row.getString("id")) && !row.isNull("status")) {
+                        if (previous.contains(row.getString("id"))) continue;
+                        lastState = row.optString("state") + " · HTTP " + row.optString("status")
+                                + " · " + row.optString("error");
+                        if (!row.isNull("status")) {
                             captured = true;
                             break;
                         }
@@ -319,7 +323,9 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
                     if (captured) break;
                     Thread.sleep(200);
                 }
-                if (!captured) throw new AssertionError("Selected app request was not captured");
+                if (!captured) throw new AssertionError("Selected app request was not captured: "
+                        + lastState + " · " + CaptureVpnService.message()
+                        + " · tunnel " + NativeCapture.tunnelStatus());
             } finally {
                 Intent stop = new Intent(getTargetContext(), CaptureVpnService.class);
                 stop.setAction(CaptureVpnService.ACTION_STOP);

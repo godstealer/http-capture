@@ -41,6 +41,8 @@ fi
 printf '%s\n' "$output"
 if ! grep -Fq 'smokeStatus=ok' <<<"$output" ||
    ! grep -Fq 'INSTRUMENTATION_CODE: -1' <<<"$output"; then
+  cat "$origin_log" || true
+  adb logcat -d -s 'HttpCaptureProbe:V' 'HttpCaptureVpn:V' '*:S' || true
   adb logcat -d -t 200 '*:E' || true
   exit 1
 fi
