@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The separate-UID emulator probe has no launcher and is otherwise hidden
+         from the capture app's installed-application query. -->
+    <queries>
+        <package android:name="dev.httpcapture.probe" />
+    </queries>
+</manifest>
