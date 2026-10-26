@@ -295,7 +295,9 @@ mod tests {
 
     #[tokio::test]
     async fn request_replacement_skips_origin_and_abort_finishes_the_execution(){
-        tokio::time::timeout(Duration::from_secs(10),async{
+        // The shared Windows CI runner can briefly stall this integration test
+        // while the rest of the workspace tests run in parallel.
+        tokio::time::timeout(Duration::from_secs(30),async{
             let (_dir,runtime)=fixture();configure(&runtime,true,false).await;
             let origin=TcpListener::bind("127.0.0.1:0").await.unwrap();let url=format!("http://{}/never",origin.local_addr().unwrap());
             for action in ["replace","abort"] {
