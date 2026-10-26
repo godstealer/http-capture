@@ -11,6 +11,10 @@ adb install -r "$app"
 adb install -r "$test_app"
 adb install -r "$probe_app"
 adb shell pm grant dev.httpcapture.mobile android.permission.POST_NOTIFICATIONS
+# The Google APIs emulator can bring up a simulated cellular network during
+# this rapid VPN restart test, racing the Wi-Fi route under test. Keep the
+# underlying transport stable so the restart assertion tests the proxy modes.
+adb shell svc data disable
 
 origin_log="$(mktemp)"
 udp_log="$(mktemp)"
