@@ -43,7 +43,7 @@ public final class ProbeReceiver extends BroadcastReceiver {
                 } else if ("dev.httpcapture.probe.RUN_HTTP_STACK".equals(intent.getAction())) {
                     runHttpStack(context, intent);
                 } else {
-                    runHttp(intent.getStringExtra("path"));
+                    runHttp(context, intent.getStringExtra("path"));
                 }
             } catch (Exception error) {
                 Log.e("HttpCaptureProbe", "raw TCP request failed", error);
@@ -55,9 +55,15 @@ public final class ProbeReceiver extends BroadcastReceiver {
         }, "vpn-probe-client").start();
     }
 
-    private static void runHttp(String path) throws Exception {
+    private static void runHttp(Context context, String path) throws Exception {
         if (path == null) path = "/vpn-smoke";
+        ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+        Log.i("HttpCaptureProbe", "raw TCP active network: "
+                + (connectivity == null ? "unavailable" : connectivity.getActiveNetwork())
+                + " / " + (connectivity == null ? "unavailable" : connectivity.getNetworkCapabilities(
+                        connectivity.getActiveNetwork())));
         try (Socket socket = new Socket("10.0.2.2", 18080)) {
+            Log.i("HttpCaptureProbe", "raw TCP local address: " + socket.getLocalSocketAddress());
             socket.setSoTimeout(10_000);
             socket.getOutputStream().write(("GET " + path + " HTTP/1.1\r\n"
                     + "Host: 10.0.2.2:18080\r\nX-VPN-Probe-UID: " + Process.myUid()
