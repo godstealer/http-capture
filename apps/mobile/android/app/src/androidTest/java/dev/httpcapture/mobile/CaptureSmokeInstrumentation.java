@@ -86,7 +86,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         long deadline = System.currentTimeMillis() + 30_000;
         while (System.currentTimeMillis() < deadline &&
                 (CaptureVpnService.isManaged() || CaptureVpnService.isStopping()
-                 || !CaptureVpnService.message().startsWith("VPN 启动失败"))) {
+                 || !CaptureVpnService.message().contains(missingPackage))) {
             Thread.sleep(200);
         }
         if (CaptureVpnService.isManaged() || CaptureVpnService.isStopping())
