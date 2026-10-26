@@ -27,6 +27,7 @@ function text(value: unknown, limit = 4096): string | undefined {
 export function trafficEntryLabel(entry: unknown): string {
   if (entry === 'explicit-proxy') return t('显式代理');
   if (entry === 'tun') return 'TUN';
+  if (entry === 'android-lan') return t('Android 局域网');
   if (entry === 'quic-reverse') return t('QUIC 反向代理');
   const value = text(entry, 128);
   return value ? t('未知入口（{value}）', { value }) : t('未记录');

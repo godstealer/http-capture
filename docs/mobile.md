@@ -1,6 +1,10 @@
 # Android / iOS 移动端
 
-状态：Android 已重新构建包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK，并核对包内库、JNI 入口和签名；尚未经过真机验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路；此前版本曾通过 Simulator 与无签名 iPhone arm64 编译，近期 App Group、宿主 Rust 链接和离线功能改动尚未经过 Mac 重编。签名及 iPhone 设备验收尚未完成。当前没有可交付的正式移动安装包。
+局域网协同抓包（PC 二维码、Android VPN 扫码配对与远程转发）正在分阶段开发，协议和当前边界见 [局域网协同抓包](mobile-lan-capture.md)。本地代码已加入独立认证接收端、二维码、Android 扫码及 TCP/UDP 加密转发；设备端到端验收仍未完成，不作为正式移动版交付。
+
+状态：Android 包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK 已通过 [API 36 模拟器完整回归](https://github.com/godstealer/http-capture/actions/runs/40260325332)，尚未经过真机验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路；近期改动已通过 [Mac 模拟器与无签名 iPhone 构建](https://github.com/godstealer/http-capture/actions/runs/40261185176)。签名及 iPhone 设备验收尚未完成。当前没有可交付的正式移动安装包。
+
+下文保留分阶段开发记录；其中“待 Mac 编译/模拟器”的旧状态已由上述同源构建更新，涉及真实 iPhone、签名、证书安装和网络行为的验收仍未完成。
 
 Android 已复用桌面图标作为启动图标，本地构建和 Lint 验证通过。iOS 已从同一矢量图标生成 1024×1024、无透明通道的 App Icon 并配置 Asset Catalog；本地检查尺寸、像素不透明性和项目 YAML，通过 Mac 构建时还会核对宿主包内 `Assets.car` 与 `CFBundleIconName`。这批 iOS 资源尚待 Mac CI 编译。
 

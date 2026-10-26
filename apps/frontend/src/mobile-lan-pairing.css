@@ -1,0 +1,10 @@
+.mobile-lan-pairing { display: grid; gap: 14px; }
+.mobile-lan-pairing .setting-label { max-width: 560px; }
+.mobile-lan-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.mobile-lan-state { margin: 0; color: var(--text-secondary, #789); }
+.mobile-lan-fingerprint { display: grid; gap: 6px; margin: 0; }
+.mobile-lan-fingerprint code { overflow-wrap: anywhere; font-size: 12px; user-select: text; }
+.mobile-lan-code { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; padding: 20px; border: 1px solid var(--border, #394456); border-radius: 14px; }
+.mobile-lan-code p { max-width: 38ch; }
+.mobile-lan-qr { flex: none; padding: 12px; line-height: 0; border-radius: 10px; background: white; }
+.mobile-lan-error { color: var(--danger, #e96969); }

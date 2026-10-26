@@ -58,12 +58,18 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
+
 /** First device UI for the shared Rust capture engine. */
 public final class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private EditText port;
     private Button start;
+    private Button pairDesktop;
+    private Button remoteStart;
+    private boolean remoteRequested;
     private Button stop;
     private Button exportCa;
     private Button exportSessionButton;
@@ -200,7 +206,12 @@ public final class MainActivity extends Activity {
             getPreferences(MODE_PRIVATE).edit().putBoolean("system_proxy_hint", checked).apply());
         layout.addView(systemProxyHint);
 
-        start = button(layout, "启动 VPN 抓包", view -> startCapture());
+        start = button(layout, "启动 VPN 抓包", view -> startCapture(false));
+        pairDesktop = button(layout, "扫码配对 PC", view -> new IntentIntegrator(this)
+            .setDesiredBarcodeFormats("QR_CODE").setPrompt("扫描 PC 上的 HTTP Capture 配对码")
+            .setBeepEnabled(false).initiateScan());
+        remoteStart = button(layout, "通过 PC 抓包（测试）", view -> startCapture(true));
+        updateRemoteStart();
         stop = button(layout, "停止", view -> stopCapture());
         exportCa = button(layout, "保存 CA 公钥证书", view -> saveCertificate());
         if (Build.VERSION.SDK_INT < 30)
@@ -272,6 +283,7 @@ public final class MainActivity extends Activity {
         if (CaptureVpnService.isStopping()) {
             status.setText("正在停止 VPN…");
             start.setEnabled(false);
+            remoteStart.setEnabled(false);
             setAppSelectionEnabled(false);
             waitForVpnStop();
         } else if (CaptureVpnService.isManaged()) {
@@ -279,6 +291,7 @@ public final class MainActivity extends Activity {
             vpnRequested = true;
             vpnWasManaged = true;
             start.setEnabled(false);
+            remoteStart.setEnabled(false);
             stop.setEnabled(true);
             exportCa.setEnabled(true);
             exportSessionButton.setEnabled(true);
@@ -305,6 +318,7 @@ public final class MainActivity extends Activity {
                 JSONObject value = reply.optJSONObject("value");
                 if (reply.optBoolean("ok") && value != null && value.optBoolean("running")) {
                     running = true;
+                    remoteStart.setEnabled(false);
                     vpnRequested = false;
                     stop.setEnabled(true);
                     exportCa.setEnabled(true);
@@ -318,6 +332,7 @@ public final class MainActivity extends Activity {
                     poll();
                 } else {
                     start.setEnabled(true);
+                    updateRemoteStart();
                     setAppSelectionEnabled(true);
                     loadSelectedPage();
                 }
@@ -487,7 +502,55 @@ public final class MainActivity extends Activity {
         updateAppSelectionLabel();
     }
 
-    private void startCapture() {
+    private void confirmDesktopPairing(String scanned) {
+        final LanPairingClient.Code code;
+        try { code = LanPairingClient.parse(scanned); }
+        catch (Exception error) { status.setText("配对码无效：" + error.getMessage()); return; }
+        String fingerprint = code.fingerprintText();
+        new AlertDialog.Builder(this).setTitle("确认 PC 身份")
+            .setMessage("地址：" + code.host + ":" + code.port + "\n身份指纹：\n"
+                + fingerprint.substring(0, 32) + "\n" + fingerprint.substring(32)
+                + "\n\n请确认这是你电脑上显示的地址和指纹。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("配对", (dialog, which) -> {
+                pairDesktop.setEnabled(false);
+                status.setText("正在校验 PC 身份并配对…");
+                worker.execute(() -> {
+                    try {
+                        LanPairingClient.Session session = LanPairingClient.redeem(code);
+                        main.post(() -> {
+                            LanPairingClient.setActiveSession(session);
+                            status.setText("PC 身份验证完成，可启动远程 VPN 转发；UDP 仍需设备验证");
+                            pairDesktop.setEnabled(true);
+                            updateRemoteStart();
+                        });
+                    } catch (Exception error) {
+                        main.post(() -> {
+                            LanPairingClient.setActiveSession(null);
+                            status.setText("PC 配对失败：" + error.getMessage());
+                            pairDesktop.setEnabled(true);
+                            updateRemoteStart();
+                        });
+                    }
+                });
+            }).show();
+    }
+
+    private void updateRemoteStart() {
+        LanPairingClient.Session session = LanPairingClient.activeSession();
+        remoteStart.setEnabled(session != null && session.expiresAt > System.currentTimeMillis()
+            && !running && !vpnRequested && !CaptureVpnService.isManaged()
+            && !CaptureVpnService.isStopping());
+    }
+
+    private void startCapture(boolean remote) {
+        if (remote && (LanPairingClient.activeSession() == null
+            || LanPairingClient.activeSession().expiresAt <= System.currentTimeMillis())) {
+            status.setText("PC 会话已过期，请重新扫码");
+            remoteStart.setEnabled(false);
+            return;
+        }
+        remoteRequested = remote;
         final int selectedPort;
         try {
             selectedPort = Integer.parseInt(port.getText().toString().trim());
@@ -497,6 +560,7 @@ public final class MainActivity extends Activity {
             return;
         }
         start.setEnabled(false);
+        remoteStart.setEnabled(false);
         setAppSelectionEnabled(false);
         status.setText("正在启动…");
         worker.execute(() -> {
@@ -511,7 +575,7 @@ public final class MainActivity extends Activity {
                     lastRowsJson = "";
                     results.removeAllViews();
                     showEmptyResults();
-                    status.setText("代理运行中 · 127.0.0.1:" + selectedPort);
+                    status.setText(remote ? "准备连接 PC…" : "代理运行中 · 127.0.0.1:" + selectedPort);
                     stop.setEnabled(true);
                     exportCa.setEnabled(true);
                     exportSessionButton.setEnabled(true);
@@ -525,6 +589,7 @@ public final class MainActivity extends Activity {
                 } else {
                     status.setText("启动失败：" + reply.optString("error", "未知错误"));
                     start.setEnabled(true);
+                    updateRemoteStart();
                     setAppSelectionEnabled(true);
                 }
             });
@@ -559,7 +624,8 @@ public final class MainActivity extends Activity {
         intent.putExtra(CaptureVpnService.EXTRA_ALLOWED_PACKAGES,
             selectedApps.toArray(new String[0]));
         intent.putExtra(CaptureVpnService.EXTRA_CAPTURE_QUIC, captureQuic.isChecked());
-        intent.putExtra(CaptureVpnService.EXTRA_SYSTEM_PROXY_HINT, systemProxyHint.isChecked());
+        intent.putExtra(CaptureVpnService.EXTRA_SYSTEM_PROXY_HINT, !remoteRequested && systemProxyHint.isChecked());
+        intent.putExtra(CaptureVpnService.EXTRA_REMOTE_MODE, remoteRequested);
         try {
             ComponentName started = Build.VERSION.SDK_INT >= 26
                 ? startForegroundService(intent) : startService(intent);
@@ -633,6 +699,7 @@ public final class MainActivity extends Activity {
                 updatePagingControls();
                 status.setText(reply.optBoolean("ok") ? "代理已停止" : "停止失败：" + reply.optString("error"));
                 start.setEnabled(true);
+                updateRemoteStart();
                 setAppSelectionEnabled(true);
                 exportCa.setEnabled(true);
                 exportSessionButton.setEnabled(true);
@@ -652,6 +719,7 @@ public final class MainActivity extends Activity {
         }
         status.setText(CaptureVpnService.message());
         start.setEnabled(true);
+        updateRemoteStart();
         setAppSelectionEnabled(true);
         stop.setEnabled(false);
         exportCa.setEnabled(true);
@@ -3028,6 +3096,11 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        IntentResult scan = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
+        if (scan != null) {
+            if (scan.getContents() != null) confirmDesktopPairing(scan.getContents());
+            return;
+        }
         if (requestCode == VPN_REQUEST) {
             if (!vpnPermissionPending) return;
             vpnPermissionPending = false;

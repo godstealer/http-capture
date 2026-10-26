@@ -18,7 +18,7 @@ base64 = "0.22"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # TUN TCP/DNS bridge; the capture engine remains the local HTTP proxy.
-tun2proxy = { version = "0.7.15", default-features = false }
+tun2proxy = { version = "0.7.15", default-features = false, features = ["udpgw"] }
 # QuickJS has no pre-generated Android arm64 bindings.
 rquickjs = { version = "0.14", features = ["bindgen"] }
 

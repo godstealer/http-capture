@@ -26,6 +26,7 @@ import { emptyLibrary, resolveEnvironment, suggestedRequestName, withSavedReques
 import { t, useLanguage } from './i18n';
 import LanguageSelector from './LanguageSelector';
 import TunSettings, { type TunStatus } from './TunSettings';
+import MobileLanPairing from './MobileLanPairing';
 import QuicReverseSettings from './QuicReverseSettings';
 import ListenerSettings, { type ListenerSettingsHandle } from './ListenerSettings';
 import { readListenerPreferences, saveListenerPreferences } from './listenerPreferences';
@@ -39,7 +40,7 @@ import RequestPolicies from './RequestPolicies';
 import Interception, { type InterceptSnapshot } from './Interception';
 import ResponseRewrite from './ResponseRewrite';
 import { useEffect, useRef, useState } from 'react';
-import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Ban, Check, ChevronDown, CircleHelp, Code2, Copy, FileJson, FolderOpen, Globe2, Layers3, LockKeyhole, Play, Plus, Puzzle, Radio, RotateCw, Save, Search, Send, Settings2, ShieldCheck, Square, Terminal, Trash2, X } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Ban, Check, ChevronDown, CircleHelp, Code2, Copy, FileJson, FolderOpen, Globe2, Layers3, LockKeyhole, Play, Plus, Puzzle, Radio, RotateCw, Save, Search, Send, Settings2, ShieldCheck, Smartphone, Square, Terminal, Trash2, X } from 'lucide-react';
 import { isTauri } from '@tauri-apps/api/core';
 import { invoke } from './api';
 import CaptureView from './CaptureView';
@@ -674,6 +675,9 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
           },
           { id: 'tun', label: 'TUN', icon: <Layers3 size={16}/>, content:
             <section className="settings-section settings-tun"><TunSettings status={tun} onUpdate={setTun}/><QuicReverseSettings/></section>
+          },
+          { id: 'mobile', label: t('Android 协同'), icon: <Smartphone size={16}/>, content:
+            <MobileLanPairing active={modal==='settings' && settingsPage==='mobile'}/>
           },
           { id: 'migration', label: t('配置迁移'), icon: <FileJson size={16}/>, content:
             <ConfigMigration connected={connected} beforeTransfer={beforeConfigurationTransfer} onImported={finishConfigurationImport}/>

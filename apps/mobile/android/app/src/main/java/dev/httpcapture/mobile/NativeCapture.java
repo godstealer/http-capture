@@ -31,6 +31,7 @@ public final class NativeCapture {
     public static native String configureBlocking(String dataDir, String configJson);
     public static native String sendRequest(String dataDir, String requestJson);
     public static native String startTunnel(int tunFd, boolean captureQuic);
+    public static native String startRemoteTunnel(int tunFd, int relayPort, int udpGatewayPort);
     public static native String stopTunnel();
     public static native String tunnelStatus();
 }

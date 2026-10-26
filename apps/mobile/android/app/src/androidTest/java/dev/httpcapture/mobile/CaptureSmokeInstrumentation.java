@@ -62,12 +62,34 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             runVpnPortConflictSmoke();
             runVpnStartupFailureSmoke();
             runPortableConfigurationSmoke();
+            runLanPairingCodeSmoke();
             result.putString("smokeStatus", "ok");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
             result.putString("smokeStatus", "failed: " + error);
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    private static void runLanPairingCodeSmoke() throws Exception {
+        byte[] secret = new byte[32];
+        String token = Base64.encodeToString(secret, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+        StringBuilder fingerprint = new StringBuilder();
+        for (int index = 0; index < 32; index++) fingerprint.append("ab");
+        String code = "httpcapture://pair?v=1&host=192.168.1.2&port=43873&token=" + token
+            + "&fp=" + fingerprint + "&exp=" + (System.currentTimeMillis() / 1000 + 120);
+        LanPairingClient.Code parsed = LanPairingClient.parse(code);
+        if (!"192.168.1.2".equals(parsed.host) || parsed.port != 43873
+            || parsed.token.length != 32 || parsed.fingerprint.length != 32)
+            throw new AssertionError("LAN pairing QR was parsed incorrectly");
+        try {
+            LanPairingClient.parse(code + "&port=43874");
+            throw new AssertionError("Duplicate pairing parameter was accepted");
+        } catch (IllegalArgumentException expected) { }
+        try {
+            LanPairingClient.parse(code.replace("192.168.1.2", "8.8.8.8"));
+            throw new AssertionError("Public pairing address was accepted");
+        } catch (IllegalArgumentException expected) { }
     }
 
     private void runVpnStartupFailureSmoke() throws Exception {

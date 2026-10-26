@@ -1,5 +1,7 @@
 plugins { id 'com.android.application' }
 
+dependencies { implementation 'com.journeyapps:zxing-android-embedded:4.3.0' }
+
 android {
     namespace 'dev.httpcapture.mobile'
     compileSdk 36

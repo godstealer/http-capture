@@ -69,7 +69,7 @@ fn lookup_application(vm: &JavaVM, service_class: &GlobalRef,
 struct MobileTunnel {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<Result<usize, String>>,
-    bridge: capture_core::proxy::ProxyHandle,
+    bridge: Option<capture_core::proxy::ProxyHandle>,
     quic: Option<capture_core::quic_proxy::QuicHandle>,
 }
 
@@ -144,7 +144,7 @@ fn stop() -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-fn start_tunnel(fd: i32, capture_quic: bool, vm: JavaVM, service_class: GlobalRef) -> Result<(), String> {
+fn start_tunnel(fd: i32, capture_quic: bool, remote_port: Option<u16>, remote_udp_port: Option<u16>, vm: JavaVM, service_class: GlobalRef) -> Result<(), String> {
     if fd < 0 {
         return Err("Invalid VPN file descriptor".into());
     }
@@ -155,35 +155,44 @@ fn start_tunnel(fd: i32, capture_quic: bool, vm: JavaVM, service_class: GlobalRe
     if capture.tunnel.is_some() {
         return Err("VPN tunnel is already running".into());
     }
-    // TUN TCP streams enter the proxy through CONNECT even for plain HTTP.
-    // The regular listener expects TLS after CONNECT; its transparent bridge
-    // also accepts an HTTP request on the established tunnel.
-    let bridge = capture
-        .executor
-        .block_on(capture_core::proxy::start_tun_bridge(
+    // Remote mode uses an authenticated, VPN-protected loopback relay. Do not
+    // route it through the local MITM bridge or silently send UDP directly.
+    if remote_port.is_some() && capture_quic { return Err("Remote QUIC capture is not available".into()); }
+    let bridge = if remote_port.is_none() {
+        Some(capture.executor.block_on(capture_core::proxy::start_tun_bridge(
             capture.runtime.engine.clone(),
-        ))
-        .map_err(|error| format!("{error:#}"))?;
-    let proxy = format!("http://{}", bridge.address);
-    let origin_registry = bridge.origin_registry.as_ref().expect("TUN bridge has origin registry").clone();
-    origin_registry.enable();
+        )).map_err(|error| format!("{error:#}"))?)
+    } else { None };
+    let proxy = match remote_port {
+        Some(port) if port >= 1024 => format!("http://127.0.0.1:{port}"),
+        Some(_) => return Err("Invalid protected relay port".into()),
+        None => format!("http://{}", bridge.as_ref().unwrap().address),
+    };
     let mut args = Args::default();
     args.proxy = match ArgProxy::try_from(proxy.as_str()) {
         Ok(proxy) => proxy,
         Err(error) => {
-            capture.executor.block_on(bridge.stop());
+            if let Some(bridge) = bridge { capture.executor.block_on(bridge.stop()); }
             return Err(format!("Transparent bridge address is invalid: {error}"));
         }
     };
-    args.direct_udp_for_http = true;
-    args.tcp_proxy_observer = Some(TcpProxyObserver::new(move |source, destination, proxy_peer| {
-        let application = lookup_application(&vm, &service_class, source, destination);
-        let process_status = if application.is_some() { "identified" } else { "tun-unavailable" };
-        origin_registry.register(proxy_peer, capture_core::model::TrafficOrigin {
-            entry: "tun".into(), client_address: Some(source.to_string()),
-            process: None, application, process_status: process_status.into(),
-        });
-    }));
+    args.direct_udp_for_http = remote_port.is_none();
+    if let Some(port) = remote_udp_port {
+        if remote_port.is_none() || port < 1024 { return Err("Invalid remote UDP gateway configuration".into()); }
+        args.udpgw_server = Some((std::net::Ipv4Addr::LOCALHOST, port).into());
+    }
+    if let Some(bridge) = bridge.as_ref() {
+        let origin_registry = bridge.origin_registry.as_ref().expect("TUN bridge has origin registry").clone();
+        origin_registry.enable();
+        args.tcp_proxy_observer = Some(TcpProxyObserver::new(move |source, destination, proxy_peer| {
+            let application = lookup_application(&vm, &service_class, source, destination);
+            let process_status = if application.is_some() { "identified" } else { "tun-unavailable" };
+            origin_registry.register(proxy_peer, capture_core::model::TrafficOrigin {
+                entry: "tun".into(), client_address: Some(source.to_string()),
+                process: None, application, process_status: process_status.into(),
+            });
+        }));
+    }
     args.ipv6_enabled = true;
     args.virtual_dns_pool_v6 = Some(
         "fd00:198:19::/96"
@@ -203,7 +212,7 @@ fn start_tunnel(fd: i32, capture_quic: bool, vm: JavaVM, service_class: GlobalRe
                 Some(quic)
             }
             Err(error) => {
-                capture.executor.block_on(bridge.stop());
+                if let Some(bridge) = bridge { capture.executor.block_on(bridge.stop()); }
                 return Err(format!("HTTP/3 capture could not start: {error:#}"));
             }
         }
@@ -254,7 +263,7 @@ fn stop_tunnel_inner(capture: &mut MobileCapture) -> Result<(), String> {
             }
         }
     };
-    capture.executor.block_on(tunnel.bridge.stop());
+    if let Some(bridge) = tunnel.bridge { capture.executor.block_on(bridge.stop()); }
     if let Some(quic) = tunnel.quic.take() {
         capture.executor.block_on(quic.stop());
     }
@@ -288,7 +297,7 @@ fn tunnel_status() -> Result<serde_json::Value, String> {
         Ok(Err(error)) => Err(error),
         Err(error) => Err(error.to_string()),
     };
-    capture.executor.block_on(tunnel.bridge.stop());
+    if let Some(bridge) = tunnel.bridge { capture.executor.block_on(bridge.stop()); }
     if let Some(quic) = tunnel.quic.take() {
         capture.executor.block_on(quic.stop());
     }
@@ -1176,7 +1185,28 @@ pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_startTunnel(
         let class = env.find_class("dev/httpcapture/mobile/CaptureVpnService")
             .map_err(|error| error.to_string())?;
         let service_class = env.new_global_ref(class).map_err(|error| error.to_string())?;
-        start_tunnel(fd, capture_quic != 0, vm, service_class)
+        start_tunnel(fd, capture_quic != 0, None, None, vm, service_class)
+    })();
+    jni_reply(env, result.map(|()| serde_json::Value::Null))
+}
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_dev_httpcapture_mobile_NativeCapture_startRemoteTunnel(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    fd: jint,
+    relay_port: jint,
+    udp_gateway_port: jint,
+) -> jstring {
+    let result = (|| {
+        let port = u16::try_from(relay_port).map_err(|_| "Invalid protected relay port".to_string())?;
+        let udp_port = u16::try_from(udp_gateway_port).map_err(|_| "Invalid protected UDP gateway port".to_string())?;
+        let vm = env.get_java_vm().map_err(|error| error.to_string())?;
+        let class = env.find_class("dev/httpcapture/mobile/CaptureVpnService")
+            .map_err(|error| error.to_string())?;
+        let service_class = env.new_global_ref(class).map_err(|error| error.to_string())?;
+        start_tunnel(fd, false, Some(port), Some(udp_port), vm, service_class)
     })();
     jni_reply(env, result.map(|()| serde_json::Value::Null))
 }

@@ -24,6 +24,7 @@ import org.json.JSONArray;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,6 +37,7 @@ public final class CaptureVpnService extends VpnService {
     public static final String EXTRA_ALLOWED_PACKAGES = "allowed_packages";
     public static final String EXTRA_CAPTURE_QUIC = "capture_quic";
     public static final String EXTRA_SYSTEM_PROXY_HINT = "system_proxy_hint";
+    public static final String EXTRA_REMOTE_MODE = "remote_mode";
     private static final String CHANNEL = "capture-vpn";
     private static final int NOTIFICATION_ID = 1001;
     private static volatile boolean active;
@@ -76,12 +78,20 @@ public final class CaptureVpnService extends VpnService {
     private volatile boolean destroyed;
     private boolean shutdownStarted;
     private boolean captureQuic;
+    private boolean remoteMode;
+    private ProtectedRelay protectedRelay;
 
     public static boolean isActive() { return active; }
     public static boolean isManaged() { return managed; }
     public static boolean isStopping() { return stopPending; }
     public static String message() { return message; }
     public static void requestStop() { stopPending = true; }
+
+    /** Exclude the authenticated PC tunnel from the VPN before connecting it. */
+    public static boolean protectRemoteSocket(Socket socket) {
+        CaptureVpnService service = currentService;
+        return service != null && !service.destroyed && service.protect(socket);
+    }
 
     /** Called only for a TUN TCP tuple while this VPN owns the system tunnel. */
     public static String lookupConnectionOwner(String sourceAddress, int sourcePort,
@@ -128,7 +138,9 @@ public final class CaptureVpnService extends VpnService {
         destroyed = false;
         int port = intent.getIntExtra(EXTRA_PORT, 0);
         captureQuic = intent.getBooleanExtra(EXTRA_CAPTURE_QUIC, false);
-        boolean systemProxyHint = intent.getBooleanExtra(EXTRA_SYSTEM_PROXY_HINT, true);
+        remoteMode = intent.getBooleanExtra(EXTRA_REMOTE_MODE, false);
+        if (remoteMode) captureQuic = false;
+        final boolean systemProxyHint = !remoteMode && intent.getBooleanExtra(EXTRA_SYSTEM_PROXY_HINT, true);
         String[] allowedPackages = intent.getStringArrayExtra(EXTRA_ALLOWED_PACKAGES);
         if (port < 1 || port > 65535) {
             message = "VPN 端口无效";
@@ -187,11 +199,22 @@ public final class CaptureVpnService extends VpnService {
             tunnel = builder.establish();
             if (tunnel == null) throw new IllegalStateException("系统未建立 VPN；请重新授权");
             currentService = this;
-            JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
+            if (remoteMode) {
+                LanPairingClient.Session session = LanPairingClient.activeSession();
+                protectedRelay = new ProtectedRelay(session, reason -> {
+                    message = "VPN 远程转发已断开：" + reason;
+                    requestStop();
+                    main.post(this::stopSelf);
+                });
+            }
+            JSONObject started = new JSONObject(remoteMode
+                ? NativeCapture.startRemoteTunnel(tunnel.getFd(), protectedRelay.port(), protectedRelay.udpGatewayPort())
+                : NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
             if (!started.optBoolean("ok")) throw new IllegalStateException(started.optString("error"));
             if (destroyed) throw new IllegalStateException("VPN 服务已停止");
             active = true;
-            message = "VPN 抓包运行中 · 127.0.0.1:" + port;
+            message = remoteMode ? "VPN 正通过 PC 抓包 · TCP/UDP 测试"
+                : "VPN 抓包运行中 · 127.0.0.1:" + port;
             main.post(this::watchUnderlyingNetworks);
             main.post(monitor);
         } catch (Exception error) {
@@ -266,11 +289,14 @@ public final class CaptureVpnService extends VpnService {
             // A newer handoff (or complete network loss) supersedes this restart.
             // The next valid network callback will queue its own restart.
             if (destroyed || !active || generation != networkGeneration || underlyingNetworkLost) return;
-            JSONObject started = new JSONObject(NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
+            JSONObject started = new JSONObject(remoteMode
+                ? NativeCapture.startRemoteTunnel(tunnel.getFd(), protectedRelay.port(), protectedRelay.udpGatewayPort())
+                : NativeCapture.startTunnel(tunnel.getFd(), captureQuic));
             if (!started.optBoolean("ok")) throw new IllegalStateException(started.optString("error"));
             if (generation == networkGeneration && !underlyingNetworkLost) {
                 networkRestartPending = false;
-                message = "VPN 抓包运行中 · 网络连接已更新";
+                message = remoteMode ? "VPN 正通过 PC 抓包 · 网络连接已更新"
+                    : "VPN 抓包运行中 · 网络连接已更新";
             }
         } catch (Exception error) {
             networkRestartPending = false;
@@ -322,6 +348,7 @@ public final class CaptureVpnService extends VpnService {
         // polling loop relies on this message to leave the running state.
         final String terminalMessage = message;
         final boolean preserveMessage = terminalMessage.startsWith("VPN 启动失败")
+            || terminalMessage.startsWith("VPN 远程转发已断开")
             || terminalMessage.startsWith("VPN 转发已退出")
             || terminalMessage.startsWith("VPN 状态读取失败")
             || terminalMessage.startsWith("切换网络后重建连接失败")
@@ -330,6 +357,7 @@ public final class CaptureVpnService extends VpnService {
         if (currentService == this) currentService = null;
         active = false;
         requestStop();
+        if (protectedRelay != null) { protectedRelay.close(); protectedRelay = null; }
         main.removeCallbacks(monitor);
         if (networkCallback != null && connectivity != null) {
             try { connectivity.unregisterNetworkCallback(networkCallback); }

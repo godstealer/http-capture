@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { t } from './i18n';
 
-export type SettingsPageId = 'general' | 'upstream' | 'system' | 'certificates' | 'decryption' | 'tun' | 'migration';
+export type SettingsPageId = 'general' | 'upstream' | 'system' | 'certificates' | 'decryption' | 'tun' | 'mobile' | 'migration';
 interface SettingsPage { id: SettingsPageId; label: string; icon: ReactNode; content: ReactNode }
 
 export default function SettingsTabs({ pages, active, onChange }: {

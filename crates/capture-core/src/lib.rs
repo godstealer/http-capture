@@ -17,6 +17,8 @@ pub mod browser_profiles;
 pub mod tls_config;
 pub mod tun;
 pub mod network;
+pub mod mobile_pairing;
+pub mod mobile_gateway;
 pub mod decryption;
 pub mod executions;
 pub mod script_tools;

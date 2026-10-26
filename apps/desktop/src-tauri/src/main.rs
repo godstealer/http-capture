@@ -8,7 +8,7 @@ mod certificate_commands;
 mod session_export;
 use capture_core::{model::{Flow, ProxyStatus, RequestDraft}, CaptureRuntime, Engine};
 use capture_mcp::{server::ServerManager, client::ClientManager};
-use std::sync::{Arc, atomic::Ordering};
+use std::{net::Ipv4Addr, sync::{Arc, atomic::Ordering}};
 use tauri::{Emitter, Manager, State};
 
 #[tauri::command]
@@ -122,6 +122,7 @@ struct AppState {
     runtime: Arc<CaptureRuntime>,
     mcp_server: Arc<ServerManager>,
     mcp_clients: Arc<ClientManager>,
+    mobile_gateway: tokio::sync::Mutex<Option<capture_core::mobile_gateway::MobileGateway>>,
 }
 impl std::ops::Deref for AppState {
     type Target = CaptureRuntime;
@@ -135,6 +136,7 @@ impl AppState {
     }
     async fn shutdown_network(&self) -> Result<(), String> {
         self.shutting_down.store(true, Ordering::Release);
+        if let Some(gateway) = self.mobile_gateway.lock().await.take() { gateway.stop(); }
         self.engine.executions.cancel_all();
         let mut errors = Vec::new();
         if let Err(error) = self.mcp_server.shutdown().await { errors.push(format!("MCP: {error}")); }
@@ -142,6 +144,62 @@ impl AppState {
         if let Err(error) = self.runtime.shutdown_network().await { errors.push(error); }
         if errors.is_empty() { Ok(()) } else { Err(errors.join("；")) }
     }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileGatewayStatus {
+    running: bool,
+    address: Option<String>,
+    paired: bool,
+    fingerprint: Option<String>,
+}
+
+#[tauri::command]
+async fn mobile_gateway_status(state: State<'_, AppState>) -> Result<MobileGatewayStatus, String> {
+    let gateway = state.mobile_gateway.lock().await;
+    Ok(MobileGatewayStatus {
+        running: gateway.is_some(),
+        address: gateway.as_ref().map(|gateway| gateway.address().to_string()),
+        paired: gateway.as_ref().is_some_and(|gateway| gateway.is_paired()),
+        fingerprint: gateway.as_ref().map(|gateway| gateway.fingerprint().to_string()),
+    })
+}
+
+#[tauri::command]
+async fn mobile_gateway_pair(host: String, state: State<'_, AppState>) -> Result<String, String> {
+    let host: Ipv4Addr = host.parse().map_err(|_| "请选择可用的局域网 IPv4 地址".to_string())?;
+    if !host.is_private() || host.is_loopback() { return Err("请选择私有局域网 IPv4 地址".into()); }
+    let mut current = state.mobile_gateway.lock().await;
+    if current.as_ref().is_some_and(|gateway| gateway.address().ip() != std::net::IpAddr::V4(host)) {
+        current.take().unwrap().stop();
+    }
+    if current.is_none() {
+        *current = Some(capture_core::mobile_gateway::MobileGateway::start(host, 0, state.engine.clone())
+            .await.map_err(|error| format!("无法启动 Android 安全接收端：{error:#}"))?);
+    }
+    current.as_ref().unwrap().open_pairing().map(|code| code.to_uri())
+        .map_err(|error| format!("无法生成配对二维码：{error:#}"))
+}
+
+#[tauri::command]
+async fn mobile_gateway_close_pairing(uri: String, state: State<'_, AppState>) -> Result<(), String> {
+    let token = capture_core::mobile_pairing::token_from_uri(&uri)
+        .map_err(|_| "配对码无效".to_string())?;
+    if let Some(gateway) = state.mobile_gateway.lock().await.as_ref() { gateway.close_pairing_if(&token); }
+    Ok(())
+}
+
+#[tauri::command]
+async fn mobile_gateway_disconnect(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(gateway) = state.mobile_gateway.lock().await.as_ref() { gateway.disconnect(); }
+    Ok(())
+}
+
+#[tauri::command]
+async fn mobile_gateway_stop(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(gateway) = state.mobile_gateway.lock().await.take() { gateway.stop(); }
+    Ok(())
 }
 
 #[tauri::command]
@@ -308,10 +366,11 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = startup.restore().await { eprintln!("MCP startup: {error}"); }
             });
-            app.manage(AppState { runtime, mcp_server, mcp_clients });
+            app.manage(AppState { runtime, mcp_server, mcp_clients,
+                mobile_gateway: tokio::sync::Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![session_export::begin_session_export,session_export::append_session_export,session_export::finish_session_export,certificate_commands::certificates,certificate_commands::import_certificate,certificate_commands::change_certificate,body_commands::flow_metadata_changes,body_commands::flow_metadata,body_commands::get_flow,body_commands::read_flow_body,body_commands::save_flow_body,response_rewrite_commands::response_rewrite,response_rewrite_commands::configure_response_rewrite,config_migration_commands::config_status,config_migration_commands::config_export,config_migration_commands::config_preview,config_migration_commands::config_import,config_migration_commands::config_recovery,config_migration_commands::config_restart,config_migration_commands::config_save_file,mcp_commands::workspace_revisions,mcp_commands::mcp_status,mcp_commands::mcp_configure,mcp_commands::mcp_connection_info,mcp_commands::mcp_clients,mcp_commands::mcp_save_client,mcp_commands::mcp_remove_client,mcp_commands::mcp_connect_client,mcp_commands::mcp_disconnect_client,mcp_commands::mcp_client_tools,mcp_commands::mcp_call_tool,mcp_commands::plugins_validate,app_update::open_update_download,app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, reverse_quic_status, start_reverse_quic, stop_reverse_quic, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking,fault_rules,configure_fault_rules,mcp_audit, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
+        .invoke_handler(tauri::generate_handler![mobile_gateway_status,mobile_gateway_pair,mobile_gateway_close_pairing,mobile_gateway_disconnect,mobile_gateway_stop,session_export::begin_session_export,session_export::append_session_export,session_export::finish_session_export,certificate_commands::certificates,certificate_commands::import_certificate,certificate_commands::change_certificate,body_commands::flow_metadata_changes,body_commands::flow_metadata,body_commands::get_flow,body_commands::read_flow_body,body_commands::save_flow_body,response_rewrite_commands::response_rewrite,response_rewrite_commands::configure_response_rewrite,config_migration_commands::config_status,config_migration_commands::config_export,config_migration_commands::config_preview,config_migration_commands::config_import,config_migration_commands::config_recovery,config_migration_commands::config_restart,config_migration_commands::config_save_file,mcp_commands::workspace_revisions,mcp_commands::mcp_status,mcp_commands::mcp_configure,mcp_commands::mcp_connection_info,mcp_commands::mcp_clients,mcp_commands::mcp_save_client,mcp_commands::mcp_remove_client,mcp_commands::mcp_connect_client,mcp_commands::mcp_disconnect_client,mcp_commands::mcp_client_tools,mcp_commands::mcp_call_tool,mcp_commands::plugins_validate,app_update::open_update_download,app_update::app_update_status,app_update::check_app_update,app_update::download_app_update,app_update::install_app_update,check_listener_port,plugins_list,plugins_save,plugin_logs,grpc_poll,grpc_start,grpc_send,save_response_base64,system_proxy_status,set_system_proxy,ca_status,set_ca_trust,websocket_connect,websocket_send,decryption_hosts,save_decryption_hosts,test_upstream,read_clipboard, write_clipboard, flow_changes, request_library, save_request_library, backup_database, compact_database, clear_database, begin_import, append_import, finish_import, save_response_file, save_session_file, save_code_file, delete_flows, import_flows, tun_status, start_tun, stop_tun, reverse_quic_status, start_reverse_quic, stop_reverse_quic, network_interfaces, request_workspace, save_request_workspace, proxy_status, start_proxy, stop_proxy, list_flows, flow_revision, replay_request, prepare_replay, cancel_replay, export_certificate, set_upstream, blocking, configure_blocking,fault_rules,configure_fault_rules,mcp_audit, interception, configure_interception, resolve_interception, capture_scripts, set_capture_scripts, upstream_profiles, save_upstream_profile, select_upstream_profile, delete_upstream_profile])
         .build(tauri::generate_context!())
         .expect("Failed to start HTTP Capture")
         .run(|app,event| match event {
