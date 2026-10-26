@@ -170,6 +170,9 @@ public final class CaptureVpnService extends VpnService {
                 for (String packageName : allowedPackages) {
                     if (packageName == null || packageName.equals(getPackageName())) continue;
                     try {
+                        // Some Android builds accept an unknown package in the VPN
+                        // allowlist, leaving a running tunnel with no captured apps.
+                        getPackageManager().getApplicationInfo(packageName, 0);
                         builder.addAllowedApplication(packageName);
                         added++;
                     } catch (android.content.pm.PackageManager.NameNotFoundException error) {
