@@ -119,9 +119,12 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
             if (!CaptureVpnService.message().startsWith("VPN 启动失败"))
                 throw new AssertionError("Port-conflict failure was not reported: "
                         + CaptureVpnService.message());
-            JSONObject status = expectOk(NativeCapture.status());
-            if (status.optBoolean("running"))
+            JSONObject status = new JSONObject(NativeCapture.status());
+            if (status.optBoolean("ok") && status.getJSONObject("value").optBoolean("running"))
                 throw new AssertionError("Port-conflict capture engine kept running");
+            if (!status.optBoolean("ok")
+                    && !"Capture is not running".equals(status.optString("error")))
+                throw new AssertionError("Unexpected port-conflict capture state: " + status);
         }
         try (ServerSocket released = new ServerSocket(port, 1,
                 InetAddress.getByName("127.0.0.1"))) { }
