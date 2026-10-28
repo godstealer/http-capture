@@ -6,6 +6,7 @@ import { parseSse } from './sse';
 import ImagePreview from './ImagePreview';
 import { exceedsInlineResponseBudget } from './responseBodyBudget';
 import { parseSseEncodings } from './sseEncoding';
+import type { CodeViewCommand } from './CodeView';
 const CodeView = lazy(() => import('./CodeView'));
 
 interface Result { raw: string; formatted: string; language: string; error: string; binary?: boolean; kind?: string; mime?: string; blob?: Blob; size?: number; decodedBlob?: Blob }
@@ -15,6 +16,9 @@ export default function ResponseBody({ body, headers, onCopy, complete = true }:
   const [result, setResult] = useState<Result | null>(null);
   const liveWorker = useRef<{ worker: Worker; encoding: string } | null>(null);
   const [downloadMessage, setDownloadMessage] = useState('');
+  const [codeCommand, setCodeCommand] = useState<CodeViewCommand | null>(null);
+  const runCodeCommand = (type: CodeViewCommand['type']) =>
+    setCodeCommand(current => ({ type, id: (current?.id ?? 0) + 1 }));
   async function download(original: boolean) {
     try {
     if (isTauri()) {
@@ -88,6 +92,8 @@ export default function ResponseBody({ body, headers, onCopy, complete = true }:
   const text = mode === 'base64' || result?.binary ? body : mode === 'raw' ? result?.raw ?? '' : result?.formatted ?? '';
   const oversized = exceedsInlineResponseBudget(body);
   const displayedText = oversized && (mode === 'base64' || result?.binary) ? text.slice(0, 65536) : text;
+  const codeVisible = mode !== 'preview' && !(isSse && mode === 'pretty' && result && !result.binary) && !!displayedText;
+  const jsonFolding = codeVisible && result?.language === 'json' && mode !== 'base64' && !result.binary && displayedText.includes('\n');
   if (result?.blob) {
     const media = ['image', 'audio', 'video'].includes(result.kind ?? '');
     const showPreview = media && !['hex', 'base64'].includes(mode);
@@ -118,12 +124,16 @@ export default function ResponseBody({ body, headers, onCopy, complete = true }:
         <option value="auto">{t("自动识别")}</option><option value="json">JSON</option><option value="html">HTML</option>
         <option value="babel">JavaScript</option><option value="css">CSS</option><option value="text">{t("纯文本")}</option>
       </select><span>{result?.language === 'babel' ? 'JavaScript' : result?.language.toUpperCase()}</span>
-      {downloads}<button disabled={!result && mode !== 'base64'} onClick={() => onCopy(text)}>{t("复制当前内容")}</button>
+      {downloads}
+      <button type="button" disabled={!codeVisible} onClick={() => runCodeCommand('find')}>{t('查找')}</button>
+      {jsonFolding && <><button type="button" onClick={() => runCodeCommand('fold')}>{t('折叠根节点')}</button>
+        <button type="button" onClick={() => runCodeCommand('unfold')}>{t('展开全部')}</button></>}
+      <button disabled={!result && mode !== 'base64'} onClick={() => onCopy(text)}>{t("复制当前内容")}</button>
     </div>
     {result?.error && <div className="format-note" role="status">{t(result.error)}{result.binary ? t("（当前显示 Base64）") : ''}</div>}
     {oversized && <div className="format-note">{t('界面仅显示前 64 KiB Base64；复制按钮可复制完整编码正文。')}</div>}
     {isSse && mode === 'pretty' && result && !result.binary ? <div className="formatted-scroll"><div className="format-note">{t('SSE 事件 · 收到空行后显示完整事件；原文包含心跳和未完成事件。')}</div>{parseSse(result.raw).map((event, i) => <details key={i} open><summary>#{i + 1} · {event.event}{event.id ? ` · ID: ${event.id}` : ''}{event.retry ? ` · retry: ${event.retry} ms` : ''}</summary><pre>{event.data}</pre></details>)}</div> : mode === 'preview' && canPreview ? <div className="response-preview"><div className="format-note">{t("静态 HTML / SVG 预览 · 脚本与外部资源已禁用")}</div>{isSvg ? <ImagePreview src={mediaUrl} /> : <iframe title={t("响应 HTML 预览")} sandbox="" referrerPolicy="no-referrer" srcDoc={preview} />}</div> : <div className="formatted-scroll">{!result && mode !== 'base64' ? <p>{t("正在处理正文…")}</p> : displayedText
-      ? <Suspense fallback={<pre>{displayedText}</pre>}><CodeView text={displayedText} language={mode === 'base64' || result?.binary ? 'text' : result?.language ?? 'text'} /></Suspense> : <p>{t("（空正文）")}</p>}</div>
+      ? <Suspense fallback={<pre>{displayedText}</pre>}><CodeView text={displayedText} language={mode === 'base64' || result?.binary ? 'text' : result?.language ?? 'text'} command={codeCommand} /></Suspense> : <p>{t("（空正文）")}</p>}</div>
     }
   </div>;
 }

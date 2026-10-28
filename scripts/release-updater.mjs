@@ -13,7 +13,7 @@ export const updaterTargets = Object.entries(platforms).flatMap(([label, platfor
   ...(platform.additionalUpdaters ?? []).map(extra => ({ label, ...extra })),
 ]);
 export const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const releaseNotesPath = 'docs/release-2026-10-23-capabilities.md';
+export const releaseNotesPath = 'docs/release-2026-10-28.md';
 export function readReleaseNotes(rootDirectory = projectRoot) {
   const markdown = readFileSync(path.join(rootDirectory, releaseNotesPath), 'utf8').replace(/^\uFEFF/, '').trim();
   const summary = markdown.split(/^## 更新内容\r?$/m)[1]?.split(/^## /m)[0].trim();

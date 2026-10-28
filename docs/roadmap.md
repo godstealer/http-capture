@@ -1,12 +1,12 @@
 # 功能状态与开发路线图
 
-更新时间：2026-10-26。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
+更新时间：2026-10-28。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
 
 当前顺序（2026-10-25 用户调整）：优先完成 PC 二维码与 Android VPN 局域网协同抓包；Android 本机版和 iOS 测试版保留现有实现，随后补齐目标机器验证。iOS App Store 上架暂不处理。安装、跨版本更新、系统集成等手工验收待用户方便时再做。**P0 大正文全链路低内存暂停主动开发**，遇到具体问题或用户明确要求时再恢复。当前批次完成后只集中推送并运行一次必需 Check；夜间或机器排队时不发版。
 
-## 当前未完成与待验证（2026-10-26）
+## 当前未完成与待验证（2026-10-28）
 
-最新公开桌面正式版为 **[0.1.67 / build-4f923dda695b](https://github.com/godstealer/http-capture/releases/tag/build-4f923dda695b)**，来源 `4f923dda695b35d3a78c12c705b4d8499f710533`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/40262746237) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/40265135727) 的四平台构建、原生更新测试与发布全部成功。公开页面有 22 个附件，兼容更新频道与发布清单一致。独立下载时大安装包传输停滞，已核对五个公开签名文件与清单一致、九项可下载小文件的 SHA256；17 项完整附件哈希及签名正文由发布 CI 验证，尚未完成本机全量复核。另有未提交的局域网配对协议基础代码与文档，**未进入 0.1.67**。移动端仍无正式安装包。
+最新公开桌面正式版为 **[0.1.67 / build-4f923dda695b](https://github.com/godstealer/http-capture/releases/tag/build-4f923dda695b)**，来源 `4f923dda695b35d3a78c12c705b4d8499f710533`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/40262746237) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/40265135727) 的四平台构建、原生更新测试与发布全部成功。公开页面有 22 个附件，兼容更新频道与发布清单一致。独立下载时大安装包传输停滞，已核对五个公开签名文件与清单一致、九项可下载小文件的 SHA256；17 项完整附件哈希及签名正文由发布 CI 验证，尚未完成本机全量复核。后续局域网配对代码已提交并通过[同源四平台 Check](https://github.com/godstealer/http-capture/actions/runs/40322052848)，**未进入 0.1.67**；设备端到端验收仍待完成。移动端仍无正式安装包。
 
 | 分类 | 尚未完成的工作 | 当前处理方式 |
 | --- | --- | --- |
@@ -27,7 +27,7 @@
 - **本轮新增功能**：真实证书文件的 P12/PFX/加密 PEM 与 httpcloak mTLS；两台设备上的加密导出、合并预览/导入及重启；浏览器无文件选择 API 时的会话/正文下载；压缩 SSE、历史 gRPC 和固定目标 QUIC 反向代理的目标环境测试。
 - **已有功能的业务验收**：真实 AI 客户端 MCP、插件编辑与列表、集合/环境恢复、H2 请求头顺序的 Reqable MITM 对照、实际网站重放、Linux/macOS 流量来源及 TUN/UDP/QUIC 进程识别。用户尚未安排时继续保留为待验，不据自动测试勾选。
 
-分项细节和历史证据见下文；新候选范围见[本轮更新说明](release-2026-10-23-capabilities.md)，实机项目见[验收清单](acceptance-2026-10-19.md)。
+分项细节和历史证据见下文；新候选范围见[本轮更新说明](release-2026-10-28.md)，实机项目见[验收清单](acceptance-2026-10-19.md)。
 
 ## 0.1.34：证书管理（四平台已发布）
 

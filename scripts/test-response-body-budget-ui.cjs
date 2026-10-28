@@ -11,7 +11,7 @@ const jsx=(type,props={})=>({type,props});
 const nodes=value=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'?[value,...nodes(value.props?.children)]:[];
 (async()=>{
 const output=await build({entryPoints:['apps/frontend/src/ResponseBody.tsx'],bundle:true,platform:'node',format:'cjs',write:false,packages:'external',jsx:'automatic',plugins:[{name:'response-budget',setup(builder){
-  builder.onLoad({filter:/[/\\]i18n\.ts$/},()=>({contents:'export const t=value=>value;'}));
+  builder.onLoad({filter:/[/\\]i18n\.ts$/},()=>({contents:'export const t=value=>value; export const useLanguage=()=>({language:"zh-CN"});'}));
   builder.onLoad({filter:/[/\\]ImagePreview\.tsx$/},()=>({contents:'export default function ImagePreview(){}'}));
 }}]});
 const builtModule={exports:{}};
