@@ -1,7 +1,7 @@
 import type { Header, RequestDraft } from './types';
 
 export type RequestBodyMode = 'raw' | 'form' | 'multipart' | 'file' | 'base64';
-export type RawBodyParser = 'text' | 'json' | 'html' | 'babel' | 'css';
+export type RawBodyParser = 'text' | 'json' | 'html' | 'xml' | 'babel' | 'css';
 export type RequestBodyPart = { name: string; value: string; file?: File };
 export type EncodedRequestBody = { bodyBase64: string; contentType: string };
 export type RequestBodyUpdateOptions = { preserveContentEncoding?: boolean };
@@ -82,6 +82,7 @@ export function rawBodyParser(mime: string): RawBodyParser {
   const type = contentTypeName(mime);
   if (type === 'application/json' || type.endsWith('+json')) return 'json';
   if (type === 'text/html' || type === 'application/xhtml+xml') return 'html';
+  if (type === 'application/xml' || type === 'text/xml' || type.endsWith('+xml')) return 'xml';
   if (['text/javascript', 'application/javascript', 'application/x-javascript', 'text/jsx'].includes(type)) return 'babel';
   if (type === 'text/css') return 'css';
   return 'text';
@@ -133,7 +134,7 @@ export function rawContentType(parser: RawBodyParser, current: string): string {
   if (matches) return utf8ContentType(current);
   return {
     text: 'text/plain; charset=utf-8', json: 'application/json',
-    html: 'text/html; charset=utf-8', babel: 'application/javascript; charset=utf-8', css: 'text/css; charset=utf-8',
+    html: 'text/html; charset=utf-8', xml: 'application/xml; charset=utf-8', babel: 'application/javascript; charset=utf-8', css: 'text/css; charset=utf-8',
   }[parser];
 }
 

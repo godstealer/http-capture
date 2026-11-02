@@ -124,7 +124,7 @@ export function InterceptionEditor({item, onDone}: {item: Item; onDone: () => Pr
           <strong>{t('正文')}</strong>
           <select aria-label={t('拦截正文编码')} value={base64 ? 'base64' : 'text'} onChange={e => setBase64(e.target.value === 'base64')}><option value="text">UTF-8</option><option value="base64">{t('Base64（原始字节）')}</option></select>
           {!base64 && <select aria-label={t('拦截正文语言')} value={parser} onChange={e => setParser(e.target.value)}>
-            <option value="auto">{t('自动识别')}</option><option value="text">Text</option><option value="json">JSON</option><option value="html">HTML / SVG</option><option value="babel">JavaScript</option><option value="css">CSS</option>
+            <option value="auto">{t('自动识别')}</option><option value="text">Text</option><option value="json">JSON</option><option value="html">HTML / SVG</option><option value="xml">XML</option><option value="babel">JavaScript</option><option value="css">CSS</option>
           </select>}
           {editingResponse && <><button type="button" onClick={() => fileInput.current?.click()}>{t('从文件替换响应正文')}</button><input hidden type="file" ref={fileInput} onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void replaceFile(file); }}/></>}
           <button type="button" aria-pressed={preview} onClick={() => setPreview(!preview)}>{preview ? t('编辑') : t('预览')}</button>

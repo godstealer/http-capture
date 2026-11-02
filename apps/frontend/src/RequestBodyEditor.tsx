@@ -152,7 +152,7 @@ export default function RequestBodyEditor({ draft, onChange }: {
       {mode === 'raw' && <label>{t('正文语言')}<select aria-label={t('请求正文格式')} value={parser}
         onChange={event => setParser(event.target.value as RawBodyParser)}>
         <option value="text">Text</option><option value="json">JSON</option>
-        <option value="html">HTML</option><option value="babel">JavaScript</option><option value="css">CSS</option>
+        <option value="html">HTML</option><option value="xml">XML</option><option value="babel">JavaScript</option><option value="css">CSS</option>
       </select></label>}
       <span className="request-body-size">{byteLength === null ? t('Base64 编码无效') : t('{count} 字节', { count: byteLength })}</span>
     </div>

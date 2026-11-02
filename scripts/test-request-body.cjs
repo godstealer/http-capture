@@ -72,6 +72,8 @@ const draft = (overrides = {}) => ({
   assert.equal(inferRequestBodyMode('invalid!', 'text/plain'), 'file', 'invalid Base64 stays available for correction');
   assert.equal(rawBodyParser('Application/Problem+JSON; charset=utf-8'), 'json');
   assert.equal(rawBodyParser('text/html'), 'html');
+  assert.equal(rawBodyParser('application/soap+xml; charset=utf-8'), 'xml');
+  assert.equal(rawBodyParser('text/xml'), 'xml');
   assert.equal(rawBodyParser('text/javascript'), 'babel');
   assert.equal(rawBodyParser('text/css'), 'css');
   assert.equal(rawContentType('json', 'application/vnd.test+json; charset=UTF-8'), 'application/vnd.test+json; charset=UTF-8');
@@ -82,6 +84,8 @@ const draft = (overrides = {}) => ({
   assert.equal(rawContentType('json', 'application/json; profile="schema\\\"; charset=preserve"; charset=utf-16'),
     'application/json; profile="schema\\\"; charset=preserve"; charset=utf-8');
   assert.equal(rawContentType('json', 'text/plain'), 'application/json');
+  assert.equal(rawContentType('xml', 'application/soap+xml; charset=UTF-8'), 'application/soap+xml; charset=UTF-8');
+  assert.equal(rawContentType('xml', 'text/plain'), 'application/xml; charset=utf-8');
   assert.equal(rawContentType('text', 'application/octet-stream'), 'text/plain; charset=utf-8');
   assert.equal(requestContentType([{ name: 'Content-Type', value: 'ignored', disabled: true }, { name: 'content-type', value: 'text/plain' }]), 'text/plain');
 

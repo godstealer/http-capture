@@ -14,8 +14,8 @@ import {createBodyFormatController, type BodyFormatStatus, type BodyFormatTask} 
 import './body-code-editor.css';
 
 const protoLanguage=StreamLanguage.define({startState:()=>({comment:false}),token(stream,state){if(state.comment){if(stream.skipTo('*/')){stream.match('*/');state.comment=false}else stream.skipToEnd();return 'comment'}if(stream.eatSpace())return null;if(stream.match('//')){stream.skipToEnd();return 'comment'}if(stream.match('/*')){state.comment=true;return 'comment'}if(stream.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/))return 'string';if(stream.match(/\b(?:syntax|package|import|message|enum|service|rpc|returns|stream|option|repeated|optional|required|oneof|map|reserved|extensions|extend)\b/))return 'keyword';if(stream.match(/\b(?:string|bytes|bool|double|float|s?fixed(?:32|64)|s?int(?:32|64)|uint(?:32|64))\b/))return 'typeName';if(stream.match(/-?\d+(?:\.\d+)?/))return 'number';stream.next();return null}});
-const language = (parser:string) => parser==='proto'?protoLanguage:parser==='json'?json():parser==='babel'?javascript():parser==='html'?html():parser==='css'?css():[];
-const supported = (parser: string) => ['json', 'html', 'babel', 'css'].includes(parser);
+const language = (parser:string) => parser==='proto'?protoLanguage:parser==='json'?json():parser==='babel'?javascript():parser==='html'||parser==='xml'?html():parser==='css'?css():[];
+const supported = (parser: string) => ['json', 'html', 'xml', 'babel', 'css'].includes(parser);
 const highlight = HighlightStyle.define(defaultHighlightStyle.specs.map(spec => ({...spec,
   ...(spec.color ? {color: `var(--syntax-${String(spec.color).slice(1)}, ${spec.color})`} : {}),
 })));

@@ -22,7 +22,7 @@ export default function CodeView({ text, language, label = t("响应代码，可
   const view = useRef<EditorView | null>(null);
   const { language: locale } = useLanguage();
   useEffect(() => {
-    const grammar = language === 'html' ? html() : language === 'babel' ? javascript() : language === 'json' ? json() : language === 'css' ? css() : [];
+    const grammar = language === 'html' || language === 'xml' ? html() : language === 'babel' ? javascript() : language === 'json' ? json() : language === 'css' ? css() : [];
     // EditorState normalizes CRLF/CR to LF when constructing its document.
     const jsonRanges = language === 'json' ? jsonFoldRanges(text.replace(/\r\n?|\n/g, '\n')) : null;
     const editor = new EditorView({ parent: parent.current!, state: EditorState.create({ doc: text, extensions: [

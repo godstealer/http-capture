@@ -121,7 +121,7 @@ export default function ResponseBody({ body, headers, onCopy, complete = true }:
       <button key={key} aria-pressed={mode === key} onClick={() => setMode(key)}>{t(label)}</button>)}</div>
       <button disabled={!canPreview} title={t("HTML / SVG 静态预览")} aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>{t("预览")}</button>
       <select aria-label={t("响应格式")} value={parser} onChange={e => setParser(e.target.value)}>
-        <option value="auto">{t("自动识别")}</option><option value="json">JSON</option><option value="html">HTML</option>
+        <option value="auto">{t("自动识别")}</option><option value="json">JSON</option><option value="html">HTML</option><option value="xml">XML</option>
         <option value="babel">JavaScript</option><option value="css">CSS</option><option value="text">{t("纯文本")}</option>
       </select><span>{result?.language === 'babel' ? 'JavaScript' : result?.language.toUpperCase()}</span>
       {downloads}

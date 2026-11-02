@@ -4,11 +4,13 @@ import * as babel from 'prettier/plugins/babel';
 import * as estree from 'prettier/plugins/estree';
 import * as html from 'prettier/plugins/html';
 import * as postcss from 'prettier/plugins/postcss';
+import xmlFormat from 'xml-formatter';
 
 export function responseLanguage(contentType: string): string {
   const mime = contentType.split(';')[0].trim().toLowerCase();
   if (mime === 'application/json' || mime.endsWith('+json')) return 'json';
   if (['text/html', 'application/xhtml+xml', 'image/svg+xml'].includes(mime)) return 'html';
+  if (mime === 'application/xml' || mime === 'text/xml' || mime.endsWith('+xml')) return 'xml';
   if (/(?:java|ecma)script$/.test(mime)) return 'babel';
   if (mime === 'text/css') return 'css';
   return 'text';
@@ -17,6 +19,7 @@ export function responseLanguage(contentType: string): string {
 export async function formatResponse(text: string, parser: string): Promise<string> {
   if (parser === 'text') return text;
   if (text.length > 1024 * 1024) throw new Error('正文超过 1 MiB，显示原文以避免格式化耗时过长');
+  if (parser === 'xml') return xmlFormat(text, { indentation: '  ', lineSeparator: '\n', collapseContent: true, throwOnFailure: true });
   // Prettier 3.6 ships an empty declaration for its runtime estree printer.
   return format(text, { parser: parser === 'json' ? 'json-stringify' : parser, plugins: [babel, estree as Plugin, html, postcss], tabWidth: 2, printWidth: 100 });
 }
