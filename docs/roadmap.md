@@ -6,7 +6,7 @@
 
 ## 当前未完成与待验证（2026-11-03）
 
-最新公开桌面正式版为 **[0.1.70 / build-c9e5fb92a7bc](https://github.com/godstealer/http-capture/releases/tag/build-c9e5fb92a7bc)**，来源 `c9e5fb92a7bce5d9b3c5f60cc0299391885157d0`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/40687281098) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/40689832486) 的四平台构建与发布成功，公开 22 个附件，兼容更新频道与发布清单一致。M1 用户报告 ARM 安装包启动时显示“已损坏”；此前构建缺少 Apple 应用代码签名，真实设备的完整诊断仍待取得。后续 XML 格式化与 macOS 临时签名属于下一版候选，尚未发布或经过 M1 实机验收。Android 局域网协同抓包仍待设备端到端验收，移动端无正式安装包。
+最新公开桌面正式版为 **[0.1.71 / build-279937df7b62](https://github.com/godstealer/http-capture/releases/tag/build-279937df7b62)**，来源 `279937df7b626664ac27972e83632c02a22982ea`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/41639760951) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/41640780152) 的四平台构建、两种 Mac 应用代码签名校验、更新器测试与发布全部成功。公开 22 个附件，正式版与兼容更新频道的 `latest.json` SHA256 一致，均指向 0.1.71。本版加入 XML 正文格式化和 macOS 临时应用签名；M1 用户此前报告的“已损坏”仍需新包在真实设备上复测。临时签名不等于 Apple Developer ID 签名与公证。Android 局域网协同抓包仍待设备端到端验收，移动端无正式安装包。
 
 | 分类 | 尚未完成的工作 | 当前处理方式 |
 | --- | --- | --- |
@@ -22,12 +22,12 @@
 
 待验证的项目与未开发项分开记录：
 
-- **发布后复核**：0.1.67 的同源 Check、四平台构建、CI 签名及更新器生命周期测试、22 个公开附件和频道一致性已核对；本机下载大附件受网络阻塞，17 项完整附件哈希与五个大更新包的签名正文独立复核仍待补做。夜间、机器排队或 CI 失败时不发后续版本。
+- **发布后复核**：0.1.71 的同源 Check、四平台构建、CI 更新签名及更新器生命周期测试、22 个公开附件和频道一致性已核对；大附件的本机完整下载及独立哈希复核、M1 安装与启动仍待完成。夜间或机器排队时原则上不发后续版本，用户明确要求立即发版且机器可用时按本次门禁执行。
 - **安装版与系统行为**：四平台真实安装/升级/卸载、数据保留、原生文件选择/剪贴板、标题栏和系统菜单退出、系统代理恢复、CA 安装/卸载，以及 Windows 代码签名与 macOS 签名公证配置。
 - **本轮新增功能**：真实证书文件的 P12/PFX/加密 PEM 与 httpcloak mTLS；两台设备上的加密导出、合并预览/导入及重启；浏览器无文件选择 API 时的会话/正文下载；压缩 SSE、历史 gRPC 和固定目标 QUIC 反向代理的目标环境测试。
 - **已有功能的业务验收**：真实 AI 客户端 MCP、插件编辑与列表、集合/环境恢复、H2 请求头顺序的 Reqable MITM 对照、实际网站重放、Linux/macOS 流量来源及 TUN/UDP/QUIC 进程识别。用户尚未安排时继续保留为待验，不据自动测试勾选。
 
-分项细节和历史证据见下文；新候选范围见[本轮更新说明](release-2026-10-28.md)，实机项目见[验收清单](acceptance-2026-10-19.md)。
+分项细节和历史证据见下文；本版范围见[0.1.71 更新说明](release-2026-11-03.md)，实机项目见[验收清单](acceptance-2026-10-19.md)。
 
 ## 0.1.34：证书管理（四平台已发布）
 

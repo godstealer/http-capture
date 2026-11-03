@@ -1,6 +1,6 @@
 # 桌面正式版发布
 
-当前公开正式版为 [0.1.67](https://github.com/godstealer/http-capture/releases/tag/build-4f923dda695b)。下一版的源码说明见[2026-10-28 更新内容](release-2026-10-28.md)；必须完成同源 Check、四平台打包及更新签名验证后，才把该候选记为正式发布。Android 和 iOS 不属于本次桌面正式版。
+当前公开正式版为 [0.1.71](https://github.com/godstealer/http-capture/releases/tag/build-279937df7b62)，更新内容见[2026-11-03 发布说明](release-2026-11-03.md)。同源 Check、四平台打包、Mac 应用签名校验与更新签名验证已通过，公开 22 个附件；应用内更新频道与正式版清单一致。Android 和 iOS 不属于本次桌面正式版。
 
 正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 四平台已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 [Check #34](https://github.com/godstealer/http-capture/actions/runs/39621202898)；Mac 源码检查现已通过。[Windows/Linux 构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和 [Mac 双架构构建](https://github.com/godstealer/http-capture/actions/runs/39700840500) 均通过，每个平台 10 项原生更新测试通过。22 个公开附件、17 项 SHA256、五个更新包及版本注释签名、兼容更新频道一致性已独立核验；自动更新频道与 GitHub Latest 已推进至 0.1.34。
 
