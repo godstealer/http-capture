@@ -45,6 +45,7 @@ export function importCurl(source: string): RequestDraft {
   if (!/^curl(?:\.exe)?$/i.test(args.shift() ?? '')) throw new Error('请粘贴以 curl 或 curl.exe 开头的命令。');
   const request = emptyRequest(); request.headers = [];
   const bodies: string[] = []; let explicitMethod = false; let head = false; let jsonBody = false; let usedPipe = false;
+  let httpVersion: '--http1.1' | '--http2' | '--http2-prior-knowledge' | '--http3-only' | undefined;
   function header(value: string) {
     const colon = value.indexOf(':');
     if (colon < 0 && value.endsWith(';')) { request.headers.push({ name: value.slice(0, -1), value: '' }); return; }
@@ -73,11 +74,22 @@ export function importCurl(source: string): RequestDraft {
       request.url = option === '--url' ? value() : option;
     }
     else if (['-I', '--head'].includes(option)) head = true;
+    else if (['--http1.1', '--http2', '--http2-prior-knowledge', '--http3-only'].includes(option)) {
+      if (inline !== undefined) throw new Error(`${option} 不接受参数值。`);
+      if (httpVersion && httpVersion !== option) throw new Error('一条 cURL 命令只能指定一种 HTTP 版本。');
+      httpVersion = option as typeof httpVersion;
+    }
     else if (['--globoff', '--path-as-is', '--compressed', '-s', '--silent', '-S', '--show-error', '-v', '--verbose'].includes(option)) { /* No request fields to import. */ }
     else throw new Error(`暂不支持参数 ${option}，请移除或在请求编辑器中配置。`);
   }
-  try { if (!['http:', 'https:'].includes(new URL(request.url).protocol)) throw new Error(); }
+  let protocol: string;
+  try { protocol = new URL(request.url).protocol; if (!['http:', 'https:'].includes(protocol)) throw new Error(); }
   catch { throw new Error('需要有效的 HTTP 或 HTTPS URL。'); }
+  if (httpVersion === '--http2' && protocol === 'http:') throw new Error('明文 HTTP 的 --http2 使用 h2c Upgrade，当前发送引擎暂不支持；若服务器支持直接 h2c，可使用 --http2-prior-knowledge。');
+  if (httpVersion === '--http3-only' && protocol !== 'https:') throw new Error('--http3-only 需要 HTTPS URL。');
+  if (httpVersion === '--http1.1') request.engine = 'native';
+  else if (httpVersion === '--http2-prior-knowledge') request.engine = 'h2';
+  else if (httpVersion === '--http3-only') request.engine = 'h3';
   if (pipedBody !== undefined && !usedPipe) throw new Error('管道正文需要 --data-binary @-。');
   if (!explicitMethod) request.method = head ? 'HEAD' : bodies.length || usedPipe ? 'POST' : 'GET';
   const has = (name: string) => request.headers.some(h => h.name.toLowerCase() === name);

@@ -11,6 +11,10 @@ export function toCurl(request: RequestDraft): string {
     'proxy-authorization', 'keep-alive', 'te', 'trailer', 'upgrade', ...connectionTokens]);
   const headers = request.headers.filter(h => !h.disabled && !omitted.has(h.name.toLowerCase()));
   const args = ['curl', '--globoff', '--path-as-is', '--request', quote(request.method), '--url', quote(request.url)];
+  if (request.engine === 'native') args.push('--http1.1');
+  else if (request.engine === 'h2') args.push('--http2-prior-knowledge');
+  else if (request.engine === 'h3') args.push('--http3-only');
+  else if (request.engine === 'auto' && /^https:/i.test(request.url)) args.push('--http2');
   for (const header of headers) {
     // Captured HTTP/1 field values are mapped byte-for-byte to Latin-1 characters.
     const line = header.value ? `${header.name}: ${header.value}` : `${header.name};`;

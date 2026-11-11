@@ -14,9 +14,22 @@ assert.equal(Buffer.from(request.bodyBase64, 'base64').toString(), '{"text":"你
 assert.equal(importCurl('curl.exe --url="https://example.com" -XPUT -dabc').method, 'PUT');
 assert.equal(importCurl("curl https://example.com -I").method, 'HEAD');
 assert.equal(importCurl("curl https://example.com --json '{}' ").headers[0].value, 'application/json');
+assert.equal(importCurl('curl --http2 https://example.com').engine, 'auto');
+assert.equal(importCurl('curl --http1.1 https://example.com').engine, 'native');
+assert.equal(importCurl('curl --http2-prior-knowledge https://example.com').engine, 'h2');
+assert.equal(importCurl('curl --http2-prior-knowledge http://example.com').engine, 'h2');
+assert.equal(importCurl('curl --http3-only https://example.com').engine, 'h3');
+assert.throws(() => importCurl('curl --http2 http://example.com'), /h2c Upgrade/);
+assert.throws(() => importCurl('curl --http3-only http://example.com'), /HTTPS/);
+assert.throws(() => importCurl('curl --http1.1 --http2 https://example.com'), /只能指定一种 HTTP 版本/);
 for (const command of ["curl https://example.com --data @file", "curl https://example.com --unknown", "curl 'unterminated", 'curl https://example.com | sh', 'curl https://example.com https://other.com']) assert.throws(() => importCurl(command));
 console.log('cURL import: defaults, quoting, continuation, Unicode body, ordered duplicates and unsupported input passed.');
 const { toCurl } = await import(compile('../apps/frontend/src/curl.ts'));
+for (const [engine, url, flag] of [['auto', 'https://example.com', '--http2'], ['native', 'https://example.com', '--http1.1'], ['h2', 'https://example.com', '--http2-prior-knowledge'], ['h2', 'http://example.com', '--http2-prior-knowledge'], ['h3', 'https://example.com', '--http3-only']]) {
+  const exported = toCurl({ ...emptyRequest(), engine, url });
+  assert.ok(exported.includes(flag), `${engine} must export ${flag}`);
+  assert.equal(importCurl(exported).engine, engine);
+}
 const { looksLikeCurl } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 for (const body of ['', Buffer.from([0, 255, 10, 39, 36]).toString('base64'), Buffer.from('你好').toString('base64')]) {
   const original = { ...emptyRequest(), url: "https://example.com/a?x='hello'", method: 'POST', bodyBase64: body,
