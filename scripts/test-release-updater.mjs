@@ -16,7 +16,7 @@ const env = { SOURCE_CHECK_RUN_NUMBER: '42', SOURCE_SHA: sourceSha };
 function assertNativeReleaseWorkflows(checkText, releaseText) {
   const check=checkText.replace(/\r\n/g,'\n'),release=releaseText.replace(/\r\n/g,'\n');
   const checkRunners=check.match(/^        os: \[([^\]\n]+)\]$/m)?.[1].split(',').map(value=>value.trim());
-  assert.deepEqual(checkRunners,['ubuntu-latest','windows-latest','macos-26'],'source Check retains native ARM testing');
+  assert.deepEqual(checkRunners,['ubuntu-22.04','windows-latest','macos-26'],'source Check matches Linux release and retains native ARM testing');
   const matrix=release.match(/^      matrix:\n        include:\n([\s\S]+?)^    runs-on:/m)?.[1];
   assert(matrix,'explicit native packaging matrix is required');
   const rows=[...matrix.matchAll(/^          - os: (\S+)\n            label: (\S+)\n            bundles: (\S+)$/gm)].map(([,os,label,bundles])=>({os,label,bundles}));

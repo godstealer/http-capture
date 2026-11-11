@@ -5,8 +5,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep native ARM checks on the same macOS image as release packaging.
-        os: [ubuntu-latest, windows-latest, macos-26]
+        # Match the Linux and native ARM release build images.
+        os: [ubuntu-22.04, windows-latest, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

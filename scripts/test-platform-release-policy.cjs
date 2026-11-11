@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {platformReleaseSource}=require('./platform-release-policy.cjs');
 const run={name:'Check',path:'.github/workflows/check.yml',event:'push',head_branch:'main',head_repository:{full_name:'owner/repo'},head_sha:'a'.repeat(40),run_number:34,created_at:'2026-10-21T14:55:55Z'};
-const jobs=['frontend','capture (windows-latest)','capture (ubuntu-latest)'].map(name=>({name,status:'completed',conclusion:'success'}));jobs.push({name:'capture (macos-26)',status:'queued',conclusion:null});
+const jobs=['frontend','capture (windows-latest)','capture (ubuntu-22.04)'].map(name=>({name,status:'completed',conclusion:'success'}));jobs.push({name:'capture (macos-26)',status:'queued',conclusion:null});
 assert.deepEqual(platformReleaseSource(run,jobs,'windows-linux','owner/repo').matrix.map(x=>x.label),['windows-x64','linux-x64']);
 assert.throws(()=>platformReleaseSource(run,jobs,'macos','owner/repo'),/has not succeeded/);
 const complete=jobs.map(job=>({...job,status:'completed',conclusion:'success'}));assert.deepEqual(platformReleaseSource(run,complete,'macos','owner/repo').matrix.map(x=>x.label),['macos-arm64','macos-x64']);

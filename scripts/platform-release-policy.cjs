@@ -1,5 +1,5 @@
 const groups={
- 'windows-linux':{checks:['frontend','capture (windows-latest)','capture (ubuntu-latest)'],matrix:[{os:'windows-latest',label:'windows-x64',bundles:'nsis'},{os:'ubuntu-22.04',label:'linux-x64',bundles:'deb,appimage'}]},
+ 'windows-linux':{checks:['frontend','capture (windows-latest)','capture (ubuntu-22.04)'],matrix:[{os:'windows-latest',label:'windows-x64',bundles:'nsis'},{os:'ubuntu-22.04',label:'linux-x64',bundles:'deb,appimage'}]},
  macos:{checks:['frontend','capture (macos-26)'],matrix:[{os:'macos-26',label:'macos-arm64',bundles:'app,dmg'},{os:'macos-15-intel',label:'macos-x64',bundles:'app,dmg'}]},
 };
 function platformReleaseSource(run,jobs,group,repository){
