@@ -5,6 +5,7 @@ import { readClipboard, writeClipboard } from './clipboard';
 import { parseHeaderText, serializeHeaders, HeaderTextError } from './headerText';
 import { cookieHeaderActions, splitCookieHeader, mergeCookieHeaders } from './cookieHeaders';
 import type { Header } from './types';
+import UndoableInput from './UndoableInput';
 import './ordered-headers.css';
 
 function replaceEnabled(current: Header[], incoming: Header[]): Header[] {
@@ -108,13 +109,13 @@ export default function OrderedHeaders({ headers, onChange, context = 'request' 
         <input type="checkbox" aria-label={t('启用字段 {v0}', { v0: index + 1 })} checked={!header.disabled} onChange={event => update(index, { disabled: event.target.checked ? undefined : true })} />
         <span className="row-number">{String(index + 1).padStart(2, '0')}</span>
         <div className="header-name-cell">
-          <input aria-label={t('字段名 {v0}', { v0: index + 1 })} placeholder={t('字段名')} value={header.name} spellCheck={false} onChange={event => update(index, { name: event.target.value })} />
+          <UndoableInput aria-label={t('字段名 {v0}', { v0: index + 1 })} placeholder={t('字段名')} value={header.name} spellCheck={false} onValueChange={value => update(index, { name: value })} />
           {cookie && <div className="cookie-header-actions">
             <button type="button" aria-label={t('拆分 Cookie {v0}', { v0: index + 1 })} title={t('拆分 Cookie {v0}：按分号拆为多行，保留启用状态；需要多个有效键值对。', { v0: index + 1 })} aria-disabled={!cookie.canSplit} onClick={() => changeCookies(index, 'split')}><Split size={13} aria-hidden="true" /></button>
             <button type="button" aria-label={t('合并 Cookie {v0}', { v0: index + 1 })} title={t('合并 Cookie {v0}：至少两行有效 Cookie；仅合并相同启用状态。', { v0: index + 1 })} aria-disabled={!cookie.canMerge} onClick={() => changeCookies(index, 'merge')}><Merge size={13} aria-hidden="true" /></button>
           </div>}
         </div>
-        <input aria-label={t('字段值 {v0}', { v0: index + 1 })} placeholder={t('值')} value={header.value} spellCheck={false} onChange={event => update(index, { value: event.target.value })} />
+        <UndoableInput aria-label={t('字段值 {v0}', { v0: index + 1 })} placeholder={t('值')} value={header.value} spellCheck={false} onValueChange={value => update(index, { value })} />
         <div className="row-actions">
           <button type="button" title={t('上移')} aria-label={t('上移字段 {v0}', { v0: index + 1 })} disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={13} /></button>
           <button type="button" title={t('下移')} aria-label={t('下移字段 {v0}', { v0: index + 1 })} disabled={index === headers.length - 1} onClick={() => move(index, 1)}><ArrowDown size={13} /></button>

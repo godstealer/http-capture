@@ -180,6 +180,20 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
   const menuIds = useRef<string[]>([]);
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const [query, setQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!active) return;
+    const find = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
+      const target = event.target as HTMLElement;
+      if (target.closest('[role="dialog"], .capture-inspector, .cm-editor')) return;
+      event.preventDefault();
+      searchInput.current?.focus();
+      searchInput.current?.select();
+    };
+    window.addEventListener('keydown', find);
+    return () => window.removeEventListener('keydown', find);
+  }, [active]);
   const [filter, setFilter] = useState('all');
   const [idSort, setIdSort] = useState<'asc' | 'desc'>(() => {
     try { return localStorage.getItem('http-capture.capture.id-sort') === 'asc' ? 'asc' : 'desc'; }
@@ -275,7 +289,7 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
       <div className="column-settings-heading"><strong>{t("显示列")}</strong><button onClick={() => updateColumns(captureColumns.filter(c => c.default).map(c => c.id))}>{t("恢复默认")}</button><button aria-label={t("关闭")} onClick={() => { setColumnsOpen(false); columnButton.current?.focus(); }}><X size={16} /></button></div>
       <div className="column-settings-options">{captureColumns.map(c => <label key={c.id}><input type="checkbox" checked={columns.includes(c.id)} disabled={columns.length === 1 && columns.includes(c.id)} onChange={e => updateColumns(e.target.checked ? [...columns, c.id] : columns.filter(id => id !== c.id))} />{t(c.label)}</label>)}</div>
     </div>}
-    <div className="capture-filter"><div className="search-box"><Search size={15} /><input aria-label={t("过滤捕获请求")} placeholder={t("过滤 URL、方法、状态码、来源应用…")} value={query} onChange={e => setQuery(e.target.value)} />{query && <button aria-label={t("清除筛选")} onClick={() => setQuery('')}><X size={13} /></button>}</div>
+    <div className="capture-filter"><div className="search-box"><Search size={15} /><input ref={searchInput} aria-label={t("过滤捕获请求")} aria-keyshortcuts="Control+f Meta+f" placeholder={t("过滤 URL、方法、状态码、来源应用…")} value={query} onChange={e => setQuery(e.target.value)} />{query && <button aria-label={t("清除筛选")} onClick={() => setQuery('')}><X size={13} /></button>}</div>
       <div className="filter-options">{ filters.map(([key, label]) => <button key={key} className={`filter ${filter === key ? 'selected' : ''} ${['json','2','errors'].includes(key) ? 'filter-group-start' : ''}`} aria-pressed={filter === key} onClick={() => setFilter(key)}>{t(label)}</button>)}</div><span className="capture-total">{filtered.length} / {captured.length} {t("个请求")}</span>
     </div>
     <SplitPane storageKey="capture-list" label={t("调整请求列表与详情高度")} direction="column" initial={55} min={15} max={80}>

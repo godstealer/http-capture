@@ -51,5 +51,24 @@ export default function CodeView({ text, language, label = t("响应代码，可
     else if (command.type === 'fold') foldAll(editor);
     else unfoldAll(editor);
   }, [command]);
+  useEffect(() => {
+    const find = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
+      const target = event.target as HTMLElement;
+      if (target.closest('[role="dialog"], .cm-panel.cm-search')) return;
+      const region = target.closest('.capture-inspector, .detail-panel');
+      if (!region) return;
+      const ownBody = target.closest('.formatted-response');
+      const ownSection = target.closest('.inspector-split > section');
+      const candidates = Array.from((ownBody ?? ownSection ?? region).querySelectorAll<HTMLElement>('.response-code-editor'))
+        .filter(node => node.getClientRects().length > 0);
+      const selected = candidates.at(-1);
+      if (selected !== parent.current || !view.current) return;
+      event.preventDefault();
+      openSearchPanel(view.current);
+    };
+    window.addEventListener('keydown', find);
+    return () => window.removeEventListener('keydown', find);
+  }, []);
   return <div className="response-code-editor" ref={parent} aria-label={label} />;
 }
