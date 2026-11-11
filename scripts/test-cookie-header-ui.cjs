@@ -9,7 +9,7 @@ const react={
   useState(initial){const h=current,i=h.index++;if(!(i in h.slots))h.slots[i]=typeof initial==='function'?initial():initial;return [h.slots[i],value=>{h.slots[i]=typeof value==='function'?value(h.slots[i]):value}]},
 };
 const jsx=(type,props)=>({type,props:props??{}});
-function find(tree,predicate){const result=[];function walk(node){if(!node||typeof node!=='object')return;if(Array.isArray(node)){node.forEach(walk);return}if(predicate(node))result.push(node);walk(node.props?.children)}walk(tree);return result}
+function find(tree,predicate){const result=[];function walk(node){if(!node||typeof node!=='object')return;if(Array.isArray(node)){node.forEach(walk);return}if(predicate(node))result.push(node);if(typeof node.type==='function')walk(node.type(node.props));walk(node.props?.children)}walk(tree);return result}
 function text(node){if(node==null||node===false)return '';if(typeof node==='string'||typeof node==='number')return String(node);if(Array.isArray(node))return node.map(text).join('');return text(node.props?.children)}
 const sideEffects={network:0,clipboard:0,invoke:0};
 global.fetch=()=>{sideEffects.network++;throw Error('Cookie editing must never fetch')};
@@ -21,6 +21,7 @@ async function load(){
     builder.onLoad({filter:/[/\\]i18n\.ts$/},()=>({contents:'export function t(key,values={}){return key.replace(/\\{([^}]+)\\}/g,(_,name)=>String(values[name]??"{"+name+"}"));}'}));
     builder.onLoad({filter:/[/\\]clipboard\.ts$/},()=>({contents:'export const readClipboard=(...args)=>globalThis.__cookieClipboard(...args);export const writeClipboard=readClipboard;'}));
     builder.onLoad({filter:/[/\\]api\.ts$/},()=>({contents:'export const invoke=(...args)=>globalThis.__cookieInvoke(...args);'}));
+    builder.onLoad({filter:/[/\\]UndoableInput\.tsx$/},()=>({contents:'export default function UndoableInput({onValueChange,...props}){return <input {...props} onChange={event=>onValueChange(event.target.value)}/>;} ',loader:'tsx'}));
   }}]});
   const module={exports:{}};
   new Function('module','exports','require',output.outputFiles[0].text)(module,module.exports,name=>name==='react'?react:name==='react/jsx-runtime'?{jsx,jsxs:jsx}:name==='lucide-react'?new Proxy({},{get:()=>()=>null}):require(name));
