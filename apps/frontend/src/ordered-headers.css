@@ -12,6 +12,9 @@
 .headers-message { margin: 0; padding: 8px 16px; color: var(--field-text); font-size: 12px; line-height: 1.6; }
 .headers-error { color: #c6473d; }
 .ordered-headers .headers-table { overflow: auto; max-height: 350px; }
+.request-headers-content { display: flex; flex-direction: column; overflow: hidden; }
+.request-headers-content > .ordered-headers { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.request-headers-content .headers-table { flex: 1; min-height: 0; max-height: none; }
 .ordered-headers .headers-scroll { max-height: none; overflow: visible; }
 :root .app-shell .ordered-headers :is(.table-head, .header-row) { display: grid; grid-template-columns: 22px 28px minmax(140px, .7fr) minmax(200px, 1.3fr) 82px; min-width: 600px; align-items: center; gap: 10px; padding-left: 16px; padding-right: 12px; }
 .ordered-headers .table-head { position: sticky; top: 0; z-index: 1; min-height: 33px; }
