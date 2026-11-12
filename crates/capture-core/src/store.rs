@@ -412,6 +412,7 @@ pub struct RequestEditor {
  pub parent_id:Option<String>,
  #[serde(default, skip_serializing_if="Option::is_none")] pub grpc_draft:Option<GrpcDraft>,
  #[serde(default, skip_serializing_if="Option::is_none")] pub saved_request_id:Option<String>,
+ #[serde(default, skip_serializing_if="Option::is_none")] pub follow_redirects:Option<bool>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
@@ -434,6 +435,7 @@ pub struct SavedRequest {
  pub id:String,pub name:String,pub collection_id:String,pub draft:RequestDraft,
  #[serde(default, skip_serializing_if="Option::is_none")] pub grpc_draft:Option<GrpcDraft>,
  #[serde(default, skip_serializing_if="Option::is_none")] pub request_mode:Option<String>,
+ #[serde(default, skip_serializing_if="Option::is_none")] pub follow_redirects:Option<bool>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

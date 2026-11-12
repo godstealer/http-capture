@@ -184,6 +184,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
     if (!workspaceReady) { notify(t("请求工作区尚未加载，请稍后再试。")); return; }
     const id = crypto.randomUUID();
     setEditors(items => [...items, { id, draft: clone(imported ?? (f?.websocket?{...f.request,url:f.request.url.replace(/^http/, 'ws'),method:'GET',bodyBase64:'',engine:'auto',tls:{preset:'native'}}:f?.request) ?? blank), selected: mode === 'result' ? f?.id ?? null : null, parentId: f?.id ?? null, ...(savedRequest ? { savedRequestId: savedRequest.id, ...(savedRequest.grpcDraft ? { grpcDraft: structuredClone(savedRequest.grpcDraft) } : {}) } : {}) }]);
+    if (savedRequest?.followRedirects === false) setEditors(items => items.map(item => item.id === id ? { ...item, followRedirects: false } : item));
     if (savedRequest?.requestMode) setRequestModes(values => ({ ...values, [id]: savedRequest.requestMode! }));
     setActiveEditor(id); setView('replay'); setTab('headers'); setResponseTab('body'); setResponseCollapsed(false);
     return id;
@@ -213,7 +214,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
       : t('保存失败：{v0}', { v0: String(error) });
   }
   async function commitRequest(target: RequestSaveTarget, selection: SaveRequestSelection, base: Library, requestId?: string) {
-    const next = withSavedRequest(base, target.draft, selection, requestId, { grpcDraft: target.grpcDraft, requestMode: target.requestMode });
+    const next = withSavedRequest(base, target.draft, selection, requestId, { grpcDraft: target.grpcDraft, requestMode: target.requestMode, followRedirects: target.followRedirects });
     await persistLibrary(next.library);
     setEditors(items => items.map(item => item.id === target.editorId ? { ...item, savedRequestId: next.requestId } : item));
     setRequestSaveError('');
@@ -228,7 +229,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
       if (!base) throw new Error(t('请求集合读取失败，请重试。'));
       const existing = base.requests.find(request => request.id === source.savedRequestId);
       const target: RequestSaveTarget = {
-        editorId: source.id, draft: source.draft, grpcDraft: source.grpcDraft, requestMode: currentRequestContext(source).requestMode,
+        editorId: source.id, draft: source.draft, grpcDraft: source.grpcDraft, requestMode: currentRequestContext(source).requestMode, followRedirects: source.followRedirects,
         name: existing ? (asCopy ? t('{v0}（副本）', { v0: existing.name }) : existing.name) : suggestedRequestName(source.draft),
         collectionId: existing?.collectionId,
       };
@@ -387,7 +388,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
   function currentRequestContext(item?: RequestEditor): SavedRequestContext {
     if (!item) return {};
     const mode = requestModes[item.id] ?? (/^wss?:/i.test(item.draft.url) ? 'websocket' : item.draft.headers.some(h => !h.disabled && h.name.toLowerCase() === 'content-type' && isGrpcContentType(h.value)) ? 'grpc' : 'http');
-    return { grpcDraft: item.grpcDraft, requestMode: mode === 'grpc' || mode === 'websocket' ? mode : 'http' };
+    return { grpcDraft: item.grpcDraft, requestMode: mode === 'grpc' || mode === 'websocket' ? mode : 'http', followRedirects: item.followRedirects === false ? false : undefined };
   }
   useEffect(()=>{setTab(requestMode==='grpc'?'grpc':'headers')},[requestMode,editor?.id]);
   function changeRequestMode(mode:string){
@@ -456,11 +457,10 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
   async function sendRequest(id: string, request: RequestDraft, parentId: string | null) {
     const snapshot = clone(request);
     const serialized = JSON.stringify(snapshot);
-    await runs.start(id, snapshot, parentId, result => {
-      merge(result);
-      setEditors(items => applyRequestResult(items, id, serialized, result));
+    await runs.start(id, snapshot, parentId, (result, redirected) => {
+      setEditors(items => applyRequestResult(items, id, serialized, result, redirected));
       if (result.error) notify(result.error);
-    });
+    }, editors.find(item => item.id === id)?.followRedirects !== false, merge);
   }
   async function connectWebSocket(editorId:string,resolved:RequestDraft){
       setWsConnecting(v=>({...v,[editorId]:true}));
@@ -587,6 +587,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
           {editors.filter(item=>(requestModes[item.id]??(item.draft.headers.some(h=>!h.disabled&&h.name.toLowerCase()==='content-type'&&isGrpcContentType(h.value))?'grpc':'http'))==='grpc').map(item=><div key={item.id} hidden={item.id!==editor?.id||tab!=='grpc'}><GrpcPanel connected={connected} visible={view==='replay'&&item.id===editor?.id&&tab==='grpc'} savedDraft={item.grpcDraft} onDraftChange={patch=>setEditors(items=>items.map(e=>e.id===item.id?{...e,grpcDraft:{method:'',json:'{}',...e.grpcDraft,...patch}}:e))} environment={library.environments.find(v=>v.id===environmentId)?.variables??{}} environmentValid={!environmentId||library.environments.some(v=>v.id===environmentId)} flows={flows} draft={item.draft} flow={flows.find(f=>f.id===item.selected)} onChange={value=>setEditors(items=>items.map(e=>e.id===item.id?{...e,draft:value}:e))} onStarted={id=>{setEditors(items=>items.map(e=>e.id===item.id?{...e,selected:id}:e));setResponseCollapsed(false);setResponseTab("body")}}/></div>)}
           {tab === 'overview' && <RequestOverview request={draft} flow={flow} />}
           {tab === 'scripts' && <ScriptsEditor key={editor?.id} value={draft.scripts ?? emptyScripts} onChange={scripts=>setDraft({...draft,scripts})} logs={[...(flow?.notes??[]),flow?.error??'']} />}
+          {tab === 'settings' && <label className="redirect-setting"><input type="checkbox" checked={editor?.followRedirects !== false} onChange={event => { const followRedirects = event.target.checked; setEditors(items => items.map(item => item.id === editor?.id ? { ...item, followRedirects } : item)); }} />{t('自动跟随重定向（仅手动发送，最多 10 次）')}</label>}
           {tab === 'settings' && <div className="tls-editor"><EngineSelector draft={draft} engines={engines} onChange={setDraft} /><RequestProxySelector draft={draft} onChange={setDraft} onManage={() => openSettings('upstream')} /></div>}
           {tab === 'headers' && <OrderedHeaders key={editor?.id} headers={draft.headers} onChange={headers => setDraft({...draft,headers})} />}
           {tab === 'order' && <HeaderOrder onCopy={value => void copy(value)} headers={[...(draft.pseudoHeaders ?? []), ...draft.headers]} sent={flow?.response?.sentRequestHeaders} />}

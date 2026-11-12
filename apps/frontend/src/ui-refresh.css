@@ -182,6 +182,8 @@ body,.app-shell { background:var(--ui-bg); color:var(--ui-text); }
 .app-shell .property-table tbody tr:nth-child(even) { background:var(--ui-surface-alt); }
 .app-shell .composer-page .library-toolbar { padding:10px 16px; border-bottom:1px solid var(--ui-border); font-size:12px; }
 .app-shell .tls-editor { padding:18px; }
+.app-shell .redirect-setting { display:flex; align-items:center; gap:10px; padding:16px 18px; border-bottom:1px solid var(--ui-border); color:var(--ui-text); font-size:13px; cursor:pointer; }
+.app-shell .redirect-setting input { width:16px; height:16px; accent-color:var(--ui-accent); }
 .app-shell .tls-intro strong { color:var(--ui-text); font-size:14px; }
 .app-shell .tls-intro p,.app-shell .tls-fields p { color:var(--ui-muted); font-size:12px; line-height:1.7; }
 .app-shell .preset { background:var(--ui-surface-alt); border-color:var(--ui-border); border-radius:7px; }

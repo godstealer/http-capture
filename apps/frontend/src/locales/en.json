@@ -1647,5 +1647,6 @@
   "二维码仅用于一次配对，剩余 {v0} 秒。": "The QR code can pair once and expires in {v0} seconds.",
   "请核对手机显示的 PC 地址及身份指纹，确认后再连接。": "Check the PC address and identity fingerprint shown on the phone before connecting.",
   "配对码已过期，请刷新。": "Pairing code expired. Refresh it.",
-  "此入口独立于普通抓包代理，不会自动安装 CA、修改防火墙或系统代理。": "This receiver is separate from the ordinary capture proxy. It does not install a CA or change firewall or system proxy settings."
+  "此入口独立于普通抓包代理，不会自动安装 CA、修改防火墙或系统代理。": "This receiver is separate from the ordinary capture proxy. It does not install a CA or change firewall or system proxy settings.",
+  "自动跟随重定向（仅手动发送，最多 10 次）": "Follow redirects automatically (manual requests only, up to 10)"
 }

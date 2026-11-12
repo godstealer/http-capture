@@ -4,7 +4,7 @@ import type { RequestDraft } from './types';
 import {isWorkspaceConflict,reconcileWorkspace,type WorkspaceSnapshot} from './workspaceRecovery';
 
 export interface GrpcDraft { method: string; json: string }
-export interface RequestEditor { grpcDraft?: GrpcDraft; savedRequestId?: string; id: string; draft: RequestDraft; selected: string | null; parentId: string | null }
+export interface RequestEditor { grpcDraft?: GrpcDraft; savedRequestId?: string; followRedirects?: boolean; id: string; draft: RequestDraft; selected: string | null; parentId: string | null }
 interface Workspace { editors: RequestEditor[]; activeEditor: string; revision: number }
 const empty = JSON.stringify({ editors: [], activeEditor: '' });
 

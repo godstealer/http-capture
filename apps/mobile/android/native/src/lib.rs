@@ -604,7 +604,7 @@ fn save_request(data_dir: &Path, raw: &str) -> Result<serde_json::Value, String>
     };
     let id = Uuid::new_v4().to_string();
     library.requests.push(SavedRequest { id: id.clone(), name: name.into(), collection_id,
-        draft: input.draft, grpc_draft: None, request_mode: Some("http".into()) });
+        draft: input.draft, grpc_draft: None, request_mode: Some("http".into()), follow_redirects: None });
     let revision = store.save_library(library).map_err(|error| error.to_string())?;
     Ok(json!({"id": id, "revision": revision}))
 }

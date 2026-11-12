@@ -1,14 +1,16 @@
 # 功能状态与开发路线图
 
-更新时间：2026-11-11。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
+更新时间：2026-11-12。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
 
-当前顺序（2026-10-25 用户调整）：优先完成 PC 二维码与 Android VPN 局域网协同抓包；Android 本机版和 iOS 测试版保留现有实现，随后补齐目标机器验证。iOS App Store 上架暂不处理。安装、跨版本更新、系统集成等手工验收待用户方便时再做。**P0 大正文全链路低内存暂停主动开发**，遇到具体问题或用户明确要求时再恢复。当前批次完成后只集中推送并运行一次必需 Check；夜间或机器排队时不发版。
+当前顺序（2026-10-25 用户调整）：优先完成 PC 二维码与 Android VPN 局域网协同抓包；Android 本机版和 iOS 测试版保留现有实现，随后补齐目标机器验证。iOS App Store 上架暂不处理。安装、跨版本更新、系统集成等手工验收待用户方便时再做。**P0 大正文全链路低内存暂停主动开发**，遇到具体问题或用户明确要求时再恢复。当前批次完成后集中推送并运行同源 Check；用户于 2026-11-12 明确允许夜间发版，检查失败或构建排队时仍不发布。
 
-## 当前未完成与待验证（2026-11-11）
+## 当前未完成与待验证（2026-11-12）
 
-待发布桌面批次已加入 cURL 协议参数导入与导出、输入框撤销、Ctrl+F 搜索和请求头表格高度修复；范围与限制见[2026-11-11 更新说明](release-2026-11-11.md)。0.1.71 仍是已核验的最新公开正式版，直到本批次同源 Check、四平台打包及签名更新附件全部通过。
+0.1.73 已交付 cURL 协议参数导入与导出、输入框撤销、Ctrl+F 搜索和请求头表格高度修复；范围与限制见[2026-11-11 更新说明](release-2026-11-11.md)。待发布批次加入手动请求默认跟随重定向及按请求关闭开关，见[2026-11-12 更新说明](release-2026-11-12-redirects.md)。本机 Rust 测试程序被杀软删除，未恢复或放行；须以同源 Check、四平台打包和签名附件校验为正式版门槛。
 
-最新公开桌面正式版为 **[0.1.71 / build-279937df7b62](https://github.com/godstealer/http-capture/releases/tag/build-279937df7b62)**，来源 `279937df7b626664ac27972e83632c02a22982ea`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/41639760951) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/41640780152) 的四平台构建、两种 Mac 应用代码签名校验、更新器测试与发布全部成功。公开 22 个附件，正式版与兼容更新频道的 `latest.json` SHA256 一致，均指向 0.1.71。本版加入 XML 正文格式化和 macOS 临时应用签名；M1 用户此前报告的“已损坏”仍需新包在真实设备上复测。临时签名不等于 Apple Developer ID 签名与公证。Android 局域网协同抓包仍待设备端到端验收，移动端无正式安装包。
+最新公开桌面正式版为 **[0.1.73 / build-cc6953dffb19](https://github.com/godstealer/http-capture/releases/tag/build-cc6953dffb19)**，来源 `cc6953dffb192c95964562d3ab61d5a443904500`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/43055071617) 与 [Release](https://github.com/godstealer/http-capture/actions/runs/43167581569) 成功，公开 22 个附件。下段 0.1.71 记录保留为历史验收说明。
+
+此前桌面正式版为 **[0.1.71 / build-279937df7b62](https://github.com/godstealer/http-capture/releases/tag/build-279937df7b62)**，来源 `279937df7b626664ac27972e83632c02a22982ea`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/41639760951) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/41640780152) 的四平台构建、两种 Mac 应用代码签名校验、更新器测试与发布全部成功。公开 22 个附件，正式版与兼容更新频道的 `latest.json` SHA256 一致，均指向 0.1.71。本版加入 XML 正文格式化和 macOS 临时应用签名；M1 用户此前报告的“已损坏”仍需新包在真实设备上复测。临时签名不等于 Apple Developer ID 签名与公证。Android 局域网协同抓包仍待设备端到端验收，移动端无正式安装包。
 
 | 分类 | 尚未完成的工作 | 当前处理方式 |
 | --- | --- | --- |

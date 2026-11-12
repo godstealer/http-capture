@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 const source=ts.transpileModule(fs.readFileSync(new URL('../apps/frontend/src/requestRuns.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
-const {RequestRuns,applyRequestResult}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const {RequestRuns,applyRequestResult,redirectRequest}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 const pending=new Map(), cancellations=[], errors=[], results=[];
 let next=0, preparations=0;
 const invoke=async(command,args)=>{
@@ -57,3 +57,34 @@ assert.equal(reenabled[0].draft.url,'server-recorded');
 assert.deepEqual(reenabled[0].draft.headers,wireFlow.request.headers);
 assert.notEqual(reenabled[0].draft,wireFlow.request);
 console.log('Replay editor persistence: disabled rows survive repeated results while explicitly re-enabled drafts still accept returned script changes.');
+
+const first={method:'POST',url:'https://example.test/start',headers:[{name:'Authorization',value:'secret'},{name:'Cookie',value:'sid=private'},{name:'Accept',value:'application/json'},{name:'Content-Type',value:'text/plain'},{name:'Host',value:'example.test'}],bodyBase64:'aGVsbG8=',pseudoHeaders:[{name:':authority',value:'example.test'}]};
+const redirect=(status,location)=>({id:'first',response:{status,headers:[{name:'Location',value:location}]},error:null});
+const postToGet=redirectRequest(first,redirect(302,'/next'));
+assert.equal(postToGet.url,'https://example.test/next');assert.equal(postToGet.method,'GET');assert.equal(postToGet.bodyBase64,'');
+assert.deepEqual(postToGet.headers.map(h=>h.name),['Authorization','Cookie','Accept']);assert.deepEqual(postToGet.pseudoHeaders,[]);
+const crossOrigin=redirectRequest(first,redirect(307,'https://other.test/path'));
+assert.equal(crossOrigin.method,'POST');assert.equal(crossOrigin.bodyBase64,first.bodyBase64);
+assert.deepEqual(crossOrigin.headers.map(h=>h.name),['Accept']);
+assert.equal(redirectRequest(first,redirect(200,'/next')),null);
+assert.throws(()=>redirectRequest(first,redirect(302,'http://example.test/next')),/HTTPS/);
+assert.throws(()=>redirectRequest(first,redirect(302,'javascript:alert(1)')),/HTTP URL/);
+assert.deepEqual(first.headers.map(h=>h.name),['Authorization','Cookie','Accept','Content-Type','Host'],'redirects do not mutate the editor draft');
+
+const hops=[],seen=[],finished=[];let sequence=0;
+const chain=new RequestRuns(async(command,args)=>{
+  if(command==='prepare_replay')return `chain-${++sequence}`;
+  if(command==='replay_request'){
+    hops.push(args);
+    return hops.length===1?{...redirect(302,'/next'),request:args.request}:{id:'second',request:args.request,response:{status:200,headers:[]},error:null};
+  }
+  return true;
+},()=>{},error=>assert.fail(error));
+await chain.start('redirect',first,null,(flow,redirected)=>finished.push([flow.id,redirected]),true,flow=>seen.push(flow.id));
+assert.deepEqual(seen,['first','second']);assert.deepEqual(finished,[['second',true]]);
+assert.equal(hops[1].parentId,'first');assert.equal(hops[1].request.url,'https://example.test/next');
+assert.deepEqual(applyRequestResult([{id:'redirect',draft:first}], 'redirect', JSON.stringify(first), hops[1].request, true)[0].draft,first);
+const disabled=[];await new RequestRuns(async(command,args)=>command==='prepare_replay'?'single':{...redirect(302,'/next'),request:args.request},()=>{},error=>assert.fail(error))
+  .start('no-follow',first,null,(flow)=>disabled.push(flow.id),false);
+assert.deepEqual(disabled,['first'],'turning the option off keeps the original 302 response');
+console.log('Manual redirects: 302 method rewrite, 307 body preservation, cross-origin credential stripping, downgrade rejection, hop history, final result and opt-out passed.');

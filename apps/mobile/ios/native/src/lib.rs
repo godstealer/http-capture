@@ -407,7 +407,7 @@ fn save_request_in(store: &capture_core::store::Store, id: Option<&str>, name: &
         };
         let id = Uuid::new_v4().to_string();
         library.requests.push(SavedRequest { id: id.clone(), name: name.into(), collection_id,
-            draft, grpc_draft: None, request_mode: Some("http".into()) });
+            draft, grpc_draft: None, request_mode: Some("http".into()), follow_redirects: None });
         id
     };
     let revision = store.save_library(library).map_err(|error| error.to_string())?;

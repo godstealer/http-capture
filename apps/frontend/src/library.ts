@@ -3,6 +3,7 @@ import { encodeText } from "./types";
 export interface SavedRequestContext {
   grpcDraft?: { method: string; json: string };
   requestMode?: 'http' | 'grpc' | 'websocket';
+  followRedirects?: boolean;
 }
 export interface Library {
   revision: number;
@@ -14,6 +15,7 @@ export interface Library {
     draft: RequestDraft;
     grpcDraft?: SavedRequestContext['grpcDraft'];
     requestMode?: SavedRequestContext['requestMode'];
+    followRedirects?: boolean;
   }[];
   environments: {
     id: string;
