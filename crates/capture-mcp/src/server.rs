@@ -428,6 +428,19 @@ mod tests {
         let manager=ServerManager::new(runtime.clone()).unwrap();(dir,runtime,manager)
     }
     async fn free_port()->u16 {tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port()}
+    async fn restore_after_shutdown(manager:&ServerManager)->Result<()> {
+        // A parallel test can briefly claim the ephemeral port after shutdown releases it.
+        for _ in 0..100 {
+            match manager.restore().await {
+                Ok(())=>return Ok(()),
+                Err(error) if error.chain().any(|cause|cause.downcast_ref::<std::io::Error>().is_some_and(|io|io.kind()==std::io::ErrorKind::AddrInUse))=>{
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(error)=>return Err(error),
+            }
+        }
+        manager.restore().await
+    }
     fn http(manager:&ServerManager)->reqwest::Client {
         let mut headers=reqwest::header::HeaderMap::new();headers.insert("Authorization",format!("Bearer {}",manager.token).parse().unwrap());
         reqwest::Client::builder().no_proxy().default_headers(headers).timeout(Duration::from_secs(5)).build().unwrap()
@@ -628,7 +641,7 @@ mod tests {
         handler.execute("stop_capture",json!({}),CancellationToken::new()).await.unwrap();assert!(!runtime.status().await.running);
         let (one,two)=tokio::join!(manager.shutdown(),manager.shutdown());one.unwrap();two.unwrap();
         assert!(!manager.status().await.running);assert!(manager.status().await.config.enabled);
-        manager.restore().await.unwrap();assert!(manager.status().await.running);
+        restore_after_shutdown(&manager).await.unwrap();assert!(manager.status().await.running);
         manager.configure(ServerConfig{enabled:false,..config}).await.unwrap();
         assert!(!ServerManager::new(runtime).unwrap().status().await.config.enabled);
     }
