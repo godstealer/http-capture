@@ -6,7 +6,7 @@
 
 ## 当前未完成与待验证（2026-11-12）
 
-0.1.73 已交付 cURL 协议参数导入与导出、输入框撤销、Ctrl+F 搜索和请求头表格高度修复；范围与限制见[2026-11-11 更新说明](release-2026-11-11.md)。待发布批次加入手动请求默认跟随重定向及按请求关闭开关，见[2026-11-12 更新说明](release-2026-11-12-redirects.md)。本机 Rust 测试程序被杀软删除，未恢复或放行；须以同源 Check、四平台打包和签名附件校验为正式版门槛。
+0.1.73 已交付 cURL 协议参数导入与导出、输入框撤销、Ctrl+F 搜索和请求头表格高度修复；范围与限制见[2026-11-11 更新说明](release-2026-11-11.md)。待发布批次加入手动请求默认跟随重定向、桌面 wreq/BoringSSL 引擎及[自定义发送引擎协议](custom-send-engine.md)，见[2026-11-12 更新说明](release-2026-11-12-redirects.md)。本机先前被杀软删除的 Rust 测试程序在防护开启下重新构建并通过四项测试，原告警性质仍未确定；同源 Check、四平台打包和签名附件校验仍是正式版门槛。
 
 最新公开桌面正式版为 **[0.1.73 / build-cc6953dffb19](https://github.com/godstealer/http-capture/releases/tag/build-cc6953dffb19)**，来源 `cc6953dffb192c95964562d3ab61d5a443904500`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/43055071617) 与 [Release](https://github.com/godstealer/http-capture/actions/runs/43167581569) 成功，公开 22 个附件。下段 0.1.71 记录保留为历史验收说明。
 

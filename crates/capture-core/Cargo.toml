@@ -23,7 +23,7 @@ zeroize = "1"
 sha1 = "0.10"
 getrandom = "0.2"
 md-5 = "0.10"
-openssl = { version = "0.10", features = ["vendored"] }
+btls = "=0.5.6"
 hmac = "0.12"
 rquickjs = "0.14"
 regex = "1"

@@ -100,7 +100,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libdbus-1-dev libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev libfuse2 patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libdbus-1-dev libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev libfuse2 patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good cmake ninja-build nasm libclang-dev
       - run: npm ci
       - name: Verify httpcloak helper
         working-directory: helpers/httpcloak
@@ -112,7 +112,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
-        run: npm run tauri -- build --config "${{ github.workspace }}/apps/desktop/src-tauri/tauri.release.json" --bundles ${{ matrix.bundles }} -- --locked
+        run: npm run tauri -- build --config "${{ github.workspace }}/apps/desktop/src-tauri/tauri.release.json" --bundles ${{ matrix.bundles }} --features browser-replay -- --locked
       - name: Verify macOS app code signature
         if: runner.os == 'macOS'
         shell: bash

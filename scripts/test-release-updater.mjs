@@ -15,6 +15,8 @@ const env = { SOURCE_CHECK_RUN_NUMBER: '42', SOURCE_SHA: sourceSha };
 
 function assertNativeReleaseWorkflows(checkText, releaseText) {
   const check=checkText.replace(/\r\n/g,'\n'),release=releaseText.replace(/\r\n/g,'\n');
+  assert.match(check,/cargo test --locked -p capture-core --features browser-replay --test engines/,'source Check must compile and exercise the BoringSSL browser engine');
+  assert.match(release,/--bundles \$\{\{ matrix\.bundles \}\} --features browser-replay -- --locked/,'every official package must include browser replay');
   const checkRunners=check.match(/^        os: \[([^\]\n]+)\]$/m)?.[1].split(',').map(value=>value.trim());
   assert.deepEqual(checkRunners,['ubuntu-22.04','windows-latest','macos-26'],'source Check matches Linux release and retains native ARM testing');
   const matrix=release.match(/^      matrix:\n        include:\n([\s\S]+?)^    runs-on:/m)?.[1];

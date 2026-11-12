@@ -4,7 +4,7 @@ use super::{strict_json,MAX_DOCUMENT_BYTES};
 use aes_gcm::{aead::{Aead,Payload},Aes256Gcm,KeyInit,Nonce};
 use anyhow::{anyhow,ensure,Context,Result};
 use base64::{engine::general_purpose::STANDARD,Engine as _};
-use openssl::{hash::MessageDigest,pkcs5::pbkdf2_hmac};
+use btls::{hash::MessageDigest,pkcs5::pbkdf2_hmac};
 use serde::{Deserialize,Serialize};
 use zeroize::Zeroize;
 

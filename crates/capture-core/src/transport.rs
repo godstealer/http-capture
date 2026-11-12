@@ -116,6 +116,10 @@ impl SendEngines {
             Ok(engine)=>engines.register(Arc::new(engine)).expect("unique httpcloak engine"),
             Err(_)=>engines.unavailable("httpcloak", &["chrome", "firefox"], "Build or install the httpcloak helper and capability manifest"),
         }
+        match crate::custom_engine::CustomEngine::discover() {
+            Ok(engine)=>engines.register(Arc::new(engine)).expect("unique custom engine"),
+            Err(error)=>engines.unavailable("custom", &["native", "chrome", "firefox"], &error.to_string()),
+        }
         engines
     }
     fn unavailable(&mut self, id: &str, profiles: &[&str], reason: &str) {
@@ -134,7 +138,7 @@ impl SendEngines {
             enabled_draft.retain_enabled_headers();
             &enabled_draft
         } else { draft };
-        anyhow::ensure!(draft.tls.client_hello_hex.is_none() || draft.engine == "httpcloak", "ClientHello Hex requires the httpcloak engine");
+        anyhow::ensure!(draft.tls.client_hello_hex.is_none() || matches!(draft.engine.as_str(), "httpcloak" | "custom"), "ClientHello Hex requires the httpcloak or custom engine");
         let (info, engine) = self.entries.get(&draft.engine)
             .with_context(|| format!("Unknown send engine: {}", draft.engine))?;
         let engine = engine.as_ref().with_context(|| format!("{} unavailable: {}", info.id, info.reason.as_deref().unwrap_or("not registered")))?;

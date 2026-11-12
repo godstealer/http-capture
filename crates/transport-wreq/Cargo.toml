@@ -11,4 +11,9 @@ base64 = "0.22"
 webpki-root-certs = "1"
 futures-util = "0.3"
 url = "2"
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+wreq = { version = "=0.16.1", features = ["stream", "socks", "prefix-symbols"] }
+
+[target.'cfg(not(any(target_os = "linux", target_os = "android")))'.dependencies]
 wreq = { version = "=0.16.1", features = ["stream", "socks"] }

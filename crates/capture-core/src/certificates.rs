@@ -2,7 +2,7 @@
 //! request JSON, configuration migration, or API snapshots.
 use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use openssl::{pkcs12::Pkcs12,pkey::PKey};
+use btls::{pkcs12::Pkcs12,pkey::PKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::{Deserialize, Serialize};
 use std::{fs, io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex}};
@@ -252,15 +252,15 @@ pub(crate) fn configure(profile:&crate::model::TlsProfile,roots:&rustls::RootCer
   let state=store.import(Import{name:"DER".into(),kind:"trust".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(ca.der()),private_key_pem:"".into(),container_format:None,password:None,expected_version:store.snapshot().unwrap().version}).unwrap();assert_eq!(state.entries.len(),1);
  }
  #[test]fn encrypted_pem_and_p12_import_unlock_without_saving_password(){
-  use openssl::{pkcs12::Pkcs12,symm::Cipher,x509::X509};
+  use btls::{pkcs12::Pkcs12,symm::Cipher,x509::X509};
   let dir=tempfile::tempdir().unwrap();let store=Certificates::open(dir.path()).unwrap();let(cert,key)=ca();
   let pkey=PKey::private_key_from_pem(key.serialize_pem().as_bytes()).unwrap();
   let encrypted=String::from_utf8(pkey.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(),b"pem-secret").unwrap()).unwrap();
   let import_encrypted=|password:&str|store.import(Import{name:"encrypted".into(),kind:"ca".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(cert.pem()),private_key_pem:encrypted.clone(),container_format:None,password:Some(password.into()),expected_version:store.snapshot().unwrap().version});
   assert!(import_encrypted("wrong").is_err());assert!(store.snapshot().unwrap().entries.is_empty());
   assert_eq!(import_encrypted("pem-secret").unwrap().entries.len(),1);
-  let cert_openssl=X509::from_pem(cert.pem().as_bytes()).unwrap();
-  let archive=Pkcs12::builder().name("test ca").pkey(&pkey).cert(&cert_openssl).build2("p12-secret").unwrap().to_der().unwrap();
+  let cert_boringssl=X509::from_pem(cert.pem().as_bytes()).unwrap();
+  let archive=Pkcs12::builder().build("p12-secret","test ca",&pkey,&cert_boringssl).unwrap().to_der().unwrap();
   let import_p12=|password:&str|store.import(Import{name:"archive".into(),kind:"ca".into(),host:"".into(),port:443,certificate_base64:STANDARD.encode(&archive),private_key_pem:String::new(),container_format:Some("p12".into()),password:Some(password.into()),expected_version:store.snapshot().unwrap().version});
   let version=store.snapshot().unwrap().version;
   assert!(import_p12("wrong").is_err());assert_eq!(store.snapshot().unwrap().version,version);
@@ -271,13 +271,14 @@ pub(crate) fn configure(profile:&crate::model::TlsProfile,roots:&rustls::RootCer
   assert!(!serde_json::to_string(&store.snapshot().unwrap()).unwrap().contains("PRIVATE KEY"));
  }
  #[test]fn p12_client_identity_keeps_chain_and_exact_destination_scope(){
-  use openssl::{pkcs12::Pkcs12,stack::Stack,x509::X509};
+  use btls::{pkcs12::Pkcs12,stack::Stack,x509::X509};
   let dir=tempfile::tempdir().unwrap();let store=Certificates::open(dir.path()).unwrap();let(root,root_key)=ca();
   let leaf_key=rcgen::KeyPair::generate().unwrap();let mut params=rcgen::CertificateParams::new(vec![]).unwrap();params.extended_key_usages=vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
   let leaf=params.signed_by(&leaf_key,&root,&root_key).unwrap();
   let pkey=PKey::private_key_from_pem(leaf_key.serialize_pem().as_bytes()).unwrap();
   let mut root_chain=Stack::new().unwrap();root_chain.push(X509::from_pem(root.pem().as_bytes()).unwrap()).unwrap();
-  let archive=Pkcs12::builder().name("client").pkey(&pkey).cert(&X509::from_pem(leaf.pem().as_bytes()).unwrap()).ca(root_chain).build2("secret").unwrap().to_der().unwrap();
+  let mut builder=Pkcs12::builder();builder.ca(root_chain);
+  let archive=builder.build("secret","client",&pkey,&X509::from_pem(leaf.pem().as_bytes()).unwrap()).unwrap().to_der().unwrap();
   let state=store.import(Import{name:"client".into(),kind:"client".into(),host:"API.EXAMPLE.COM.".into(),port:8443,certificate_base64:STANDARD.encode(archive),private_key_pem:String::new(),container_format:Some("p12".into()),password:Some("secret".into()),expected_version:store.snapshot().unwrap().version}).unwrap();
   assert_eq!(state.entries[0].host,"api.example.com");change(&store,"enable",Some(state.entries[0].id.clone()),true).unwrap();
   let exact=store.security(&url::Url::parse("https://api.example.com:8443/").unwrap()).unwrap().identity.unwrap();

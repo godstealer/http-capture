@@ -37,6 +37,8 @@ async fn requests_select_independent_engines_with_the_same_tls_profile() {
 #[tokio::test]
 async fn unavailable_engine_is_explicit_and_missing_engine_defaults_to_auto() {
     let engines = SendEngines::with_roots(rustls::RootCertStore::empty());
+    let wreq = engines.list().into_iter().find(|e| e.id == "wreq").unwrap();
+    assert_eq!(wreq.available, cfg!(feature = "browser-replay"));
     let helper = engines.list().into_iter().find(|e| e.id == "httpcloak").unwrap();
     if !helper.available { assert!(engines.send(&draft("httpcloak")).await.unwrap_err().to_string().contains("unavailable")); }
     else { assert!(!helper.browser_versions.is_empty()); }

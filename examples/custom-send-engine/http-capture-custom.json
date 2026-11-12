@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "profiles": ["native"],
+  "browserVersions": {},
+  "customClientHello": false,
+  "certificateRoots": false,
+  "clientCertificate": false
+}

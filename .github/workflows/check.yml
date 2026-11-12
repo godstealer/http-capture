@@ -19,10 +19,18 @@ jobs:
         run: node --version
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: helpers/httpcloak/go.mod
+          cache-dependency-path: helpers/httpcloak/go.sum
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config dbus-daemon dconf-cli dconf-service gsettings-desktop-schemas
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config dbus-daemon dconf-cli dconf-service gsettings-desktop-schemas cmake ninja-build nasm libclang-dev
+      - name: Build custom send engine protocol fixture
+        run: node scripts/prepare-custom-engine-fixture.mjs
       - run: cargo test --locked -p transport-api -p transport-httpcloak -p capture-core -p capture-mcp --no-default-features
+      - name: Verify BoringSSL browser replay engine
+        run: cargo test --locked -p capture-core --features browser-replay --test engines
       - name: Verify iOS packet adapter on host
         if: runner.os == 'Linux'
         run: cargo test --locked -p http-capture-ios --lib

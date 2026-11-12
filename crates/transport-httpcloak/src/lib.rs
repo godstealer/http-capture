@@ -63,7 +63,7 @@ async fn spool_reply<R:tokio::io::AsyncRead+Unpin>(source:&mut R)->std::io::Resu
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct Capabilities { #[serde(default)] pub custom_client_hello: bool,#[serde(default)]pub certificate_roots:bool,#[serde(default)]pub client_certificate:bool, pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>> }
+pub struct Capabilities { #[serde(default)] pub custom_client_hello: bool,#[serde(default)]pub certificate_roots:bool,#[serde(default)]pub client_certificate:bool, pub protocol_version: u32, pub browser_versions: BTreeMap<String,Vec<u16>>, #[serde(default)] pub profiles:Vec<String> }
 #[derive(Deserialize)]
 pub struct Reply { pub response: Option<CapturedResponse>, #[serde(default)] pub notes: Vec<String>, pub error: Option<String> }
 fn parse_reply(mut file:std::fs::File)->Result<Reply> {
@@ -74,25 +74,25 @@ fn parse_reply(mut file:std::fs::File)->Result<Reply> {
 pub struct Helper { pub path: PathBuf, pub capabilities: Capabilities }
 impl Helper {
  pub fn load(path: impl AsRef<Path>)->Result<Self>{
-  let path=path.as_ref().to_path_buf();ensure!(path.is_file(),"httpcloak helper not built");
+  let path=path.as_ref().to_path_buf();ensure!(path.is_file(),"Send helper executable not found");
   let capabilities:Capabilities=serde_json::from_slice(&std::fs::read(path.with_extension("json"))?)?;
-  ensure!(capabilities.protocol_version==1,"Unsupported httpcloak helper protocol");
+  ensure!(capabilities.protocol_version==1,"Unsupported send helper protocol");
   Ok(Self{path,capabilities})
  }
  pub async fn send<S:Serialize>(&self,request:&RequestDraft<S>,preset:&str,proxy:Option<&transport_api::UpstreamProxyConfig>)->Result<(CapturedResponse,Vec<String>)>{
   self.send_with_security(request,preset,proxy,None).await
  }
  pub async fn send_with_security<S:Serialize>(&self,request:&RequestDraft<S>,preset:&str,proxy:Option<&transport_api::UpstreamProxyConfig>,security:Option<&transport_api::TlsMaterial>)->Result<(CapturedResponse,Vec<String>)>{
-  ensure!(request.tls.client_hello_hex.is_none() || self.capabilities.custom_client_hello,"This httpcloak helper does not support ClientHello Hex; rebuild the helper");
+  ensure!(request.tls.client_hello_hex.is_none() || self.capabilities.custom_client_hello,"This send helper does not support ClientHello Hex");
   if let Some(security)=security{
-   ensure!((security.client_certificate_pem.is_none()&&security.client_private_key_pem.is_none())||self.capabilities.client_certificate,"此 httpcloak helper 不支持客户端证书，请重新构建 helper；未忽略证书配置");
-   ensure!(security.trusted_ca_pem.is_empty()||self.capabilities.certificate_roots,"此 httpcloak helper 不支持自定义信任 CA，请重新构建 helper");
+   ensure!((security.client_certificate_pem.is_none()&&security.client_private_key_pem.is_none())||self.capabilities.client_certificate,"此发送引擎不支持客户端证书；未忽略证书配置");
+   ensure!(security.trusted_ca_pem.is_empty()||self.capabilities.certificate_roots,"此发送引擎不支持自定义信任 CA");
   }
   let input=spool_input(&Input{request:request.into(),preset,proxy,security})?;
   let mut cmd=Command::new(&self.path);
   cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
   #[cfg(windows)] cmd.creation_flags(0x08000000);
-  let mut child=cmd.spawn().context("Starting httpcloak helper")?;
+  let mut child=cmd.spawn().context("Starting send helper")?;
   let mut stdin=child.stdin.take().context("Helper stdin unavailable")?;
   let mut stdout=child.stdout.take().context("Helper stdout unavailable")?;
   let write=async { let mut input=tokio::fs::File::from_std(input);tokio::io::copy(&mut input,&mut stdin).await?;stdin.shutdown().await?;drop(stdin);Ok::<_,std::io::Error>(()) };
@@ -100,7 +100,7 @@ impl Helper {
   let status=child.wait().await?;
   let reply=tokio::task::spawn_blocking(move||parse_reply(output)).await??;
   if let Some(error)=reply.error{anyhow::bail!("{error}");}
-  ensure!(status.success(),"httpcloak helper exited unsuccessfully");
+  ensure!(status.success(),"Send helper exited unsuccessfully");
   Ok((reply.response.context("Missing helper response")?,reply.notes))
  }
 }
@@ -125,7 +125,7 @@ mod tests {
   let helper=Helper{path:PathBuf::from("does-not-exist"),capabilities:serde_json::from_value(json!({"customClientHello":true,"certificateRoots":true,"clientCertificate":true,"protocolVersion":1,"browserVersions":{}})).unwrap()};
   let security=transport_api::TlsMaterial{client_certificate_pem:Some("certificate fixture".into()),client_private_key_pem:Some("key fixture".into()),..Default::default()};
   let error=helper.send_with_security(&draft(),"chrome-155-windows",None,Some(&security)).await.err().unwrap().to_string();
-  assert!(error.contains("Starting httpcloak helper"));
+  assert!(error.contains("Starting send helper"));
   assert!(!error.contains("certificate fixture")&&!error.contains("key fixture"));
  }
 
