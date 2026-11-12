@@ -2,15 +2,15 @@
 
 更新时间：2026-11-13。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
 
-当前顺序（2026-10-25 用户调整）：优先完成 PC 二维码与 Android VPN 局域网协同抓包；Android 本机版和 iOS 测试版保留现有实现，随后补齐目标机器验证。iOS App Store 上架暂不处理。安装、跨版本更新、系统集成等手工验收待用户方便时再做。**P0 大正文全链路低内存暂停主动开发**，遇到具体问题或用户明确要求时再恢复。当前批次完成后集中推送并运行同源 Check；用户于 2026-11-12 明确允许夜间发版，检查失败或构建排队时仍不发布。
+当前顺序（2026-10-25 用户调整）：优先完成 PC 二维码与 Android VPN 局域网协同抓包；Android 本机版和 iOS 测试版保留现有实现，随后补齐目标机器验证。iOS App Store 上架暂不处理。安装、跨版本更新、系统集成等手工验收待用户方便时再做。**P0 大正文全链路低内存暂停主动开发**，遇到具体问题或用户明确要求时再恢复。本次桌面批次已集中推送并完成同源 Check 与四平台发布；用户于 2026-11-12 明确允许夜间发版，后续发布仍以检查和构建通过为前提。
 
 ## 当前未完成与待验证（2026-11-13）
 
-本批已完成外部集合导入：Postman v2.0/v2.1、Hoppscotch、OpenAPI 3、Insomnia v4、HAR JSON 和单条 cURL 可预览后追加到现有集合；cURL 导入弹窗已加宽。定向测试、完整前端回归与构建通过，待同源跨平台 Check、正式打包和实际导出文件验收。Insomnia v5 YAML、OpenAPI YAML、Swagger 2.0 和其他工具专有格式仍待开发，详见[本版更新说明](release-2026-11-13-collection-import.md)与[使用说明](sessions-workspaces.md)。
+本批已完成外部集合导入：Postman v2.0/v2.1、Hoppscotch、OpenAPI 3、Insomnia v4、HAR JSON 和单条 cURL 可预览后追加到现有集合；cURL 导入弹窗已加宽。定向测试、完整前端回归、构建、同源跨平台 Check 和正式打包均通过；不同工具的实际导出文件及界面操作仍待用户验收。Insomnia v5 YAML、OpenAPI YAML、Swagger 2.0 和其他工具专有格式仍待开发，详见[本版更新说明](release-2026-11-13-collection-import.md)与[使用说明](sessions-workspaces.md)。
 
 0.1.75 已交付手动请求默认跟随重定向、桌面 wreq/BoringSSL 引擎及[自定义发送引擎协议](custom-send-engine.md)，见[2026-11-12 更新说明](release-2026-11-12-redirects.md)。源码 `26122d1` 的同源 Check、四平台构建、更新器生命周期测试和 22 个公开附件已核对；真实网站发送、自定义联网实现及 M1 实机安装仍需验收。本机先前被杀软删除的 Rust 测试程序在防护开启下重新构建并通过四项测试，原告警性质仍未确定。
 
-最新公开桌面正式版为 **[0.1.75 / build-26122d1da2f8](https://github.com/godstealer/http-capture/releases/tag/build-26122d1da2f8)**，来源 `26122d1da2f8c8bd401693d8357329bb30aaa97c`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/43234920349) 与 [Release](https://github.com/godstealer/http-capture/actions/runs/43237985795) 成功，公开 22 个附件；兼容更新频道包含五个带签名的安装目标。0.1.73 和 0.1.71 的记录保留为历史验收说明。
+最新公开桌面正式版为 **[0.1.77 / build-6d0a19e2eb3a](https://github.com/godstealer/http-capture/releases/tag/build-6d0a19e2eb3a)**，来源 `6d0a19e2eb3a0e48559a935fbafec11f7f174c9f`。[同源 Check #77](https://github.com/godstealer/http-capture/actions/runs/43268160880) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43269441686) 成功；22 个公开附件已独立下载核验，17 项 SHA256、五个更新包签名以及兼容更新频道一致性均通过。0.1.75、0.1.73 和 0.1.71 的记录保留为历史验收说明。
 
 此前桌面正式版为 **[0.1.71 / build-279937df7b62](https://github.com/godstealer/http-capture/releases/tag/build-279937df7b62)**，来源 `279937df7b626664ac27972e83632c02a22982ea`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/41639760951) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/41640780152) 的四平台构建、两种 Mac 应用代码签名校验、更新器测试与发布全部成功。公开 22 个附件，正式版与兼容更新频道的 `latest.json` SHA256 一致，均指向 0.1.71。本版加入 XML 正文格式化和 macOS 临时应用签名；M1 用户此前报告的“已损坏”仍需新包在真实设备上复测。临时签名不等于 Apple Developer ID 签名与公证。Android 局域网协同抓包仍待设备端到端验收，移动端无正式安装包。
 
@@ -28,12 +28,12 @@
 
 待验证的项目与未开发项分开记录：
 
-- **发布后复核**：0.1.75 的同源 Check、四平台构建、CI 更新签名及更新器生命周期测试、22 个公开附件和频道版本已核对；大附件的本机完整下载及独立哈希复核、M1 安装与启动、真实网站的 wreq 发送、自定义联网程序仍待完成。
+- **发布后复核**：0.1.77 的同源 Check、四平台构建、CI 更新签名及更新器生命周期测试已通过；22 个公开附件已本机下载，17 项 SHA256、五个更新签名和频道一致性已独立核对。M1 安装与启动、跨版本更新、真实网站的 wreq 发送、自定义联网程序和外部集合实际导出文件仍待验收。
 - **安装版与系统行为**：四平台真实安装/升级/卸载、数据保留、原生文件选择/剪贴板、标题栏和系统菜单退出、系统代理恢复、CA 安装/卸载，以及 Windows 代码签名与 macOS 签名公证配置。
 - **本轮新增功能**：真实证书文件的 P12/PFX/加密 PEM 与 httpcloak mTLS；两台设备上的加密导出、合并预览/导入及重启；浏览器无文件选择 API 时的会话/正文下载；压缩 SSE、历史 gRPC 和固定目标 QUIC 反向代理的目标环境测试。
 - **已有功能的业务验收**：真实 AI 客户端 MCP、插件编辑与列表、集合/环境恢复、H2 请求头顺序的 Reqable MITM 对照、实际网站重放、Linux/macOS 流量来源及 TUN/UDP/QUIC 进程识别。用户尚未安排时继续保留为待验，不据自动测试勾选。
 
-分项细节和历史证据见下文；本版范围见[0.1.71 更新说明](release-2026-11-03.md)，实机项目见[验收清单](acceptance-2026-10-19.md)。
+分项细节和历史证据见下文；本版范围见[0.1.77 更新说明](release-2026-11-13-collection-import.md)，实机项目见[验收清单](acceptance-2026-10-19.md)。
 
 ## 0.1.34：证书管理（四平台已发布）
 

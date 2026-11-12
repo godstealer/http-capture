@@ -1,6 +1,8 @@
 # 桌面正式版发布
 
-当前公开正式版为 [0.1.75](https://github.com/godstealer/http-capture/releases/tag/build-26122d1da2f8)，更新内容见[2026-11-12 发布说明](release-2026-11-12-redirects.md)。源码 `26122d1da2f8c8bd401693d8357329bb30aaa97c` 的[同源 Check](https://github.com/godstealer/http-capture/actions/runs/43234920349) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43237985795) 全部成功；22 个公开附件包括两种 Mac 架构，兼容更新频道已指向 0.1.75。Android 和 iOS 不属于本次桌面正式版。M1 实机安装及跨版本更新仍待用户验证。
+当前公开正式版为 [0.1.77](https://github.com/godstealer/http-capture/releases/tag/build-6d0a19e2eb3a)，更新内容见[2026-11-13 发布说明](release-2026-11-13-collection-import.md)。源码 `6d0a19e2eb3a0e48559a935fbafec11f7f174c9f` 的[同源 Check #77](https://github.com/godstealer/http-capture/actions/runs/43268160880) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43269441686) 全部成功。22 个公开附件已下载独立核验：17 项 SHA256 一致，五个更新包签名通过，兼容更新频道与正式版清单一致，GitHub Latest 已指向 0.1.77。Android 和 iOS 不属于本次桌面正式版。M1 实机安装及跨版本更新仍待用户验证。
+
+上一桌面正式版为 [0.1.75](https://github.com/godstealer/http-capture/releases/tag/build-26122d1da2f8)，内容见[2026-11-12 发布说明](release-2026-11-12-redirects.md)。
 
 正式版 [0.1.34 / build-20f9137572e0](https://github.com/godstealer/http-capture/releases/tag/build-20f9137572e0) 四平台已发布，应用源码 `20f9137572e00c4faa06d6290b94ac01f10c2105`，版本沿用 [Check #34](https://github.com/godstealer/http-capture/actions/runs/39621202898)；Mac 源码检查现已通过。[Windows/Linux 构建](https://github.com/godstealer/http-capture/actions/runs/39625026369) 和 [Mac 双架构构建](https://github.com/godstealer/http-capture/actions/runs/39700840500) 均通过，每个平台 10 项原生更新测试通过。22 个公开附件、17 项 SHA256、五个更新包及版本注释签名、兼容更新频道一致性已独立核验；自动更新频道与 GitHub Latest 已推进至 0.1.34。
 
@@ -19,7 +21,7 @@
 
 两种 Mac 分别使用 `macos-15-intel` 和 `macos-26` runner 原生编译，包括 httpcloak Go 辅助程序；Check 与 Release 的 ARM 标签保持一致，四个平台的原生更新测试门槛继续保留。这里的标签表示构建宿主，不把宿主版本等同于应用最低支持版本，也不据此认定目标 Mac 已验收。当前不生成 Universal 二合一安装包；在 Mac 的“关于本机”查看芯片类型后选择对应文件。
 
-0.1.75 安装包包含原生发送引擎、httpcloak 辅助程序及 wreq/BoringSSL 手动发送引擎；自定义发送引擎只运行用户显式配置的本地程序，不随安装包提供第三方程序。TUN 辅助程序仍不包含，TUN H3 排查继续暂停。
+0.1.77 安装包包含原生发送引擎、httpcloak 辅助程序及 wreq/BoringSSL 手动发送引擎；自定义发送引擎只运行用户显式配置的本地程序，不随安装包提供第三方程序。TUN 辅助程序仍不包含，TUN H3 排查继续暂停。
 
 桌面应用支持检查更新、下载安装和安装后重启。更新包使用 Tauri updater 签名；这与 Windows 代码签名、macOS 签名/公证分别配置，目前后两项仍未设置。CI 打包成功不等于实机安装、凭据库和网络功能均已验收。
 
