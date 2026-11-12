@@ -6,8 +6,16 @@ import { emptyScripts } from "./ScriptsEditor";
 import { Braces, FileCode2, FolderOpen } from 'lucide-react';
 import LibraryCreateDialog from './LibraryCreateDialog';
 import SaveRequestDialog from './SaveRequestDialog';
+import CollectionImportDialog, { externalImportSources } from './CollectionImportDialog';
+import { mergeExternalPlan } from './externalCollectionImport';
+import type { ExternalImportFormat, ExternalImportPlan } from './externalImportTypes';
 import './library-create.css';
 type Creating = {kind:'collection'|'environment'|'request'|'script';collectionId?:string;draft?:RequestDraft;context?:SavedRequestContext};
+const indirectImportSources: { label: string; detail: string; format: ExternalImportFormat }[] = [
+  { label: 'ApiPost', detail: '先导出 Postman 2.1', format: 'postman' },
+  { label: 'ApiFox', detail: '先导出 OpenAPI 3', format: 'openapi' },
+  { label: 'RapidAPI / Paw', detail: '先导出 Postman 2.1', format: 'postman' },
+];
 const ScriptCodeEditor = lazy(() => import("./ScriptCodeEditor"));
 
 export default function RequestLibrary({
@@ -32,6 +40,8 @@ export default function RequestLibrary({
   busy: boolean;
 }) {
   const [creating, setCreating] = useState<Creating|null>(null);
+  const [externalFormat, setExternalFormat] = useState<ExternalImportFormat|null>(null);
+  const [importNotice, setImportNotice] = useState('');
   const [reading, setReading] = useState(false);
   const importing = useRef(false);
   const latest = useRef({value,busy}); latest.current={value,busy};
@@ -44,7 +54,16 @@ export default function RequestLibrary({
   const update = (next: Library) => {
     onChange(next);
     setError("");
+    setImportNotice('');
   };
+  function addExternal(plan: ExternalImportPlan) {
+    if (latest.current.busy || importing.current) throw Error(t('正在保存，请稍后重试。'));
+    const next = mergeExternalPlan(latest.current.value, plan);
+    update(next);
+    const count = plan.collections.reduce((total, collection) => total + collection.requests.length, 0);
+    setImportNotice(t('已加入 {v0} 个请求；点击“保存集合与环境”后写入磁盘。', { v0: count }));
+    setExternalFormat(null);
+  }
   function openCreate(kind:Creating['kind'],collectionId?:string) {
     if(busy||importing.current)return;
     if((kind==='request'||kind==='script')&&!draft)return;
@@ -114,7 +133,7 @@ export default function RequestLibrary({
           </button>
           <button onClick={exportFile}>{t("导出集合与环境")}</button>
           <button onClick={() => input.current?.click()}>
-            {t("导入集合与环境")}
+            {t("导入本应用备份")}
           </button>
           <span role="status">{message}</span>
         </div>
@@ -142,6 +161,14 @@ export default function RequestLibrary({
             "导入只替换当前编辑内容；点击保存才落盘。请求与环境可能包含凭据，请妥善保存导出文件。",
           )}
         </p>
+        <div className="library-external-import">
+          <div className="library-section-heading"><h2>{t('从其他工具导入')}</h2><span>{t('选择来源，导入请求到集合')}</span></div>
+          <div className="library-external-grid">
+            {externalImportSources.map(source => <button key={source.id} type="button" disabled={locked} onClick={() => setExternalFormat(source.id)}><span className="library-source-mark" aria-hidden="true">{source.label.slice(0, 1)}</span><strong>{source.label}</strong><small>{t(source.detail)}</small></button>)}
+            {indirectImportSources.map(source => <button key={source.label} type="button" disabled={locked} onClick={() => setExternalFormat(source.format)}><span className="library-source-mark" aria-hidden="true">{source.label.slice(0, 1)}</span><strong>{source.label}</strong><small>{t(source.detail)}</small></button>)}
+          </div>
+          {importNotice && <p role="status">{importNotice}</p>}
+        </div>
         <div className="library-grid">
           <div className="library-collections">
             <div className="library-section-heading"><h2>{t('集合')}</h2><button type="button" onClick={()=>openCreate('collection')}>{t('新建集合')}</button></div>
@@ -360,6 +387,7 @@ export default function RequestLibrary({
         title={creating.kind==='collection'?t('新建集合'):creating.kind==='environment'?t('新建环境'):t('保存当前脚本模板')}
         label={creating.kind==='collection'?t('集合名称'):creating.kind==='environment'?t('环境名称'):t('模板名称')}
         onCreate={add} onClose={()=>setCreating(null)}/>}
+      {externalFormat && <CollectionImportDialog initialFormat={externalFormat} busy={locked} onClose={() => setExternalFormat(null)} onValidate={plan => { mergeExternalPlan(latest.current.value, plan); }} onApply={addExternal}/>}
     </section>
   );
 }

@@ -199,7 +199,8 @@ body,.app-shell { background:var(--ui-bg); color:var(--ui-text); }
 :root .request-context-menu button:hover:not(:disabled),:root .request-context-menu button:focus-visible { background:var(--ui-accent-soft); color:var(--ui-accent); }
 :root .request-context-menu [role='separator'] { background:var(--ui-border); }
 .app-shell .toast { background:var(--ui-surface); color:var(--ui-text); border:1px solid var(--ui-border-strong); border-radius:9px; box-shadow:var(--ui-shadow); }
-.app-shell .modal.curl-import-modal { width:min(560px,calc(var(--ui-viewport-width,100vw) - 40px)); max-width:none; max-height:calc(var(--ui-viewport-height,100dvh) - 48px); }
+.app-shell .modal.curl-import-modal { width:min(960px,calc(var(--ui-viewport-width,100vw) - 40px)); max-width:none; max-height:calc(var(--ui-viewport-height,100dvh) - 48px); overflow:auto; }
+.app-shell .modal.curl-import-modal textarea { min-height: min(40dvh, 380px); }
 .app-update-dialog { width:min(560px,calc(var(--ui-viewport-width,100vw) - 40px)); max-height:min(780px,calc(var(--ui-viewport-height,100dvh) - 48px)); }
 ::-webkit-scrollbar { width:7px; height:7px; }
 ::-webkit-scrollbar-thumb { background:var(--ui-border-strong); border-radius:6px; }
