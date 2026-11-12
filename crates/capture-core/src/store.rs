@@ -505,7 +505,7 @@ mod session_tests {
   let flow:Flow=serde_json::from_value(serde_json::json!({"id":"a","parentId":null,"startedAt":1,"durationMs":1,"source":"capture","request":{"method":"GET","url":"https://example.invalid","headers":[],"bodyBase64":""},"response":null,"error":null,"notes":[]})).unwrap();
   store.insert(&flow).unwrap();let next=store.changes(Some(&initial.revision)).unwrap();assert!(!next.reset);assert_eq!(next.rows.len(),1);
   store.delete_flows(vec!["a".into()]).unwrap();let deleted=store.changes(Some(&next.revision)).unwrap();assert_eq!(deleted.deleted,vec!["a"]);assert!(deleted.rows.is_empty());assert!(store.changes(Some("another-instance:1")).unwrap().reset);
-  let mut library=Library::default();library.collections.push(Collection{id:"c".into(),name:"Saved".into()});library.requests.push(SavedRequest{id:"r".into(),name:"Request".into(),collection_id:"c".into(),draft:flow.request,grpc_draft:None,request_mode:None});
+  let mut library=Library::default();library.collections.push(Collection{id:"c".into(),name:"Saved".into()});library.requests.push(SavedRequest{id:"r".into(),name:"Request".into(),collection_id:"c".into(),draft:flow.request,grpc_draft:None,request_mode:None,follow_redirects:None});
   assert_eq!(store.save_library(library.clone()).unwrap(),1);assert!(store.save_library(library).is_err());
   let loaded=store.library().unwrap();assert_eq!(loaded.requests.len(),1);assert_eq!(loaded.revision,1);
  }
