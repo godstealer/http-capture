@@ -6,9 +6,9 @@
 
 ## 当前未完成与待验证（2026-11-12）
 
-0.1.73 已交付 cURL 协议参数导入与导出、输入框撤销、Ctrl+F 搜索和请求头表格高度修复；范围与限制见[2026-11-11 更新说明](release-2026-11-11.md)。待发布批次加入手动请求默认跟随重定向、桌面 wreq/BoringSSL 引擎及[自定义发送引擎协议](custom-send-engine.md)，见[2026-11-12 更新说明](release-2026-11-12-redirects.md)。本机先前被杀软删除的 Rust 测试程序在防护开启下重新构建并通过四项测试，原告警性质仍未确定；同源 Check、四平台打包和签名附件校验仍是正式版门槛。
+0.1.75 已交付手动请求默认跟随重定向、桌面 wreq/BoringSSL 引擎及[自定义发送引擎协议](custom-send-engine.md)，见[2026-11-12 更新说明](release-2026-11-12-redirects.md)。源码 `26122d1` 的同源 Check、四平台构建、更新器生命周期测试和 22 个公开附件已核对；真实网站发送、自定义联网实现及 M1 实机安装仍需验收。本机先前被杀软删除的 Rust 测试程序在防护开启下重新构建并通过四项测试，原告警性质仍未确定。
 
-最新公开桌面正式版为 **[0.1.73 / build-cc6953dffb19](https://github.com/godstealer/http-capture/releases/tag/build-cc6953dffb19)**，来源 `cc6953dffb192c95964562d3ab61d5a443904500`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/43055071617) 与 [Release](https://github.com/godstealer/http-capture/actions/runs/43167581569) 成功，公开 22 个附件。下段 0.1.71 记录保留为历史验收说明。
+最新公开桌面正式版为 **[0.1.75 / build-26122d1da2f8](https://github.com/godstealer/http-capture/releases/tag/build-26122d1da2f8)**，来源 `26122d1da2f8c8bd401693d8357329bb30aaa97c`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/43234920349) 与 [Release](https://github.com/godstealer/http-capture/actions/runs/43237985795) 成功，公开 22 个附件；兼容更新频道包含五个带签名的安装目标。0.1.73 和 0.1.71 的记录保留为历史验收说明。
 
 此前桌面正式版为 **[0.1.71 / build-279937df7b62](https://github.com/godstealer/http-capture/releases/tag/build-279937df7b62)**，来源 `279937df7b626664ac27972e83632c02a22982ea`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/41639760951) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/41640780152) 的四平台构建、两种 Mac 应用代码签名校验、更新器测试与发布全部成功。公开 22 个附件，正式版与兼容更新频道的 `latest.json` SHA256 一致，均指向 0.1.71。本版加入 XML 正文格式化和 macOS 临时应用签名；M1 用户此前报告的“已损坏”仍需新包在真实设备上复测。临时签名不等于 Apple Developer ID 签名与公证。Android 局域网协同抓包仍待设备端到端验收，移动端无正式安装包。
 
@@ -26,7 +26,7 @@
 
 待验证的项目与未开发项分开记录：
 
-- **发布后复核**：0.1.71 的同源 Check、四平台构建、CI 更新签名及更新器生命周期测试、22 个公开附件和频道一致性已核对；大附件的本机完整下载及独立哈希复核、M1 安装与启动仍待完成。夜间或机器排队时原则上不发后续版本，用户明确要求立即发版且机器可用时按本次门禁执行。
+- **发布后复核**：0.1.75 的同源 Check、四平台构建、CI 更新签名及更新器生命周期测试、22 个公开附件和频道版本已核对；大附件的本机完整下载及独立哈希复核、M1 安装与启动、真实网站的 wreq 发送、自定义联网程序仍待完成。
 - **安装版与系统行为**：四平台真实安装/升级/卸载、数据保留、原生文件选择/剪贴板、标题栏和系统菜单退出、系统代理恢复、CA 安装/卸载，以及 Windows 代码签名与 macOS 签名公证配置。
 - **本轮新增功能**：真实证书文件的 P12/PFX/加密 PEM 与 httpcloak mTLS；两台设备上的加密导出、合并预览/导入及重启；浏览器无文件选择 API 时的会话/正文下载；压缩 SSE、历史 gRPC 和固定目标 QUIC 反向代理的目标环境测试。
 - **已有功能的业务验收**：真实 AI 客户端 MCP、插件编辑与列表、集合/环境恢复、H2 请求头顺序的 Reqable MITM 对照、实际网站重放、Linux/macOS 流量来源及 TUN/UDP/QUIC 进程识别。用户尚未安排时继续保留为待验，不据自动测试勾选。

@@ -1,6 +1,6 @@
 # 独立发送引擎与 httpcloak
 
-2026-11-12 待发布批次：桌面正式打包配置启用 `browser-replay`，使既有 wreq/BoringSSL 发送引擎可选；同源 Check 增加该特性的引擎测试。另新增[自定义发送引擎协议](custom-send-engine.md)，只在用户显式配置本地程序时可用。两项均待四平台 Check、安装包与签名附件验证，不能把本地配置视为已交付正式版。
+0.1.75 桌面正式安装包已启用 `browser-replay`，wreq/BoringSSL 发送引擎可用于手动请求；[自定义发送引擎协议](custom-send-engine.md)只在用户显式配置本地程序时可用。同源 Check、四平台安装包、更新器测试及 22 个公开附件已通过；真实网站发送和第三方自定义程序仍需单独验收。
 
 当前开发状态（2026-10-22）：httpcloak 已升级到 **v1.7.3**，真实能力清单支持 Chrome **143–155**、Firefox **133、148**，本增量已随 0.1.34 四平台发布；0.1.33 附带的仍为 v1.7.2。wreq/httpcloak 已接入 HTTP/SOCKS5，httpcloak 默认浏览器预设按 ALPN 兼容 H2/H1。原生 H3 经 SOCKS5 UDP 到 tls3.peet.ws 有既有实测，TUN H3 接管仍未验收且暂缓。以下按日期保留历史验证；早期失败或不支持项不代表当前能力，真实安装和业务流程仍分别验收。
 
