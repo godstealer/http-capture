@@ -4,6 +4,7 @@ import ConfigMigration, {type ConfigImportResult} from './ConfigMigration';
 import {acknowledgeConfigurationImport} from './configImportRecovery';
 import type {ConfigurationImportStatus} from './configImportRecovery';
 import AppUpdater from './AppUpdater';
+import RequestTabMenu, { type TabMenuTarget } from './RequestTabMenu';
 import './settings-layout.css';
 import SettingsTabs, { type SettingsPageId } from './SettingsTabs';
 import Certificates from './Certificates';
@@ -174,6 +175,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
   const savedRequest = library.requests.find(request => request.id === editor?.savedRequestId);
   const savedCollection = library.collections.find(collection => collection.id === savedRequest?.collectionId);
   const closedEditors=useRef(new Set<string>());
+  const [tabMenu, setTabMenu] = useState<TabMenuTarget | null>(null);
   const [wsConnecting,setWsConnecting]=useState<Record<string,boolean>>({});
   const [wsDrafts,setWsDrafts]=useState<Record<string,{body:string;opcode:string}>>({});
   const [wsSessions,setWsSessions]=useState<Record<string,string>>({});
@@ -193,17 +195,32 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
     try { openEditor(await loadCompleteFlow(record), mode); }
     catch (error) { notify(String(error)); }
   }
-  function closeEditor(id: string) {
-    closedEditors.current.add(id);
-    setWsDrafts(v=>{const next={...v};delete next[id];return next;});
-    void runs.cancel(id);
-    const selectedId=wsSessions[id]??editors.find(e=>e.id===id)?.selected;
-    if(selectedId&&(wsSessions[id]||flows.find(f=>f.id===selectedId)?.websocket))void invoke('cancel_replay',{executionId:selectedId}).catch(e=>notify(String(e)));
-    setWsSessions(v=>{const next={...v};delete next[id];return next;});
-    if (editors.length === 1) { setEditors([]); setActiveEditor(''); setView('capture'); return; }
-    const remaining = editors.filter(item => item.id !== id); setEditors(remaining);
-    if (activeEditor === id) setActiveEditor(remaining[remaining.length - 1].id);
+  function closeEditors(ids: string[]) {
+    const closing = new Set(ids);
+    const removed = editors.filter(item => closing.has(item.id));
+    if (!removed.length) return;
+    for (const item of removed) {
+      closedEditors.current.add(item.id);
+      void runs.cancel(item.id);
+      const selectedId = wsSessions[item.id] ?? item.selected;
+      if (selectedId && (wsSessions[item.id] || flows.find(f => f.id === selectedId)?.websocket)) {
+        void invoke('cancel_replay', { executionId: selectedId }).catch(e => notify(String(e)));
+      }
+    }
+    const omitClosed = <T,>(values: Record<string, T>) => Object.fromEntries(Object.entries(values).filter(([id]) => !closing.has(id)));
+    setWsDrafts(omitClosed);
+    setWsSessions(omitClosed);
+    setWsConnecting(omitClosed);
+    setRequestModes(omitClosed);
+    const remaining = editors.filter(item => !closing.has(item.id));
+    setEditors(remaining);
+    if (!remaining.length) { setActiveEditor(''); setView('capture'); }
+    else if (closing.has(activeEditor)) {
+      const index = editors.findIndex(item => item.id === activeEditor);
+      setActiveEditor(remaining[Math.min(Math.max(index, 0), remaining.length - 1)].id);
+    }
   }
+  function closeEditor(id: string) { closeEditors([id]); }
   function editorTitle(url: string) { try { return new URL(url).host; } catch { return t("未命名"); } }
   function editorLabel(item: RequestEditor) {
     return library.requests.find(request => request.id === item.savedRequestId)?.name ?? editorTitle(item.draft.url);
@@ -555,8 +572,8 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
       </header>
       <nav className="work-tabs" aria-label={t("工作区标签")}>
         <div className="work-tab-items">
-        <button className={view === 'capture' ? 'work-tab active' : 'work-tab'} onClick={() => setView('capture')}><Radio size={17} />{t("调试")}<span className="tab-count">({flows.filter(f => f.source === 'capture').length})</span></button>
-        {editors.map(item => <div key={item.id} className={view === 'replay' && activeEditor === item.id ? 'work-tab active' : 'work-tab'}>
+        <button className={view === 'capture' ? 'work-tab active' : 'work-tab'} onClick={() => setView('capture')} onContextMenu={event => { event.preventDefault(); setTabMenu({ id: null, x: event.clientX, y: event.clientY, anchor: event.currentTarget }); }}><Radio size={17} />{t("调试")}<span className="tab-count">({flows.filter(f => f.source === 'capture').length})</span></button>
+        {editors.map(item => <div key={item.id} className={view === 'replay' && activeEditor === item.id ? 'work-tab active' : 'work-tab'} onContextMenu={event => { event.preventDefault(); setTabMenu({ id: item.id, x: event.clientX, y: event.clientY, anchor: event.currentTarget.querySelector('button')! }); }}>
           <button onClick={() => { setActiveEditor(item.id); setView('replay'); }} title={item.draft.url}><Send size={16} />{editorLabel(item)}{runs.state(item.id) ? <span>{runs.state(item.id)?.cancelling ? t("取消中…") : t("发送中…")}</span> : <span className="dot green" />}</button>
           <button className="close-tab" aria-label={(t("关闭 ") + editorLabel(item) + t(" 标签"))} onClick={() => closeEditor(item.id)}><X size={13} /></button>
         </div>)}
@@ -565,6 +582,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
         </div>
         <details className="request-history"><summary>{t("重放历史 (")}{flows.filter(f => f.source === 'replay').length})</summary><div>{flows.filter(f => f.source === 'replay').map(f => <button key={f.id} onClick={event => { void openRecordedEditor(f, 'result'); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{f.request.method} {f.request.url} <span>{f.response?.status ?? 'ERR'}</span></button>)}</div></details>
       </nav>
+      {tabMenu && <RequestTabMenu target={tabMenu} ids={editors.map(item => item.id)} onClose={() => setTabMenu(null)} onCloseTabs={closeEditors} />}
       {workspaceError && <div className="workspace-save-status workspace-save-error" role="status"><CircleHelp size={14}/><span>{t(workspaceMessage)}</span>{workspaceReady && (workspaceConflict?<button disabled={workspaceRecovering} onClick={() => void recoverWorkspace()}>{workspaceRecovering?t('正在合并…'):t('保留草稿并合并重载')}</button>:<button disabled={workspaceRecovering} onClick={() => void saveWorkspace()}>{t('重试保存')}</button>)}</div>}
       {!connected && !workspaceError && <div className="preview-strip"><span><Layers3 size={14} />{t("界面预览 · 尚未连接抓包内核")}</span><span>{t("仅显示实际捕获的请求")}</span></div>}
 

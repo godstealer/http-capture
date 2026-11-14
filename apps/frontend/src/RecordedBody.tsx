@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useRef,useState} from 'react';
+import {lazy,Suspense,useEffect,useMemo,useRef,useState} from 'react';
 import {downloadFlowBody,invoke} from './api';
 import type {BodyVariant,FlowMetadata,Header} from './types';
 import {t} from './i18n';
@@ -7,6 +7,8 @@ import RecordedSseLive from './RecordedSseLive';
 import {parseSseEncodings} from './sseEncoding';
 import './recorded-body.css';
 import {RECORDED_BODY_PAGE_BYTES,RECORDED_BODY_COMPLETE_BYTES,readCompleteRecordedBody,recordedBodyEncoded,recordedBodyHex,recordedBodyIdentity,recordedBodyRequest,validateRecordedBodyPage,type RecordedBodyPage} from './recordedBodyModel';
+
+const CodeView = lazy(() => import('./CodeView'));
 
 export interface RecordedBodyProps {
   flow:FlowMetadata;variant:BodyVariant;headers:Header[];onCopy:(text:string)=>void;
@@ -120,7 +122,7 @@ export default function RecordedBody({flow,variant,headers,onCopy,active=true,co
           <button type="button" aria-pressed={effectiveView==='base64'} onClick={()=>setView('base64')}>Base64</button>
         </>}<button type="button" onClick={()=>onCopy(text)}>{t('复制当前片段')}</button></div>
         {(page.text===null||encoded)&&<div className="format-note">{encoded?t('片段保留内容编码，仅显示原始字节。'):t('此片段不是完整 UTF-8 文本，可能为二进制或跨字符边界；请使用 Hex 或 Base64。')}</div>}
-        <div className="formatted-scroll"><pre>{text||t('（空正文）')}</pre></div>
+        <div className="formatted-scroll"><Suspense fallback={<pre>{text||t('（空正文）')}</pre>}><CodeView text={text} language="text" label={t('当前正文片段，仅搜索当前页')} /></Suspense></div>
       </>}
     </>}
     {pages>0&&<div className="format-toolbar" aria-label={t('正文分页')}>

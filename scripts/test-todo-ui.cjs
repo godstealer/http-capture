@@ -66,10 +66,10 @@ function cssFor(selector,width) {
 (async()=>{
   const AppUpdater=await updater(),url='https://github.com/godstealer/http-capture/releases/latest';
   let opened=0,prevented=0,checked=0;
-  const base={desktop:true,production:false,status:async()=>({currentVersion:'0.1.28',configured:false,manualUpdate:true,reason:'Linux portable manual update'}),check:async()=>{checked++;return null;},download:async()=>assert.fail('no download'),install:async()=>assert.fail('no install'),listen:async()=>()=>{}};
+  const base={desktop:true,production:false,status:async()=>({currentVersion:'0.1.28',configured:false,manualUpdate:true,reason:'Linux portable manual update'}),check:async()=>{checked++;return {currentVersion:'0.1.28',version:'0.1.29',available:true};},download:async()=>assert.fail('no download'),install:async()=>assert.fail('no install'),listen:async()=>()=>{}};
   const manual=harness(AppUpdater,{driver:{...base,openDownload:async()=>{opened++;}}});
   manual.button('检查更新').props.onClick();await manual.tick();
-  assert.match(text(manual.tree),/此安装方式需要手动更新/);assert.doesNotMatch(text(manual.tree),/此构建尚未配置更新服务/);assert.equal(checked,0);
+  assert.match(text(manual.tree),/此安装方式需要手动更新/);assert.doesNotMatch(text(manual.tree),/此构建尚未配置更新服务/);assert.equal(checked,1);assert.match(text(manual.tree),/最新版本：0\.1\.29/);assert(!manual.button('下载并安装'));
   let link=manual.find(n=>n.type==='a');assert.equal(link.props.href,url);assert.equal(link.props.rel,'noopener noreferrer');assert.equal(text(link),'下载最新版');
   link.props.onClick({preventDefault(){prevented++;}});await manual.tick();assert.equal(opened,1);assert.equal(prevented,1);
   let dialog=manual.find(n=>n.props?.role==='dialog');const first=dialog.element.focusables[0];document.activeElement=first;dialog.props.onKeyDown({key:'Tab',shiftKey:true,preventDefault(){}});assert.equal(document.activeElement,manual.find(n=>n.type==='a').element);assert.match(dialog.element.selector,/a\[href\]/);
@@ -84,6 +84,19 @@ function cssFor(selector,width) {
   dialog=failing.find(n=>n.props?.role==='dialog');document.activeElement=failing.find(n=>n.type==='input').element;dialog.props.onKeyDown({key:'Tab',shiftKey:false,preventDefault(){assert.fail('input remains in normal keyboard order');}});assert.match(dialog.element.selector,/input:not\(:disabled\)/);
 
   const browser=harness(AppUpdater,{driver:{...base}});browser.button('检查更新').props.onClick();await browser.tick();browser.find(n=>n.type==='a').props.onClick({preventDefault(){assert.fail('normal browser link keeps default navigation');}});
+  for(const version of ['0.1.28','0.1.27']) {
+    const latest=harness(AppUpdater,{driver:{...base,check:async()=>({currentVersion:'0.1.28',version,available:false})}});
+    latest.button('检查更新').props.onClick();await latest.tick();
+    assert(text(latest.tree).includes(`最新版本：${version}`));
+    assert(!latest.find(n=>n.type==='a'));assert(!latest.button('下载并安装'));
+  }
+  const offline=harness(AppUpdater,{driver:{...base,check:async()=>{throw Error('offline');}}});
+  offline.button('检查更新').props.onClick();await offline.tick();
+  assert.match(text(offline.tree),/offline/);assert(!offline.find(n=>n.type==='a'));assert(!offline.button('下载并安装'));assert(offline.button('重试检查'));
+  let resolveCheck;
+  const waiting=harness(AppUpdater,{driver:{...base,check:()=>new Promise(resolve=>{resolveCheck=resolve;})}});
+  waiting.button('检查更新').props.onClick();await waiting.tick();assert(!waiting.find(n=>n.type==='a'));
+  resolveCheck({currentVersion:'0.1.28',version:'0.1.29',available:true});await waiting.tick();assert(waiting.find(n=>n.type==='a'));
   const unconfigured=harness(AppUpdater,{driver:{...base,status:async()=>({currentVersion:'dev',configured:false,reason:'missing updater source'})}});unconfigured.button('检查更新').props.onClick();await unconfigured.tick();assert.match(text(unconfigured.tree),/此构建尚未配置更新服务/);assert(!unconfigured.find(n=>n.type==='a'));
   const busy=harness(AppUpdater,{driver:{...base,status:async()=>({currentVersion:'0.1.28',configured:true}),check:async()=>({currentVersion:'0.1.28',version:'0.1.29'}),download:()=>new Promise(()=>{})}});busy.button('检查更新').props.onClick();await busy.tick();busy.button('下载并安装').props.onClick();await busy.tick();busy.find(n=>n.props?.role==='dialog').props.onKeyDown({key:'Escape',preventDefault(){}});busy.render();assert(busy.find(n=>n.props?.role==='dialog'));assert(busy.find(n=>n.props?.['aria-label']==='关闭').props.disabled);
 

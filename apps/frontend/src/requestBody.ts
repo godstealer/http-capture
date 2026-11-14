@@ -1,6 +1,6 @@
 import type { Header, RequestDraft } from './types';
 
-export type RequestBodyMode = 'raw' | 'form' | 'multipart' | 'file' | 'base64';
+export type RequestBodyMode = 'none' | 'raw' | 'form' | 'multipart' | 'file' | 'base64';
 export type RawBodyParser = 'text' | 'json' | 'html' | 'xml' | 'babel' | 'css';
 export type RequestBodyPart = { name: string; value: string; file?: File };
 export type EncodedRequestBody = { bodyBase64: string; contentType: string };
@@ -91,6 +91,7 @@ export function inferRequestBodyMode(bodyBase64: string, mime: string, length: n
   // Automatic mode selection must not decode a large captured draft merely to
   // guess whether it is editable text. The user can still choose an editor.
   if (length === null || length > AUTO_EDIT_LIMIT) return 'file';
+  if (length === 0) return 'none';
   const type = contentTypeName(mime);
   if (type === 'application/x-www-form-urlencoded') return 'form';
   if (type === 'multipart/form-data') return 'multipart';

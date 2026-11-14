@@ -35,6 +35,16 @@ function tokenize(source: string): string[] {
   return tokens;
 }
 
+// curl encodes only the value in name=value; field names are already encoded.
+function urlencodeData(value: string): string {
+  const equals = value.indexOf('=');
+  if (equals < 0 && value.includes('@')) throw new Error('不支持 --data-urlencode 读取文件，请使用 name=value 内联字段。');
+  const content = equals < 0 ? value : value.slice(equals + 1);
+  const encoded = Array.from(new TextEncoder().encode(content), byte =>
+    byte === 32 ? '+' : /[A-Za-z0-9._~-]/.test(String.fromCharCode(byte)) ? String.fromCharCode(byte) : '%' + byte.toString(16).toUpperCase().padStart(2, '0')).join('');
+  return equals > 0 ? value.slice(0, equals) + '=' + encoded : encoded;
+}
+
 export function importCurl(source: string): RequestDraft {
   let command = withoutComments(source);
   let pipedBody: string | undefined;
@@ -44,7 +54,7 @@ export function importCurl(source: string): RequestDraft {
   const args = tokenize(command);
   if (!/^curl(?:\.exe)?$/i.test(args.shift() ?? '')) throw new Error('请粘贴以 curl 或 curl.exe 开头的命令。');
   const request = emptyRequest(); request.headers = [];
-  const bodies: string[] = []; let explicitMethod = false; let head = false; let jsonBody = false; let usedPipe = false;
+  const bodies: { text: string; json: boolean }[] = []; let explicitMethod = false; let head = false; let get = false; let jsonBody = false; let usedPipe = false;
   let httpVersion: '--http1.1' | '--http2' | '--http2-prior-knowledge' | '--http3-only' | undefined;
   function header(value: string) {
     const colon = value.indexOf(':');
@@ -62,18 +72,20 @@ export function importCurl(source: string): RequestDraft {
     else if (['-A', '--user-agent'].includes(option)) header(`User-Agent: ${value()}`);
     else if (['-e', '--referer'].includes(option)) header(`Referer: ${value()}`);
     else if (['-b', '--cookie'].includes(option)) { const cookie = value(); if (!cookie.includes('=')) throw new Error('不支持读取 Cookie 文件。'); header(`Cookie: ${cookie}`); }
-    else if (['-d', '--data', '--data-raw', '--data-binary', '--json'].includes(option)) {
+    else if (['-d', '--data', '--data-ascii', '--data-raw', '--data-binary', '--data-urlencode', '--json'].includes(option)) {
       const body = value();
       if (body === '@-' && option === '--data-binary' && pipedBody !== undefined && !usedPipe && !bodies.length) { usedPipe = true; continue; }
       if (usedPipe) throw new Error('不支持混合管道正文和其他正文参数。');
-      if (body.startsWith('@') && option !== '--data-raw') throw new Error('不支持读取本地文件，请使用内联请求体。');
-      bodies.push(body); jsonBody ||= option === '--json';
+      if (body.startsWith('@') && !['--data-raw', '--data-urlencode'].includes(option)) throw new Error('不支持读取本地文件，请使用内联请求体。');
+      bodies.push({ text: option === '--data-urlencode' ? urlencodeData(body) : body, json: option === '--json' });
+      jsonBody ||= option === '--json';
     }
     else if (option === '--url' || !option.startsWith('-')) {
       if (request.url) throw new Error('一次只能导入一个 URL。');
       request.url = option === '--url' ? value() : option;
     }
     else if (['-I', '--head'].includes(option)) head = true;
+    else if (['-G', '--get'].includes(option)) { if (inline !== undefined) throw new Error(`${option} 不接受参数值。`); get = true; }
     else if (['--http1.1', '--http2', '--http2-prior-knowledge', '--http3-only'].includes(option)) {
       if (inline !== undefined) throw new Error(`${option} 不接受参数值。`);
       if (httpVersion && httpVersion !== option) throw new Error('一条 cURL 命令只能指定一种 HTTP 版本。');
@@ -91,10 +103,20 @@ export function importCurl(source: string): RequestDraft {
   else if (httpVersion === '--http2-prior-knowledge') request.engine = 'h2';
   else if (httpVersion === '--http3-only') request.engine = 'h3';
   if (pipedBody !== undefined && !usedPipe) throw new Error('管道正文需要 --data-binary @-。');
-  if (!explicitMethod) request.method = head ? 'HEAD' : bodies.length || usedPipe ? 'POST' : 'GET';
+  if (get && usedPipe) throw new Error('不支持混合 --get 和管道正文。');
+  if (!explicitMethod) request.method = head ? 'HEAD' : !get && (bodies.length || usedPipe) ? 'POST' : 'GET';
   const has = (name: string) => request.headers.some(h => h.name.toLowerCase() === name);
-  if (bodies.length && !has('content-type')) header(`Content-Type: ${jsonBody ? 'application/json' : 'application/x-www-form-urlencoded'}`);
+  if (!get && bodies.length && !has('content-type')) header(`Content-Type: ${jsonBody ? 'application/json' : 'application/x-www-form-urlencoded'}`);
   if (!has('accept')) header(`Accept: ${jsonBody ? 'application/json' : '*/*'}`);
-  request.bodyBase64 = usedPipe ? btoa(pipedBody!) : encodeText(bodies.join(jsonBody ? '' : '&'));
+  // curl adds a separator for the current non-JSON option only when data
+  // has already accumulated. JSON affects headers, not earlier separators.
+  const body = bodies.reduce((result, part) => result + (result && !part.json ? '&' : '') + part.text, '');
+  if (get && body) {
+    const hash = request.url.indexOf('#');
+    const fragment = hash < 0 ? '' : request.url.slice(hash);
+    const url = hash < 0 ? request.url : request.url.slice(0, hash);
+    request.url = url + (url.includes('?') ? (url.endsWith('?') ? '' : '&') : '?') + body + fragment;
+  }
+  request.bodyBase64 = get ? '' : usedPipe ? btoa(pipedBody!) : encodeText(body);
   return request;
 }

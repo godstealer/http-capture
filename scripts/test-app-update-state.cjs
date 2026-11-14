@@ -58,6 +58,8 @@ const update = { version: '2.0.0', currentVersion: '1.0.0' };
   assert.equal(shouldOfferUpdate(update, '2.0.0', true), true);
   assert.equal(shouldOfferUpdate({ ...update, version: '2.0.1' }, '2.0.0', false), true);
   assert.equal(shouldOfferUpdate(null, null, true), false);
+  assert.equal(shouldOfferUpdate({ ...update, available: false }, null, true), false);
+  assert.equal(shouldOfferUpdate({ version: '0.9.0', currentVersion: '1.0.0', available: false }, null, true), false);
   assert.equal(shouldOfferUpdate({ ...update, currentVersion: '2.0.0' }, null, true), false);
 
   let progress = mergeUpdateProgress(null, { phase: 'downloading', downloaded: 0 });

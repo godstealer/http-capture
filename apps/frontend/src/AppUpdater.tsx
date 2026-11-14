@@ -63,6 +63,7 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
   const titleId = useId();
   const [status, setStatus] = useState<AppUpdateStatus | null>(null);
   const [update, setUpdate] = useState<AppUpdate | null>(null);
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
@@ -85,16 +86,17 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
   const percent = downloadPercent(progress);
 
   async function check(manual: boolean) {
-    if (manual) { setOpen(true); setError(''); }
+    if (manual) { setOpen(true); setError(''); setDownloadFallback(false); }
     if (!desktop || installPending.current) return;
     setChecking(true);
     try {
       const current = await readStatus(activeDriver, driverCache);
       if (!mounted.current) return;
       setStatus(current);
-      if (!current.configured) { setUpdate(null); setChecked(false); return; }
+      if (!current.configured && !current.manualUpdate) { setUpdate(null); setLatestVersion(null); setChecked(false); return; }
       const result = await checks.check(activeDriver.check, manual, Date.now());
       if (!mounted.current || !result) return;
+      setLatestVersion(result.update?.version ?? null);
       setChecked(true);
       setError('');
       const offered = shouldOfferUpdate(result.update, skipped.current, manual);
@@ -107,7 +109,7 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
       }
     } catch (error) {
       if (mounted.current) {
-        setUpdate(null); setChecked(false);
+        setUpdate(null); setLatestVersion(null); setDownloadFallback(false); setChecked(false);
         if (manual) setError(t('检查更新失败：{v0}', { v0: String(error) }));
       }
     } finally { if (mounted.current) setChecking(false); }
@@ -223,12 +225,13 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
         {status && <p className="app-update-version">{t('当前版本：{v0}', { v0: status.currentVersion })}</p>}
         {!desktop ? <p>{t('应用内更新仅支持桌面版。')}</p>
           : checking ? <p role="status">{t('正在检查更新…')}</p>
-          : status && !status.configured ? <p>{status.manualUpdate ? t('此安装方式需要手动更新。') : t('此构建尚未配置更新服务。')}{status.reason && <span className="app-update-reason">{status.reason}</span>}</p>
+          : status && !status.configured && !status.manualUpdate ? <p>{t('此构建尚未配置更新服务。')}{status.reason && <span className="app-update-reason">{status.reason}</span>}</p>
           : !update && checked && !error ? <p role="status">{t('当前已是最新版本。')}</p> : null}
+        {latestVersion && <p className="app-update-version">{t('最新版本：{v0}', { v0: latestVersion })}{update?.date && <span className="app-update-date">{Number.isNaN(Date.parse(update.date)) ? update.date : new Date(update.date).toLocaleDateString()}</span>}</p>}
+        {status?.manualUpdate && <p>{t('此安装方式需要手动更新。')}{status.reason && <span className="app-update-reason">{status.reason}</span>}</p>}
         {update && <>
-          <p>{t('新版本：{v0}', { v0: update.version })}{update.date && <span className="app-update-date">{Number.isNaN(Date.parse(update.date)) ? update.date : new Date(update.date).toLocaleDateString()}</span>}</p>
           <div className="app-update-notes"><h3>{t('更新说明')}</h3><pre>{update.notes?.trim() ? update.notes : t('此版本未提供更新说明。')}</pre></div>
-          {!busy && <p className="app-update-restart-note">{t('下载完成后会保存请求草稿，再安装并重启。')}</p>}
+          {!busy && !status?.manualUpdate && <p className="app-update-restart-note">{t('下载完成后会保存请求草稿，再安装并重启。')}</p>}
         </>}
         {busy && <div className="app-update-progress" role="status" aria-live="polite"><strong>{progressText}</strong>
           {progress?.phase === 'downloading' && <><progress aria-label={t('更新下载进度')} max={100} {...(percent === undefined ? {} : { value: percent })} /><span>{size(progress.downloaded)}{progress.total !== undefined ? ` / ${size(progress.total)}` : ''}{percent !== undefined ? ` · ${percent}%` : ''}</span></>}
@@ -236,9 +239,9 @@ export default function AppUpdater({ beforeInstall, onBusyChange, driver }: { be
         {error && <p className="app-update-error" role="alert">{error}</p>}
         {downloadFallback && <div className="app-update-download-fallback"><input aria-label={t('最新版下载地址')} readOnly value={downloadUrl} onFocus={event => event.currentTarget.select()}/><button type="button" onClick={() => void copyDownload()}>{t('复制下载链接')}</button></div>}
         <footer><button type="button" disabled={busy} onClick={() => setOpen(false)}>{update ? t('稍后') : t('关闭')}</button>
-          {update && <><button type="button" disabled={busy || checking} onClick={skip}>{t('跳过此版本')}</button><button type="button" className="app-update-install" disabled={busy || checking} onClick={() => void install()}><Download size={15} />{installState === 'failed' ? t('重试安装') : t('下载并安装')}</button></>}
-          {!update && desktop && (!status || status.configured) && error && <button type="button" className="app-update-install" disabled={checking} onClick={() => void check(true)}>{t('重试检查')}</button>}
-          {!update && status?.manualUpdate && <a className="app-update-download" href={downloadUrl} target="_blank" rel="noopener noreferrer" onClick={event => { if (desktop && activeDriver.openDownload) { event.preventDefault(); void openDownload(); } }}><Download size={15}/>{t('下载最新版')}</a>}
+          {update && <><button type="button" disabled={busy || checking} onClick={skip}>{t('跳过此版本')}</button>{!status?.manualUpdate && <button type="button" className="app-update-install" disabled={busy || checking} onClick={() => void install()}><Download size={15} />{installState === 'failed' ? t('重试安装') : t('下载并安装')}</button>}</>}
+          {!update && desktop && (!status || status.configured || status.manualUpdate) && error && <button type="button" className="app-update-install" disabled={checking} onClick={() => void check(true)}>{t('重试检查')}</button>}
+          {update && !checking && !error && status?.manualUpdate && <a className="app-update-download" href={downloadUrl} target="_blank" rel="noopener noreferrer" onClick={event => { if (desktop && activeDriver.openDownload) { event.preventDefault(); void openDownload(); } }}><Download size={15}/>{t('下载最新版')}</a>}
         </footer>
       </div>
     </div>, document.body)}

@@ -65,7 +65,9 @@ const draft = (overrides = {}) => ({
   assert.equal(inferRequestBodyMode(textBody('a=one&a=two'), 'Application/X-Www-Form-Urlencoded; charset=UTF-8'), 'form');
   assert.equal(inferRequestBodyMode('aA==', 'multipart/form-data; boundary=test'), 'multipart');
   assert.equal(inferRequestBodyMode(textBody('{"a":1}'), 'application/vnd.test+json'), 'raw');
-  assert.equal(inferRequestBodyMode('', ''), 'raw');
+  assert.equal(inferRequestBodyMode('', ''), 'none');
+  for (const mime of ['application/x-www-form-urlencoded', 'multipart/form-data; boundary=empty', 'application/json', 'application/octet-stream']) assert.equal(inferRequestBodyMode('', mime), 'none', 'MIME alone cannot create a body');
+  assert.equal(inferRequestBodyMode(' \r\n', 'application/x-www-form-urlencoded'), 'none', 'empty Base64 with whitespace is still no body');
   const overBudget = Buffer.alloc(AUTO_EDIT_LIMIT + 1, 65).toString('base64');
   assert.equal(inferRequestBodyMode(overBudget, 'application/json'), 'file', 'large JSON must not decode automatically');
   assert.equal(bodyByteLength(overBudget), AUTO_EDIT_LIMIT + 1);

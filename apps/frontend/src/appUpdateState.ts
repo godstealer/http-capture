@@ -1,6 +1,6 @@
 export const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 export interface AppUpdateStatus { currentVersion: string; configured: boolean; reason?: string; manualUpdate?: boolean }
-export interface AppUpdate { version: string; currentVersion: string; notes?: string; date?: string }
+export interface AppUpdate { available?: boolean; version: string; currentVersion: string; notes?: string; date?: string }
 export interface UpdateCheckResult { update: AppUpdate | null; checkedAt: number }
 export interface UpdateProgress { phase: 'downloading' | 'installing' | 'restarting'; downloaded: number; total?: number }
 
@@ -37,7 +37,7 @@ export class UpdateCheckGate {
 }
 
 export function shouldOfferUpdate(update: AppUpdate | null, skippedVersion: string | null, manual: boolean): boolean {
-  return !!update && update.version !== update.currentVersion && (manual || update.version !== skippedVersion);
+  return !!update && update.available !== false && update.version !== update.currentVersion && (manual || update.version !== skippedVersion);
 }
 
 const phaseOrder = { downloading: 0, installing: 1, restarting: 2 };

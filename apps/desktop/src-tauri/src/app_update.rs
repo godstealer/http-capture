@@ -1,6 +1,6 @@
 //! Signed desktop updates. The webview never receives updater/process permissions.
 use serde::{Deserialize, Serialize};
-use std::{future::Future, sync::Mutex as StdMutex, time::Duration};
+use std::{future::Future, sync::{Arc, Mutex as StdMutex}, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::Mutex;
@@ -29,6 +29,7 @@ pub struct UpdateStatus {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
+    available: bool,
     version: String,
     current_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,11 +168,25 @@ fn emit_phase(app: &AppHandle, phase: &'static str) {
 #[tauri::command]
 pub async fn check_app_update(app: AppHandle, state: State<'_, AppUpdateState>) -> Result<Option<UpdateInfo>, String> {
     let _operation = state.operation.try_lock().map_err(|_| "正在检查或安装更新，请稍后重试")?;
-    if let Some(reason) = app_update_status(app.clone()).reason { return Err(reason); }
+    let status = app_update_status(app.clone());
+    if !status.configured && !status.manual_update { return Err(status.reason.unwrap_or_else(|| "应用更新未配置".into())); }
     // A failed new check must not leave a previous offer silently installable.
     *state.pending.lock().await = None;
     let exit_app = app.clone();
+    let release_info = Arc::new(StdMutex::new(None));
+    let received_info = Arc::clone(&release_info);
     let updater = app.updater_builder()
+        .version_comparator(move |current, release| {
+            let available = release.version > current;
+            *received_info.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(UpdateInfo {
+                available,
+                version: release.version.to_string(),
+                current_version: current.to_string(),
+                notes: release.notes,
+                date: release.pub_date.and_then(|date| date.format(&time::format_description::well_known::Rfc3339).ok()),
+            });
+            available
+        })
         .timeout(Duration::from_secs(30))
         .configure_client(|client| client.https_only(true))
         .on_before_exit(move || emit_phase(&exit_app, "restarting"))
@@ -180,13 +195,11 @@ pub async fn check_app_update(app: AppHandle, state: State<'_, AppUpdateState>) 
     if update.as_ref().is_some_and(|update| update.download_url.scheme() != "https") {
         return Err("更新安装包地址必须使用 HTTPS".into());
     }
-    let info = update.as_ref().map(|update| UpdateInfo {
-        version: update.version.clone(),
-        current_version: update.current_version.clone(),
-        notes: update.body.clone(),
-        date: update.date.and_then(|date| date.format(&time::format_description::well_known::Rfc3339).ok()),
-    });
-    *state.pending.lock().await = update.map(|update| PendingUpdate { update, bytes: None });
+    let info = release_info.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+    // Portable Linux can inspect the same manifest but cannot install its assets.
+    if !status.manual_update {
+        *state.pending.lock().await = update.map(|update| PendingUpdate { update, bytes: None });
+    }
     Ok(info)
 }
 

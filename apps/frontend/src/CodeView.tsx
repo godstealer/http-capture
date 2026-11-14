@@ -15,6 +15,16 @@ const themedHighlight = HighlightStyle.define(defaultHighlightStyle.specs.map(sp
   ...spec, ...(spec.color ? { color: `var(--syntax-${String(spec.color).slice(1)}, ${spec.color})` } : {}),
 })));
 
+function openResponseSearch(editor: EditorView): boolean {
+  openSearchPanel(editor);
+  // Explicit focus is needed in non-editable WebViews where selecting the
+  // newly mounted search field alone does not move keyboard focus into it.
+  const field = editor.dom.querySelector<HTMLInputElement>('.cm-search input[main-field]');
+  field?.focus();
+  field?.select();
+  return true;
+}
+
 export type CodeViewCommand = { type: 'find' | 'fold' | 'unfold'; id: number };
 
 export default function CodeView({ text, language, label = t("响应代码，可通过行号旁箭头折叠"), command }: { text: string; language: string; label?: string; command?: CodeViewCommand | null }) {
@@ -26,13 +36,17 @@ export default function CodeView({ text, language, label = t("响应代码，可
     // EditorState normalizes CRLF/CR to LF when constructing its document.
     const jsonRanges = language === 'json' ? jsonFoldRanges(text.replace(/\r\n?|\n/g, '\n')) : null;
     const editor = new EditorView({ parent: parent.current!, state: EditorState.create({ doc: text, extensions: [
-      EditorState.readOnly.of(true), EditorView.editable.of(false), lineNumbers(), foldGutter(), bracketMatching(),
+      EditorState.readOnly.of(true), EditorView.editable.of(false),
+      // A non-editable contentDOM is not focusable by default. Give response
+      // text keyboard focus so Ctrl/Cmd+F reaches this editor after a click.
+      EditorView.contentAttributes.of({ tabindex: '0', role: 'textbox', 'aria-readonly': 'true', 'aria-label': label }),
+      lineNumbers(), foldGutter(), bracketMatching(),
       ...(jsonRanges ? [foldService.of((_state, from) => jsonRanges.get(from) ?? null)] : []),
       highlightActiveLineGutter(), syntaxHighlighting(themedHighlight), search(),
       EditorState.phrases.of({ Find: t('查找'), next: t('下一个'), previous: t('上一个'), all: t('全部'),
         'match case': t('区分大小写'), regexp: t('正则表达式'), 'by word': t('全词匹配'), close: t('关闭'),
         'Fold line': t('折叠此节点'), 'Unfold line': t('展开此节点') }),
-      keymap.of([...searchKeymap, ...defaultKeymap, ...foldKeymap]), grammar,
+      keymap.of([{ key: 'Mod-f', run: openResponseSearch }, ...searchKeymap, ...defaultKeymap, ...foldKeymap]), grammar,
       EditorView.theme({ '&': { height: '100%', fontSize: '13px' }, '.cm-scroller': { overflow: 'auto', fontFamily: 'Consolas, monospace', lineHeight: '1.7' },
         '.cm-gutters': { backgroundColor: 'var(--code-gutter, #fafafa)', color: 'var(--code-muted, #9b9b9b)', borderRight: '1px solid var(--code-border, #ececec)' },
         '.cm-activeLineGutter': { backgroundColor: 'var(--code-active, #fff4df)' }, '.cm-content': { padding: '10px 0' },
@@ -43,32 +57,37 @@ export default function CodeView({ text, language, label = t("响应代码，可
     ] }) });
     view.current = editor;
     return () => { view.current = null; editor.destroy(); };
-  }, [text, language, locale]);
+  }, [text, language, locale, label]);
   useEffect(() => {
     const editor = view.current;
     if (!editor || !command) return;
-    if (command.type === 'find') openSearchPanel(editor);
+    if (command.type === 'find') openResponseSearch(editor);
     else if (command.type === 'fold') foldAll(editor);
     else unfoldAll(editor);
   }, [command]);
   useEffect(() => {
     const find = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
-      const target = event.target as HTMLElement;
-      if (target.closest('[role="dialog"], .cm-panel.cm-search')) return;
+      if (!(event.target instanceof Element)) return;
+      const target = event.target;
+      // Editors handle their own keymap. Native text fields keep their own
+      // shortcuts; an unrelated modal must never search a background response.
+      if (target.closest('.cm-editor, input, textarea, [contenteditable="true"]')) return;
+      const dialog = target.closest('[role="dialog"]');
+      if (dialog && !dialog.contains(parent.current)) return;
       const region = target.closest('.capture-inspector, .detail-panel');
       if (!region) return;
       const ownBody = target.closest('.formatted-response');
-      const ownSection = target.closest('.inspector-split > section');
+      const ownSection = target.closest('.inspector-split > .split-content, .replay-response');
       const candidates = Array.from((ownBody ?? ownSection ?? region).querySelectorAll<HTMLElement>('.response-code-editor'))
         .filter(node => node.getClientRects().length > 0);
       const selected = candidates.at(-1);
       if (selected !== parent.current || !view.current) return;
       event.preventDefault();
-      openSearchPanel(view.current);
+      openResponseSearch(view.current);
     };
     window.addEventListener('keydown', find);
     return () => window.removeEventListener('keydown', find);
   }, []);
-  return <div className="response-code-editor" ref={parent} aria-label={label} />;
+  return <div className="response-code-editor" ref={parent} aria-label={label} aria-keyshortcuts="Control+f Meta+f" />;
 }
