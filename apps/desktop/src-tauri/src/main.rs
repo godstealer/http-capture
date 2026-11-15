@@ -153,6 +153,7 @@ struct MobileGatewayStatus {
     address: Option<String>,
     paired: bool,
     fingerprint: Option<String>,
+    device_name: Option<String>,
 }
 
 #[tauri::command]
@@ -163,6 +164,7 @@ async fn mobile_gateway_status(state: State<'_, AppState>) -> Result<MobileGatew
         address: gateway.as_ref().map(|gateway| gateway.address().to_string()),
         paired: gateway.as_ref().is_some_and(|gateway| gateway.is_paired()),
         fingerprint: gateway.as_ref().map(|gateway| gateway.fingerprint().to_string()),
+        device_name: gateway.as_ref().and_then(|gateway| gateway.device_name()),
     })
 }
 

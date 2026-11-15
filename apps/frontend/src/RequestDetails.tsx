@@ -24,8 +24,10 @@ export function TrafficOriginDetails({ flow }: { flow: FlowRecord }) {
   return <details open className="traffic-origin-details"><summary>{t('流量来源')}{origin.imported && <span className="traffic-origin-file-badge">{t('文件记录')}</span>}</summary>
     <PropertyTable rows={[
       [t('来源应用'), origin.application], ['PID', origin.pid], [t('进程路径'), origin.path],
+      ...(origin.deviceName ? [[t('设备名称（自报）'), origin.deviceName] as [string, string]] : []),
       [t('客户端地址'), origin.clientAddress], [t('流量入口'), origin.entry], [t('识别说明'), origin.reason],
     ]} />
+    {origin.deviceNameNotice && <p className="traffic-origin-provenance">{origin.deviceNameNotice}</p>}
     {origin.provenance && <p className="traffic-origin-provenance">{origin.provenance}</p>}
   </details>;
 }

@@ -8,7 +8,7 @@ global.document = { documentElement: {} };
 global.localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
 Object.defineProperty(global, 'navigator', { configurable: true, value: { language: 'en' } });
 const compiled = buildSync({
-  stdin: { contents: `export * from './apps/frontend/src/trafficOrigin'; export * from './apps/frontend/src/captureColumns'; export * from './apps/frontend/src/i18n'; export {RequestOverview} from './apps/frontend/src/RequestDetails'; export {default as CaptureView} from './apps/frontend/src/CaptureView';`, resolveDir: process.cwd(), loader: 'tsx' },
+  stdin: { contents: `export * from './apps/frontend/src/trafficOrigin'; export * from './apps/frontend/src/captureColumns'; export * from './apps/frontend/src/i18n'; export {RequestOverview} from './apps/frontend/src/RequestDetails'; export {default as CaptureView} from './apps/frontend/src/CaptureView'; export {readSession} from './apps/frontend/src/sessions';`, resolveDir: process.cwd(), loader: 'tsx' },
   bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false,
   loader: { '.css': 'empty' }, external: ['react', 'react-dom', 'react-dom/server'], logLevel: 'silent',
 }).outputFiles[0].text;
@@ -80,43 +80,79 @@ assert.equal(remote.application, 'Remote client');
 assert.equal(remote.pid, '—');
 assert.equal(remote.clientAddress, '[2001:db8::5]:44321');
 
-const replay = flow(origin, { source: 'replay', state: 'imported', parentId: 'captured-parent' });
+const deviceName = 'Pixel 9 Pro';
+const lanOrigin = { ...origin, entry: 'android-lan', processStatus: 'remote', clientAddress: '192.0.2.9:55123', deviceName };
+const lan = flow(lanOrigin, { id: 'lan' });
+const lanDescription = ui.describeTrafficOrigin(lan);
+assert.equal(lanDescription.kind, 'remote');
+assert.equal(lanDescription.application, 'Remote client', 'a device label must never be presented as an application');
+assert.equal(lanDescription.deviceName, deviceName);
+assert.equal(lanDescription.entry, 'Android LAN');
+assert.equal(lanDescription.path, 'Not recorded', 'remote helper metadata stays hidden');
+assert.ok(ui.trafficOriginTooltip(lanDescription).includes('Device name (self-reported): ' + deviceName));
+assert.ok(ui.trafficOriginTooltip(lanDescription).includes('does not identify an application or hardware'));
+assert.ok(ui.trafficOriginSearchText(lan).includes('pixel 9 pro'));
+for (const value of [undefined, null, '', '   ', 42, false, [], {}, { toString() { throw Error('must not coerce'); } }]) {
+  const unnamed = ui.describeTrafficOrigin(flow({ ...lanOrigin, deviceName: value }));
+  assert.equal(unnamed.deviceName, '');
+  assert.equal(unnamed.deviceNameNotice, '');
+  assert.equal(unnamed.application, 'Remote client');
+  assert.ok(!ui.trafficOriginTooltip(unnamed).includes('Device name (self-reported)'));
+}
+assert.equal(ui.trafficDeviceName('  My phone  '), 'My phone');
+assert.equal(ui.trafficDeviceName(' '.repeat(50000) + 'hidden'), '', 'bound work on huge untrusted metadata');
+for (const control of ['\u061c', '\u200e', '\u200f', '\u2028', '\u2029', '\u202e', '\u2066', '\n', '\0']) {
+  assert.equal(ui.trafficDeviceName('before' + control + 'after'), 'before\ufffdafter');
+}
+
+const replay = flow({ ...origin, deviceName: 'Pixel 9 Pro' }, { source: 'replay', state: 'imported', parentId: 'captured-parent' });
 const manual = ui.describeTrafficOrigin(replay);
 assert.equal(manual.kind, 'manual');
 assert.equal(manual.application, 'Sent manually by this app');
 assert.equal(manual.entry, 'Manual request');
 assert.equal(manual.imported, false);
 assert.equal(manual.provenance, '');
-for (const leaked of ['chrome', '4321', '59123', 'program files']) assert.ok(!ui.trafficOriginSearchText(replay).includes(leaked), `replay leaked ${leaked}`);
-const imported = flow(origin, { state: 'imported' });
+for (const leaked of ['chrome', '4321', '59123', 'program files', 'pixel 9 pro']) assert.ok(!ui.trafficOriginSearchText(replay).includes(leaked), `replay leaked ${leaked}`);
+const imported = flow({ ...origin, deviceName: 'Review phone' }, { state: 'imported' });
 const importedDescription = ui.describeTrafficOrigin(imported);
 assert.equal(importedDescription.application, 'Chrome.EXE');
 assert.equal(importedDescription.reason, 'Process information recorded in the file');
 assert.equal(importedDescription.imported, true);
 assert.ok(importedDescription.provenance.includes('has not been verified on this device'));
 assert.equal(ui.describeTrafficOrigin(flow(null, { state: 'imported' })).application, 'Imported record · Not recorded');
+const roundTrip = ui.readSession(JSON.stringify({ format: 'http-capture-session', version: 1, flows: [imported, replay] }));
+assert.equal(roundTrip[0].trafficOrigin.deviceName, 'Review phone');
+assert.equal(ui.describeTrafficOrigin(roundTrip[0]).deviceName, 'Review phone');
+assert.ok(ui.describeTrafficOrigin(roundTrip[0]).provenance.includes('has not been verified'));
+assert.equal(ui.describeTrafficOrigin(roundTrip[1]).deviceName, '', 'imported replays cannot inherit a device label');
 
 const malicious = flow({
-  ...origin, entry: '<img src=x onerror=alert(1)>', clientAddress: '127.0.0.1\nspoof',
+  ...origin, deviceName: '<img src=x onerror=alert(2)>\u061c\u200e\u200f\u2028\u2029', entry: '<img src=x onerror=alert(1)>', clientAddress: '127.0.0.1\nspoof',
   process: { pid: 55, name: '<script>alert(1)</script>\u202e\u0000', path: 'javascript:alert(1)\r\n<svg onload=alert(1)>' },
 });
 const sanitized = ui.describeTrafficOrigin(malicious);
-assert.ok(!/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(Object.values(sanitized).filter(value => typeof value === 'string').join('')));
+assert.ok(!/[\u0000-\u001f\u007f-\u009f\u061c\u200e-\u200f\u2028-\u202e\u2066-\u2069]/.test(Object.values(sanitized).filter(value => typeof value === 'string').join('')));
 assert.equal(sanitized.clientAddress, '127.0.0.1\ufffdspoof');
 assert.ok(sanitized.application.endsWith('\ufffd\ufffd'));
-const huge = ui.describeTrafficOrigin(flow({ ...origin, process: { pid: 1, name: 'x'.repeat(50000), path: 'y'.repeat(50000) } }));
+const huge = ui.describeTrafficOrigin(flow({ ...origin, deviceName: 'z'.repeat(50000), process: { pid: 1, name: 'x'.repeat(50000), path: 'y'.repeat(50000) } }));
+assert.ok(huge.deviceName.length <= 129 && huge.deviceName.endsWith('…'));
 assert.ok(huge.application.length < 300 && huge.path.length < 4200, 'imported metadata must not flood a cell or tooltip');
 const before = JSON.stringify(malicious);
 const details = renderToStaticMarkup(React.createElement(ui.RequestOverview, { request, flow: malicious }));
 assert.ok(details.includes('Traffic origin') && details.includes('Client address') && details.includes('Process path'));
 assert.ok(details.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+assert.ok(details.includes('Device name (self-reported)') && details.includes('&lt;img src=x onerror=alert(2)&gt;'));
+assert.ok(details.includes('does not identify an application or hardware'));
+assert.ok(!/[\u061c\u200e\u200f\u2028\u2029]/.test(details));
 assert.ok(!details.includes('<script>') && !details.includes('<img ') && !details.includes('<svg onload'));
 assert.ok(!details.includes('href="javascript:'), 'process paths are inert text');
 assert.equal(JSON.stringify(malicious), before, 'presentation must not mutate captured data');
 const importedMarkup = renderToStaticMarkup(React.createElement(ui.RequestOverview, { request, flow: imported }));
+assert.ok(importedMarkup.includes('Review phone') && importedMarkup.includes('Device name (self-reported)'));
 assert.ok(importedMarkup.includes('File record') && importedMarkup.includes('has not been verified on this device'));
 const replayMarkup = renderToStaticMarkup(React.createElement(ui.RequestOverview, { request, flow: replay }));
 assert.ok(replayMarkup.includes('Sent manually by this app') && !replayMarkup.includes('Chrome.EXE'));
+assert.ok(!replayMarkup.includes('Pixel 9 Pro') && !replayMarkup.includes('Device name (self-reported)'));
 
 const columnsKey = 'http-capture.capture.columns.v1';
 assert.ok(ui.readColumns().includes('originApplication'), 'new installs show the application column');
@@ -134,6 +170,12 @@ ui.saveColumns(['url', 'originApplication', 'clientAddress', 'trafficEntry']);
 const optionalList = renderToStaticMarkup(React.createElement(ui.CaptureView, { ...props, flows: [imported] }));
 assert.ok(optionalList.includes('127.0.0.1:59123') && optionalList.includes('Client address') && optionalList.includes('Explicit proxy'));
 assert.ok(optionalList.includes('File record'));
+const lanMarkup = renderToStaticMarkup(React.createElement(ui.RequestOverview, { request, flow: lan }));
+assert.ok(lanMarkup.includes('Remote client') && lanMarkup.includes('Device name (self-reported)') && lanMarkup.includes(deviceName));
+const lanList = renderToStaticMarkup(React.createElement(ui.CaptureView, { ...props, flows: [lan] }));
+assert.ok(lanList.includes('Remote client') && lanList.includes('Device name (self-reported): Pixel 9 Pro'), 'list tooltip includes the separate device label');
+const hostileList = renderToStaticMarkup(React.createElement(ui.CaptureView, { ...props, flows: [malicious] }));
+assert.ok(hostileList.includes('&lt;img src=x onerror=alert(2)&gt;') && !hostileList.includes('<img '));
 
 // Drive the actual capture search input with a tiny hook host. This verifies
 // metadata participates in filtering without changing URL/protocol fields.
@@ -157,6 +199,7 @@ const flows = [
   flow({ ...origin, entry: 'quic-reverse', processStatus: 'remote', clientAddress: '203.0.113.42:54001' }, { id: 'remote' }),
   flow(null, { id: 'legacy' }),
   flow({ ...origin, entry: 'tun', processStatus: 'tun-unavailable' }, { id: 'tun' }),
+  lan, { ...imported, id: 'imported' }, { ...replay, id: 'replay' },
 ];
 const untouched = JSON.stringify(flows);
 function nodes(node, predicate) {
@@ -174,16 +217,19 @@ function renderSearch(query) {
   tree = host.CaptureView({ ...props, flows });
   return nodes(tree, node => node.type === 'tr' && node.props['aria-haspopup'] === 'menu').map(row => row.key);
 }
-assert.deepEqual(renderSearch('CHROME.EXE'), ['local']);
+assert.deepEqual(renderSearch('CHROME.EXE'), ['local', 'imported']);
 assert.deepEqual(renderSearch('203.0.113.42'), ['remote']);
 assert.deepEqual(renderSearch('QUIC reverse'), ['remote']);
 assert.deepEqual(renderSearch('helper is not the source'), ['tun']);
 assert.deepEqual(renderSearch('not recorded for this request'), ['legacy']);
-assert.equal(renderSearch('').length, 4);
+assert.deepEqual(renderSearch('PIXEL 9 PRO'), ['lan'], 'actual capture search includes live device labels and excludes replay parents');
+assert.deepEqual(renderSearch('Review phone'), ['imported'], 'imported labels remain searchable with file provenance');
+assert.equal(renderSearch('').length, 6, 'capture search excludes locally replayed operations');
 assert.equal(JSON.stringify(flows), untouched, 'search must not alter URLs or protocol data');
 
 ui.setLanguage('zh-CN');
 assert.equal(ui.describeTrafficOrigin(flow()).entry, '显式代理');
 assert.equal(ui.describeTrafficOrigin(replay).application, '本应用手动发送');
 assert.ok(renderToStaticMarkup(React.createElement(ui.RequestOverview, { request, flow: imported })).includes('来源信息来自导入文件，未在本机验证。'));
-console.log('Traffic origin: local/remote/TUN/replay/import provenance, safe metadata, i18n, column preferences, rendered details and live search passed');
+assert.ok(renderToStaticMarkup(React.createElement(ui.RequestOverview, { request, flow: lan })).includes('设备名称（自报）'));
+console.log('Traffic origin: separate device labels, local/remote/TUN/replay/import provenance, malicious metadata, i18n, rendered details/list tooltips and live search passed');

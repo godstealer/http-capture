@@ -3,6 +3,7 @@ package dev.httpcapture.mobile;
 import android.util.Base64;
 
 import java.io.DataInputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -112,10 +113,34 @@ final class LanPairingClient {
         }
     }
 
+    static void reportDeviceName(Session session, String manufacturer, String model) throws Exception {
+        if (session.expiresAt <= System.currentTimeMillis())
+            throw new IllegalStateException("PC session has expired");
+        // Connection, identity and VPN-protection failures must not enter the optional IO fallback.
+        SSLSocket connected = connect(session.code, false);
+        boolean accepted;
+        try (SSLSocket tls = connected) {
+            DeviceNameCodec.writeReport(tls.getOutputStream(), session.token, manufacturer, model);
+            int acknowledgement = new DataInputStream(tls.getInputStream()).readUnsignedByte();
+            if (acknowledgement != 0 && acknowledgement != 1)
+                throw new IllegalStateException("PC rejected the device name");
+            accepted = acknowledgement == 0;
+        } catch (IOException unsupported) {
+            // Optional metadata IO (including close) may fail on an older PC.
+            accepted = false;
+        }
+        // An unsupported operation and a rejected session both return 1 on older PCs.
+        if (!accepted) verifySession(session, false);
+    }
+
     static void ping(Session session) throws Exception {
+        verifySession(session, true);
+    }
+
+    private static void verifySession(Session session, boolean vpnMustBeActive) throws Exception {
         if (session.expiresAt <= System.currentTimeMillis())
             throw new IllegalStateException("PC 会话已过期");
-        try (SSLSocket tls = connect(session.code, true)) {
+        try (SSLSocket tls = connect(session.code, vpnMustBeActive)) {
             OutputStream output = tls.getOutputStream();
             output.write(3);
             output.write(session.token);

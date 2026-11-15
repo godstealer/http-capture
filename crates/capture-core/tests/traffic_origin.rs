@@ -245,7 +245,7 @@ async fn tun_bridge_records_the_registered_android_application() {
         let socket = TcpStream::connect(bridge.address).await.unwrap();
         registry.register(socket.local_addr().unwrap(), capture_core::model::TrafficOrigin {
             entry: "tun".into(), client_address: Some("10.111.0.2:51234".into()),
-            process: None, process_status: "identified".into(),
+            process: None, device_name: None, process_status: "identified".into(),
             application: Some(capture_core::model::ApplicationInfo {
                 uid: 10123, packages: vec!["example.android".into()], label: Some("Example".into()),
             }),

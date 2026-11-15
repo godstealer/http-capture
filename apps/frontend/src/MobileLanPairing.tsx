@@ -3,10 +3,11 @@ import { QRCodeSVG } from 'qrcode.react';
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from './api';
 import { t } from './i18n';
+import { trafficDeviceName } from './trafficOrigin';
 import './mobile-lan-pairing.css';
 
 type InterfaceAddress = { name: string; address: string; family: string; available: boolean; loopback: boolean };
-type GatewayStatus = { running: boolean; address: string | null; paired: boolean; fingerprint: string | null };
+type GatewayStatus = { running: boolean; address: string | null; paired: boolean; fingerprint: string | null; deviceName?: string | null };
 const emptyStatus: GatewayStatus = { running: false, address: null, paired: false, fingerprint: null };
 
 function privateIPv4(value: string) {
@@ -29,6 +30,7 @@ export default function MobileLanPairing({ active }: { active: boolean }) {
   const uriRef = useRef(uri);
   uriRef.current = uri;
   const expiry = uri ? Number(new URL(uri).searchParams.get('exp')) * 1000 : 0;
+  const deviceName = status.running && status.paired ? trafficDeviceName(status.deviceName) : '';
   const remaining = Math.max(0, Math.ceil((expiry - now) / 1000));
 
   useEffect(() => {
@@ -96,7 +98,7 @@ export default function MobileLanPairing({ active }: { active: boolean }) {
         {status.paired && <button className="button" type="button" disabled={busy} onClick={() => void command('mobile_gateway_disconnect')}>{t('断开设备')}</button>}
         {status.running && <button className="button" type="button" disabled={busy} onClick={() => void command('mobile_gateway_stop')}>{t('关闭接收端')}</button>}
       </div>
-      <p className="mobile-lan-state" aria-live="polite">{status.paired ? t('Android 已配对') : status.running ? t('等待 Android 配对') : t('接收端未启动')}{status.address ? ` · ${status.address}` : ''}</p>
+      <p className="mobile-lan-state" aria-live="polite">{status.paired ? t('Android 已配对') : status.running ? t('等待 Android 配对') : t('接收端未启动')}{status.address ? ` · ${status.address}` : ''}{deviceName && <> · <span title={t('设备自报名称，仅作标签，不代表应用或硬件身份。')}>{t('设备名称（自报）')}：<bdi dir="auto">{deviceName}</bdi></span></>}</p>
       {status.fingerprint && <p className="mobile-lan-fingerprint">{t('PC 身份指纹')}<code>{status.fingerprint}</code></p>}
       {uri && remaining > 0 && !status.paired && <div className="mobile-lan-code">
         <div className="mobile-lan-qr"><QRCodeSVG value={uri} size={240} level="M" /></div>

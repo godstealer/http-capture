@@ -189,7 +189,7 @@ fn start_tunnel(fd: i32, capture_quic: bool, remote_port: Option<u16>, remote_ud
             let process_status = if application.is_some() { "identified" } else { "tun-unavailable" };
             origin_registry.register(proxy_peer, capture_core::model::TrafficOrigin {
                 entry: "tun".into(), client_address: Some(source.to_string()),
-                process: None, application, process_status: process_status.into(),
+                process: None, application, device_name: None, process_status: process_status.into(),
             });
         }));
     }

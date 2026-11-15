@@ -4,6 +4,8 @@ import type { Flow } from './types';
 export type TrafficOriginView = {
   kind: 'manual' | 'unrecorded' | 'identified' | 'remote' | 'unidentified';
   application: string;
+  deviceName: string;
+  deviceNameNotice: string;
   clientAddress: string;
   entry: string;
   pid: string;
@@ -20,8 +22,14 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 function text(value: unknown, limit = 4096): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const result = value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '\ufffd').trim();
+  // Bound work before replacing controls in untrusted imported metadata.
+  const result = value.slice(0, limit + 1).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e-\u200f\u2028-\u202e\u2066-\u2069]/g, '\ufffd').trim();
   return result ? result.length > limit ? result.slice(0, limit) + '…' : result : undefined;
+}
+
+/** A self-reported display label, never a process or hardware identity. */
+export function trafficDeviceName(value: unknown): string {
+  return text(value, 128) ?? '';
 }
 
 export function trafficEntryLabel(entry: unknown): string {
@@ -39,7 +47,7 @@ export function trafficEntryLabel(entry: unknown): string {
 export function describeTrafficOrigin(flow: OriginFlow): TrafficOriginView {
   const missing = t('未记录');
   const base: TrafficOriginView = {
-    kind: 'unrecorded', application: missing, clientAddress: missing, entry: missing,
+    kind: 'unrecorded', application: missing, deviceName: '', deviceNameNotice: '', clientAddress: missing, entry: missing,
     pid: '—', path: missing, reason: t('此记录未记录流量来源。'),
     imported: flow.state === 'imported', provenance: '',
   };
@@ -54,8 +62,10 @@ export function describeTrafficOrigin(flow: OriginFlow): TrafficOriginView {
   if (!origin) return {
     ...base, application: base.imported ? t('导入记录 · 未记录') : missing,
   };
+  const deviceName = trafficDeviceName(origin.deviceName);
   const result: TrafficOriginView = {
-    ...base, kind: 'unidentified', application: t('未识别应用'),
+    ...base, kind: 'unidentified', application: t('未识别应用'), deviceName,
+    deviceNameNotice: deviceName ? t('设备自报名称，仅作标签，不代表应用或硬件身份。') : '',
     clientAddress: text(origin.clientAddress, 256) ?? missing,
     entry: trafficEntryLabel(origin.entry),
     reason: t('来源进程状态未识别。'),
@@ -94,13 +104,14 @@ export function trafficOriginSearchText(flow: OriginFlow): string {
   const origin = describeTrafficOrigin(flow);
   return [
     origin.application, origin.clientAddress, origin.entry, origin.pid, origin.path,
-    origin.reason, origin.provenance,
+    origin.deviceName, origin.deviceNameNotice, origin.reason, origin.provenance,
   ].join(' ').toLowerCase();
 }
 export function trafficOriginTooltip(origin: TrafficOriginView): string {
   return [
     origin.application, origin.pid !== '—' ? 'PID ' + origin.pid : '',
     origin.clientAddress, origin.entry, origin.path !== t('未记录') ? origin.path : '',
-    origin.reason, origin.provenance,
+    origin.deviceName ? t('设备名称（自报）：{name}', { name: origin.deviceName }) : '',
+    origin.deviceNameNotice, origin.reason, origin.provenance,
   ].filter(Boolean).join('\n');
 }

@@ -2,6 +2,8 @@
 
 局域网协同抓包（PC 二维码、Android VPN 扫码配对与远程转发）正在分阶段开发，协议和当前边界见 [局域网协同抓包](mobile-lan-capture.md)。开发分支已加入独立认证接收端、二维码、Android 扫码及 TCP/UDP 加密转发，并通过桌面与移动构建；设备端到端验收仍未完成，不作为正式移动版交付。
 
+2026-11-15 未发布增量：Android 制造商/型号经认证会话上报到 PC，配对状态与 TCP/UDP 来源增加独立设备标签，并可在 PC 详情/提示/搜索中查看。标签不作为应用识别或硬件身份；旧 PC 只有额外心跳确认会话有效才降级无标签模式。原 v1 配对、指纹/SAN 和 VPN 回环保护保持。Rust 网关 6 项及 JSON 1 项本机实际回归、JDK 标签编码 79 项检查、生产客户端方法模拟 socket 58 项检查、Android 应用与设备测试 Java 编译，以及前端回归/构建和桌面源码检查通过。跨平台 CI 与设备扫码/VPN 端到端仍待验证，不发布正式移动包，详见[局域网协同抓包](mobile-lan-capture.md)。
+
 状态：Android 包含 TUN 透明代理桥的 arm64-v8a / x86_64 双架构调试 APK 已通过 [API 36 模拟器完整回归](https://github.com/godstealer/http-capture/actions/runs/40260325332)，尚未经过真机验收。iOS 宿主、Packet Tunnel 与 Rust 包桥接已实现基础链路；近期改动已通过 [Mac 模拟器与无签名 iPhone 构建](https://github.com/godstealer/http-capture/actions/runs/40261185176)。签名及 iPhone 设备验收尚未完成。当前没有可交付的正式移动安装包。
 
 下文保留分阶段开发记录；其中“待 Mac 编译/模拟器”的旧状态已由上述同源构建更新，涉及真实 iPhone、签名、证书安装和网络行为的验收仍未完成。

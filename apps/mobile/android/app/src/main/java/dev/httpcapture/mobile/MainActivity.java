@@ -518,6 +518,7 @@ public final class MainActivity extends Activity {
                 worker.execute(() -> {
                     try {
                         LanPairingClient.Session session = LanPairingClient.redeem(code);
+                        LanPairingClient.reportDeviceName(session, Build.MANUFACTURER, Build.MODEL);
                         main.post(() -> {
                             LanPairingClient.setActiveSession(session);
                             status.setText("PC 身份验证完成，可启动远程 VPN 转发；UDP 仍需设备验证");

@@ -28,6 +28,9 @@ pub struct TrafficOrigin {
     pub process: Option<ProcessInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application: Option<ApplicationInfo>,
+    /// A paired remote device's self-reported display label, not an application or identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
     pub process_status: String,
 }
 

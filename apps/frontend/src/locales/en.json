@@ -1696,5 +1696,8 @@
   "应用到请求体": "Apply to request body",
   "放弃修改并重新载入": "Discard changes and reload",
   "支持重复字段，按表格顺序发送。": "Duplicate fields are supported and sent in table order.",
-  "文本与文件可混合添加，支持重复字段。": "Mix text and file fields, including duplicate names."
+  "文本与文件可混合添加，支持重复字段。": "Mix text and file fields, including duplicate names.",
+  "设备名称（自报）": "Device name (self-reported)",
+  "设备名称（自报）：{name}": "Device name (self-reported): {name}",
+  "设备自报名称，仅作标签，不代表应用或硬件身份。": "The device reports this name as a label; it does not identify an application or hardware."
 }

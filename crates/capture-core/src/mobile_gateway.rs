@@ -15,6 +15,7 @@ use tokio_rustls::TlsAcceptor;
 const SESSION_LIFETIME_SECONDS: u64 = 3600;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_HOST_BYTES: usize = 253;
+const MAX_DEVICE_NAME_BYTES: usize = 128;
 const MAX_UDP_FRAME: usize = 12 * 1024;
 
 #[derive(Clone, Debug)]
@@ -28,12 +29,40 @@ pub enum GatewayEvent {
 struct GatewayState {
     pending: PendingPairing,
     session: Option<([u8; PAIRING_TOKEN_BYTES], u64)>,
+    device_name: Option<String>,
+}
+
+impl GatewayState {
+    fn session_info(&self, token: &[u8; PAIRING_TOKEN_BYTES], now: u64) -> Option<(u64, Option<String>)> {
+        self.session.as_ref().and_then(|(saved, expiry)|
+            (*expiry > now && constant_time_eq(saved, token)).then(|| (*expiry, self.device_name.clone())))
+    }
+
+    fn set_device_name(&mut self, token: &[u8; PAIRING_TOKEN_BYTES], name: &str, now: u64) -> Result<()> {
+        // Authenticate again at assignment: a bounded payload read can overlap
+        // disconnect, expiry, or a new pairing. A label never authenticates a device.
+        ensure!(self.session_info(token, now).is_some(), "Mobile session is not authorized");
+        self.device_name = Some(validated_device_name(name)?);
+        Ok(())
+    }
+}
+
+fn validated_device_name(name: &str) -> Result<String> {
+    ensure!(name.len() <= MAX_DEVICE_NAME_BYTES, "Device name is too long");
+    ensure!(!name.chars().any(|c| c.is_control() || matches!(c,
+        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
+        | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')), "Invalid device name characters");
+    let name = name.trim();
+    ensure!(!name.is_empty(), "Device name is empty");
+    Ok(name.to_string())
 }
 
 /// Protocol v1 is carried entirely within TLS pinned to the SPKI in the QR.
 /// Type 1 redeems the one-use QR token and returns a short-lived session token.
 /// Type 2 authenticates with that token, then tunnels one TCP stream. A zero
 /// response byte means success; any other response byte closes the stream.
+/// Type 5 optionally records a session-authenticated UTF-8 device label. The
+/// original pairing and forwarding frames remain compatible with v1 clients.
 pub struct MobileGateway {
     address: SocketAddr,
     fingerprint: String,
@@ -103,6 +132,13 @@ impl MobileGateway {
             .as_ref().is_some_and(|(_, expiry)| *expiry > unix_seconds().unwrap_or(u64::MAX))
     }
 
+    /// Return descriptive metadata only for the current, unexpired session.
+    pub fn device_name(&self) -> Option<String> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.session.as_ref().filter(|(_, expiry)| *expiry > unix_seconds().unwrap_or(u64::MAX))
+            .and_then(|_| state.device_name.clone())
+    }
+
     pub fn events(&self) -> broadcast::Receiver<GatewayEvent> { self.events.subscribe() }
 
     pub fn open_pairing(&self) -> Result<PairingCode> {
@@ -121,6 +157,7 @@ impl MobileGateway {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.pending.revoke();
         state.session = None;
+        state.device_name = None;
         self.generation.send_modify(|value| *value = value.wrapping_add(1));
         let _ = self.events.send(GatewayEvent::Disconnected);
     }
@@ -150,6 +187,7 @@ async fn serve(socket: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor,
                 getrandom::getrandom(&mut session)
                     .map_err(|error| anyhow::anyhow!("Session token generation failed: {error}"))?;
                 locked.session = Some((session, unix_seconds()? + SESSION_LIFETIME_SECONDS));
+                locked.device_name = None;
                 generation_sender.send_modify(|value| *value = value.wrapping_add(1));
                 Ok(())
             })();
@@ -159,13 +197,11 @@ async fn serve(socket: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor,
             let _ = events.send(GatewayEvent::Paired { peer });
         }
         2 => {
-            let session_expiry = {
+            let session_info = {
                 let locked = state.lock().unwrap_or_else(|error| error.into_inner());
-                locked.session.as_ref().and_then(|(saved, expiry)|
-                    (*expiry > unix_seconds().unwrap_or(u64::MAX) && constant_time_eq(saved, &token))
-                        .then_some(*expiry))
+                locked.session_info(&token, unix_seconds().unwrap_or(u64::MAX))
             };
-            let Some(session_expiry) = session_expiry else {
+            let Some((session_expiry, device_name)) = session_info else {
                 tls.write_all(&[1]).await?;
                 anyhow::bail!("Mobile session is not authorized");
             };
@@ -204,7 +240,7 @@ async fn serve(socket: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor,
             if initial > 0 { upstream.write_all(&first_bytes[..initial]).await?; }
             let mut flow = engine.as_ref().map(|engine| {
                 let (method, url) = observed_request(&first_bytes[..initial], &host, port);
-                let flow = mobile_flow(peer, method, url)?;
+                let flow = mobile_flow(peer, method, url, device_name.clone())?;
                 engine.store.insert(&flow)?;
                 let _ = engine.events.send(flow.clone());
                 Ok::<_, anyhow::Error>(flow)
@@ -243,18 +279,35 @@ async fn serve(socket: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor,
             ensure!(authorized, "Mobile session is not authorized");
         }
         4 => {
-            let session_expiry = {
+            let session_info = {
                 let locked = state.lock().unwrap_or_else(|error| error.into_inner());
-                locked.session.as_ref().and_then(|(saved, expiry)|
-                    (*expiry > unix_seconds().unwrap_or(u64::MAX) && constant_time_eq(saved, &token))
-                        .then_some(*expiry))
+                locked.session_info(&token, unix_seconds().unwrap_or(u64::MAX))
             };
-            let Some(expiry) = session_expiry else {
+            let Some((expiry, device_name)) = session_info else {
                 tls.write_all(&[1]).await?;
                 anyhow::bail!("Mobile UDP session is not authorized");
             };
             tls.write_all(&[0]).await?;
-            serve_udp_frames(&mut tls, peer, generation, expiry, engine, allow_loopback_destination).await?;
+            serve_udp_frames(&mut tls, peer, generation, expiry, engine, device_name, allow_loopback_destination).await?;
+        }
+        5 => {
+            let result = async {
+                let authorized = {
+                    let locked = state.lock().unwrap_or_else(|error| error.into_inner());
+                    locked.session_info(&token, unix_seconds().unwrap_or(u64::MAX)).is_some()
+                };
+                ensure!(authorized, "Mobile session is not authorized");
+                let length = timeout(HANDSHAKE_TIMEOUT, tls.read_u16()).await?? as usize;
+                ensure!((1..=MAX_DEVICE_NAME_BYTES).contains(&length), "Invalid device name length");
+                let mut bytes = vec![0; length];
+                timeout(HANDSHAKE_TIMEOUT, tls.read_exact(&mut bytes)).await??;
+                let name = std::str::from_utf8(&bytes)?;
+                let mut locked = state.lock().unwrap_or_else(|error| error.into_inner());
+                locked.set_device_name(&token, name, unix_seconds()?)?;
+                Ok::<(), anyhow::Error>(())
+            }.await;
+            tls.write_all(&[if result.is_ok() { 0 } else { 1 }]).await?;
+            result?;
         }
         _ => { tls.write_all(&[1]).await?; anyhow::bail!("Unsupported mobile gateway operation"); }
     }
@@ -291,12 +344,12 @@ fn observed_request(bytes: &[u8], host: &str, port: u16) -> (String, String) {
     (method.into(), url)
 }
 
-fn mobile_flow(peer: SocketAddr, method: String, url: String) -> Result<Flow> {
+fn mobile_flow(peer: SocketAddr, method: String, url: String, device_name: Option<String>) -> Result<Flow> {
     Ok(Flow {
         state: "receiving".into(), websocket: None, original_request: None,
         original_response: None, client_tls: None, client_protocol: Some("TCP".into()),
         traffic_origin: Some(TrafficOrigin { entry: "android-lan".into(),
-            client_address: Some(peer.to_string()), process: None, application: None,
+            client_address: Some(peer.to_string()), process: None, application: None, device_name,
             process_status: "remote".into() }),
         id: uuid::Uuid::new_v4().to_string(), parent_id: None,
         started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
@@ -312,7 +365,7 @@ fn mobile_flow(peer: SocketAddr, method: String, url: String) -> Result<Flow> {
 /// tun2proxy's UDPGW frames stay inside the authenticated TLS stream.
 async fn serve_udp_frames(tls: &mut tokio_rustls::server::TlsStream<TcpStream>, peer: SocketAddr,
     mut generation: watch::Receiver<u64>, expiry: u64, engine: Option<Arc<Engine>>,
-    allow_loopback_destination: bool) -> Result<()> {
+    device_name: Option<String>, allow_loopback_destination: bool) -> Result<()> {
     let gateway = tls.get_ref().0.local_addr()?;
     let (mut reader, mut writer) = tokio::io::split(tls);
     let (outgoing, mut responses) = mpsc::channel::<Vec<u8>>(256);
@@ -337,7 +390,7 @@ async fn serve_udp_frames(tls: &mut tokio_rustls::server::TlsStream<TcpStream>, 
                 if recorded.len() >= 1024 { recorded.clear(); }
                 if recorded.insert(key.clone()) {
                     let authority = if host.contains(':') { format!("[{host}]") } else { host.clone() };
-                    let mut flow = mobile_flow(peer, "UDP".into(), format!("udp://{authority}:{port}"))?;
+                    let mut flow = mobile_flow(peer, "UDP".into(), format!("udp://{authority}:{port}"), device_name.clone())?;
                     flow.state = "completed".into();
                     flow.client_protocol = Some("UDP".into());
                     flow.notes = vec!["Android VPN 加密 UDP 转发：仅记录目标元数据，不保存载荷。".into()];
@@ -492,7 +545,9 @@ mod tests {
     #[tokio::test]
     async fn redeem_once_reject_replay_and_tunnel_until_revoked() {
         let host = Ipv4Addr::LOCALHOST;
-        let gateway = MobileGateway::start_inner(host, 0, true, None).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(dir.path()).unwrap();
+        let gateway = MobileGateway::start_inner(host, 0, true, Some(engine.clone())).await.unwrap();
         let mut token = [0u8; PAIRING_TOKEN_BYTES];
         token.fill(7);
         gateway.state.lock().unwrap().pending.replace(PairingCode {
@@ -510,6 +565,7 @@ mod tests {
         assert_eq!(pairing.read_u8().await.unwrap(), 0);
         let mut session = [0u8; PAIRING_TOKEN_BYTES];
         pairing.read_exact(&mut session).await.unwrap();
+        assert!(gateway.device_name().is_none(), "original v1 pairing remains valid without metadata");
         let mut replay = connect(&gateway).await;
         replay.write_all(&[1]).await.unwrap();
         replay.write_all(&token).await.unwrap();
@@ -518,6 +574,15 @@ mod tests {
         heartbeat.write_all(&[3]).await.unwrap();
         heartbeat.write_all(&session).await.unwrap();
         assert_eq!(heartbeat.read_u8().await.unwrap(), 0);
+        let generation = *gateway.generation.borrow();
+        let mut description = connect(&gateway).await;
+        description.write_all(&[5]).await.unwrap();
+        description.write_all(&session).await.unwrap();
+        description.write_u16(14).await.unwrap();
+        description.write_all(b"Google Pixel 8").await.unwrap();
+        assert_eq!(description.read_u8().await.unwrap(), 0);
+        assert_eq!(gateway.device_name().as_deref(), Some("Google Pixel 8"));
+        assert_eq!(*gateway.generation.borrow(), generation, "metadata must not revoke tunnels");
 
         let echo = TcpListener::bind((host, 0)).await.unwrap();
         let echo_port = echo.local_addr().unwrap().port();
@@ -578,7 +643,21 @@ mod tests {
         assert!(responses.contains(&b"ping".to_vec()));
         assert!(responses.contains(&b"pong".to_vec()));
         udp_task.await.unwrap();
+        let flows = engine.store.list().unwrap();
+        assert_eq!(flows.len(), 2);
+        assert!(flows.iter().any(|flow| flow.client_protocol.as_deref() == Some("TCP")));
+        assert!(flows.iter().any(|flow| flow.client_protocol.as_deref() == Some("UDP")));
+        for flow in &flows {
+            let origin = flow.traffic_origin.as_ref().unwrap();
+            assert_eq!(origin.device_name.as_deref(), Some("Google Pixel 8"));
+            assert_eq!(origin.process_status, "remote");
+            assert!(origin.application.is_none());
+            let restored: Flow = serde_json::from_value(serde_json::to_value(flow).unwrap()).unwrap();
+            assert_eq!(restored.traffic_origin, flow.traffic_origin);
+        }
         gateway.disconnect();
+        assert!(gateway.device_name().is_none());
+        assert!(gateway.state.lock().unwrap().device_name.is_none());
         assert!(timeout(Duration::from_secs(2), tunnel.read_u8()).await.unwrap().is_err());
         assert!(timeout(Duration::from_secs(2), udp.read_u8()).await.unwrap().is_err());
         assert!(timeout(Duration::from_secs(2), echo_task).await.unwrap().unwrap().is_some());
@@ -590,6 +669,63 @@ mod tests {
         revoked_ping.write_all(&[3]).await.unwrap();
         revoked_ping.write_all(&session).await.unwrap();
         assert_eq!(revoked_ping.read_u8().await.unwrap(), 1);
+        gateway.stop();
+    }
+
+    #[test]
+    fn device_labels_are_bounded_and_cannot_overwrite_a_replaced_or_expired_session() {
+        let old_token = [7; PAIRING_TOKEN_BYTES];
+        let new_token = [8; PAIRING_TOKEN_BYTES];
+        let mut state = GatewayState { session: Some((old_token, 200)), ..Default::default() };
+        state.set_device_name(&old_token, "  Google Pixel 8  ", 100).unwrap();
+        assert_eq!(state.device_name.as_deref(), Some("Google Pixel 8"));
+        let snapshot = state.session_info(&old_token, 100).unwrap();
+        state.session = Some((new_token, 300));
+        state.device_name = Some("New device".into());
+        assert!(state.set_device_name(&old_token, "stale overwrite", 101).is_err());
+        assert_eq!(snapshot.1.as_deref(), Some("Google Pixel 8"));
+        assert_eq!(state.device_name.as_deref(), Some("New device"));
+        assert!(state.set_device_name(&new_token, "expired", 300).is_err());
+        assert_eq!(state.device_name.as_deref(), Some("New device"));
+        for invalid in ["", "   ", "a\nspoof", "a\u{0085}b", "a\u{061c}b", "a\u{200e}b", "a\u{200f}b",
+            "a\u{2028}b", "a\u{2029}b", "a\u{202e}b", "a\u{2066}b"] {
+            assert!(state.set_device_name(&new_token, invalid, 101).is_err(), "{invalid:?}");
+            assert_eq!(state.device_name.as_deref(), Some("New device"));
+        }
+        assert!(state.set_device_name(&new_token, &"x".repeat(129), 101).is_err());
+        state.set_device_name(&new_token, &"机".repeat(42), 101).unwrap();
+        assert_eq!(state.device_name.as_ref().unwrap().len(), 126);
+        state.set_device_name(&new_token, &"x".repeat(128), 101).unwrap();
+        assert_eq!(state.device_name.as_ref().unwrap().len(), 128);
+    }
+
+    #[tokio::test]
+    async fn device_metadata_rejects_invalid_utf8_and_clears_expired_status() {
+        let gateway = MobileGateway::start_inner(Ipv4Addr::LOCALHOST, 0, true, None).await.unwrap();
+        let session = [9; PAIRING_TOKEN_BYTES];
+        {
+            let mut state = gateway.state.lock().unwrap();
+            state.session = Some((session, unix_seconds().unwrap() + 300));
+            state.device_name = Some("Existing name".into());
+        }
+        for payload in [vec![0xff], vec![0; 0], vec![b'x'; 129]] {
+            let mut metadata = connect(&gateway).await;
+            metadata.write_all(&[5]).await.unwrap();
+            metadata.write_all(&session).await.unwrap();
+            metadata.write_u16(payload.len() as u16).await.unwrap();
+            if !payload.is_empty() { let _ = metadata.write_all(&payload).await; }
+            assert_eq!(metadata.read_u8().await.unwrap(), 1);
+            assert_eq!(gateway.device_name().as_deref(), Some("Existing name"));
+        }
+        let mut unauthenticated = connect(&gateway).await;
+        unauthenticated.write_all(&[5]).await.unwrap();
+        unauthenticated.write_all(&[1; PAIRING_TOKEN_BYTES]).await.unwrap();
+        assert_eq!(unauthenticated.read_u8().await.unwrap(), 1);
+        assert_eq!(gateway.device_name().as_deref(), Some("Existing name"));
+        gateway.state.lock().unwrap().session.as_mut().unwrap().1 = unix_seconds().unwrap();
+        assert!(gateway.device_name().is_none());
+        gateway.disconnect();
+        assert!(gateway.state.lock().unwrap().device_name.is_none());
         gateway.stop();
     }
 

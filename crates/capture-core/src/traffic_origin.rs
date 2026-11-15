@@ -60,7 +60,7 @@ pub(crate) async fn tcp(peer: SocketAddr, local: SocketAddr, transparent: bool) 
     if transparent { return tun(); }
     let mut origin = TrafficOrigin {
         entry: "explicit-proxy".into(), client_address: Some(peer.to_string()),
-        process: None, application: None, process_status: "unknown".into(),
+        process: None, application: None, device_name: None, process_status: "unknown".into(),
     };
     let local_peer = if peer.ip().to_canonical().is_loopback() { true } else {
         let ip = peer.ip();
@@ -77,12 +77,12 @@ pub(crate) async fn tcp(peer: SocketAddr, local: SocketAddr, transparent: bool) 
 }
 
 pub(crate) fn tun() -> TrafficOrigin {
-    TrafficOrigin { entry: "tun".into(), client_address: None, process: None, application: None, process_status: "tun-unavailable".into() }
+    TrafficOrigin { entry: "tun".into(), client_address: None, process: None, application: None, device_name: None, process_status: "tun-unavailable".into() }
 }
 
 pub(crate) fn quic(peer: SocketAddr, redirected: bool) -> TrafficOrigin {
     if redirected { return tun(); }
-    TrafficOrigin { entry: "quic-reverse".into(), client_address: Some(peer.to_string()), process: None, application: None, process_status: "transport-unsupported".into() }
+    TrafficOrigin { entry: "quic-reverse".into(), client_address: Some(peer.to_string()), process: None, application: None, device_name: None, process_status: "transport-unsupported".into() }
 }
 
 #[cfg(test)]
@@ -144,5 +144,14 @@ mod tests {
             "processStatus":"tun-unavailable"});
         let origin: TrafficOrigin = serde_json::from_value(old).unwrap();
         assert!(origin.application.is_none());
+        assert!(origin.device_name.is_none());
+        assert!(serde_json::to_value(&origin).unwrap().get("deviceName").is_none());
+        let mut remote = origin;
+        remote.entry = "android-lan".into();
+        remote.process_status = "remote".into();
+        remote.device_name = Some("Google Pixel 8".into());
+        let encoded = serde_json::to_value(&remote).unwrap();
+        assert_eq!(encoded["deviceName"], "Google Pixel 8");
+        assert_eq!(serde_json::from_value::<TrafficOrigin>(encoded).unwrap(), remote);
     }
 }

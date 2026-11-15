@@ -16,7 +16,7 @@ export interface RequestDraft { upstreamProfileId?:string|null; scripts?: Script
 export interface CertificateDetails { subject: string; issuer: string; serial: string; notBefore: string; notAfter: string; sha256: string; dnsNames: string[]; derBase64: string; parseError?: string | null }
 export interface TlsDetailsData { version?: string | null; cipherSuite?: string | null; alpn?: string | null; serverName?: string | null; handshakeKind?: string | null; offeredCipherSuites: string[]; offeredAlpn: string[]; signatureSchemes: string[]; supportedGroups: string[]; certificates: CertificateDetails[] }
 export interface TrafficOriginProcess { pid: number; name: string; path?: string | null }
-export interface TrafficOriginData { entry: string; clientAddress?: string | null; process?: TrafficOriginProcess | null; processStatus: string }
+export interface TrafficOriginData { entry: string; clientAddress?: string | null; deviceName?: string | null; process?: TrafficOriginProcess | null; processStatus: string }
 export interface Flow {
   trafficOrigin?: TrafficOriginData | null;
   state?: string;
