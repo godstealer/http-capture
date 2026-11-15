@@ -1,5 +1,7 @@
 # 桌面正式版发布
 
+本次待发布桌面增量：PC 局域网配对和流量来源中的 Android 设备名称，见[2026-11-15 更新说明](release-2026-11-15-lan-devices.md)。发布前仍需同源 Check、四平台构建、签名及公开附件核验；移动端正式安装包不在范围内。
+
 当前公开正式版为 [0.1.78](https://github.com/godstealer/http-capture/releases/tag/build-57fee31a9bc0)，更新内容见[2026-11-14 发布说明](release-2026-11-14-editor-fixes.md)。源码 `57fee31a9bc09c5c663b153c201dbbd2d460661b` 的[同源 Check #78](https://github.com/godstealer/http-capture/actions/runs/43570305682) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43572088832) 全部成功，每个平台 10 项原生更新生命周期测试通过，两种 Mac 应用代码签名检查通过。22 个公开附件已下载独立核验：17 项 SHA256 一致，五个更新包签名通过，兼容更新频道与正式版清单一致，GitHub Latest 已指向 0.1.78。Android 和 iOS 不属于本次桌面正式版。M1 实机安装、跨版本更新和本轮界面操作仍待用户验证。
 
 上一桌面正式版为 [0.1.77](https://github.com/godstealer/http-capture/releases/tag/build-6d0a19e2eb3a)，内容见[2026-11-13 发布说明](release-2026-11-13-collection-import.md)。源码 `6d0a19e2eb3a0e48559a935fbafec11f7f174c9f` 的[同源 Check #77](https://github.com/godstealer/http-capture/actions/runs/43268160880) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43269441686) 全部成功，22 个公开附件、17 项 SHA256、五个更新签名及当时的更新频道已独立核验。

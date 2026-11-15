@@ -42,3 +42,11 @@ Android 构建按每个 target 生成完整 NDK CMake wrapper，明确 ABI、API
 - 再接入有界、只读的首份请求/最终响应头观察，保留原始 TCP 字节、背压和半关闭；观察失败或超限只停止观察，不能中断转发。
 - 下一批增加正文 framing 计数跳过及持久连接逐请求关联，覆盖 1xx/HEAD/chunked/升级与不明确边界；不缓存任意正文，也不推进暂停的 P0 全链路。
 - 每条 HTTP 观察记录采用单一写入者，避免隧道结束时用旧 Flow 克隆覆盖新观察结果；HTTPS 解密与设备端到端继续单列。
+
+### Android 重启探针就绪条件
+
+修复来源 `23e06877989ef2201205dabfd0f2dc4abf85abe9` 的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/43671382449) 和 [iOS Mac 验证](https://github.com/godstealer/http-capture/actions/runs/43671382438) 已成功，后者实际完成模拟器启动及无签名 iPhone 编译。Android 双 ABI 编译、ELF/运行库检查和 APK 打包也已通过；[模拟器烟测](https://github.com/godstealer/http-capture/actions/runs/43671382519) 在代理 hint 开关重启后仍发现 `explicit-proxy` 来源，未记为通过。
+
+原探针仅等待 `ConnectivityManager.getDefaultProxy()` 的值。现在在原 5 秒限期内同时等待当前 Probe UID 的 VPN 网络、框架代理状态及针对实际 URI 的进程 `ProxySelector` 选择一致，再使用普通 `URL.openConnection()`。这防止仅凭框架查询值就提前执行“无代理 hint 的 TUN”断言；不设置 `NO_PROXY`、不改系统属性/选择器，也不放宽原生来源必须为 `tun` 的硬断言。Android 将代理配置应用到进程属性及选择器的机制见[官方 Proxy 实现](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/net/Proxy.java)；当前日志支持就绪状态不一致的判断，尚不证明唯一内部传播路径。
+
+纯 JDK 的就绪门控 25 项检查及 API36 Probe Java 编译通过；模拟器需在此修复的来源上重新验证。iOS 相关源码此后未改动，已通过来源 `23e0687` 的结果保留，不把 Android 探针变化冒充为新的 iOS 设备验收。

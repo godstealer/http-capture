@@ -4,6 +4,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.ProxyInfo;
 import android.util.Log;
 import android.os.Process;
@@ -15,10 +17,14 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.HttpURLConnection;
+import java.net.Proxy;
+import java.net.ProxySelector;
+import java.net.URI;
 import java.net.Socket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.security.KeyStore;
 import java.security.cert.CertificateFactory;
 
@@ -82,20 +88,48 @@ public final class ProbeReceiver extends BroadcastReceiver {
         int proxyPort = intent.getIntExtra("proxyPort", 0);
         ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
         if (connectivity == null) throw new IllegalStateException("no ConnectivityManager");
+        URL requestUrl = new URL("http://10.0.2.2:18080" + path);
+        URI requestUri = requestUrl.toURI();
         long deadline = System.currentTimeMillis() + 5_000;
         boolean matches;
+        boolean vpnReady = false;
+        boolean frameworkReady = false;
+        Network network = null;
+        NetworkCapabilities capabilities = null;
+        ProxyInfo frameworkProxy = null;
+        List<Proxy> selectedProxies = null;
+        String selectorError = null;
         do {
-            ProxyInfo proxy = connectivity.getDefaultProxy();
-            boolean localHint = proxy != null && "127.0.0.1".equals(proxy.getHost())
-                    && proxy.getPort() == proxyPort;
-            matches = localHint == expectProxyHint;
+            network = connectivity.getActiveNetwork();
+            capabilities = network == null ? null : connectivity.getNetworkCapabilities(network);
+            vpnReady = capabilities != null
+                    && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+            frameworkProxy = connectivity.getDefaultProxy();
+            boolean localHint = frameworkProxy != null && "127.0.0.1".equals(frameworkProxy.getHost())
+                    && frameworkProxy.getPort() == proxyPort;
+            frameworkReady = expectProxyHint ? localHint : frameworkProxy == null;
+            selectedProxies = null;
+            selectorError = null;
+            try {
+                ProxySelector selector = ProxySelector.getDefault();
+                if (selector == null) selectorError = "No process ProxySelector";
+                else selectedProxies = selector.select(requestUri);
+            } catch (RuntimeException error) {
+                selectorError = error.toString();
+            }
+            matches = ProxyReadiness.isReady(vpnReady, frameworkReady, expectProxyHint,
+                    proxyPort, selectedProxies);
             if (!matches) Thread.sleep(100);
         } while (!matches && System.currentTimeMillis() < deadline);
-        if (!matches) throw new IllegalStateException("VPN HTTP proxy hint did not match expected "
-                + expectProxyHint);
+        if (!matches) throw new IllegalStateException("VPN HTTP stack not ready: expectedProxyHint="
+                + expectProxyHint + ", network=" + network + ", vpnReady=" + vpnReady
+                + ", capabilities=" + capabilities + ", frameworkProxy=" + frameworkProxy
+                + ", frameworkReady=" + frameworkReady + ", selectedProxies=" + selectedProxies
+                + ", selectorError=" + selectorError);
         Log.i("HttpCaptureProbe", "VPN HTTP proxy hint observed: " + expectProxyHint);
-        HttpURLConnection connection = (HttpURLConnection) new URL(
-                "http://10.0.2.2:18080" + path).openConnection();
+        Log.i("HttpCaptureProbe", "HTTP stack ready: network=" + network
+                + ", frameworkProxy=" + frameworkProxy + ", selectedProxies=" + selectedProxies);
+        HttpURLConnection connection = (HttpURLConnection) requestUrl.openConnection();
         connection.setConnectTimeout(10_000);
         connection.setReadTimeout(10_000);
         connection.setRequestProperty("X-VPN-Probe-UID", Integer.toString(Process.myUid()));

@@ -29,7 +29,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Verify mobile request, response and device metadata codecs
+      - name: Verify mobile Java helpers
         run: |
           mkdir -p "$RUNNER_TEMP/http-capture-body-tests"
           javac -encoding UTF-8 -d "$RUNNER_TEMP/http-capture-body-tests" \
@@ -38,16 +38,19 @@ jobs:
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/ResponseBodyCodec.java \
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/RecordedRequestBody.java \
             apps/mobile/android/app/src/main/java/dev/httpcapture/mobile/DeviceNameCodec.java \
+            apps/mobile/android/vpn-probe/src/main/java/dev/httpcapture/probe/ProxyReadiness.java \
             apps/mobile/android/tests/RequestBodyCodecTest.java \
             apps/mobile/android/tests/RequestHeaderCodecTest.java \
             apps/mobile/android/tests/ResponseBodyCodecTest.java \
             apps/mobile/android/tests/RecordedRequestBodyTest.java \
-            apps/mobile/android/tests/DeviceNameCodecTest.java
+            apps/mobile/android/tests/DeviceNameCodecTest.java \
+            apps/mobile/android/tests/ProxyReadinessTest.java
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RequestBodyCodecTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RequestHeaderCodecTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.ResponseBodyCodecTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RecordedRequestBodyTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.DeviceNameCodecTest
+          java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.probe.ProxyReadinessTest
       - name: Install native dependencies
         run: |
           sudo apt-get update
