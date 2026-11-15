@@ -28,7 +28,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: native/include/http_capture_ios.h
         LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/build/native"
-        OTHER_LDFLAGS: "$(inherited) -lhttp_capture_ios -lresolv -lz"
+        OTHER_LDFLAGS: "$(inherited) -lhttp_capture_ios -lresolv -lz -lc++"
     dependencies:
       - target: PacketTunnel
       - sdk: Security.framework
@@ -51,7 +51,7 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         SWIFT_OBJC_BRIDGING_HEADER: native/include/http_capture_ios.h
         LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/build/native"
-        OTHER_LDFLAGS: "$(inherited) -lhttp_capture_ios -lresolv -lz"
+        OTHER_LDFLAGS: "$(inherited) -lhttp_capture_ios -lresolv -lz -lc++"
     dependencies:
       - sdk: NetworkExtension.framework
       - sdk: Security.framework

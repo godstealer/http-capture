@@ -27,3 +27,18 @@ Android 使用制造商/型号生成显示标签，不读取序列号、IMEI、M
 旧 PC 返回不支持或提前关闭元数据连接时，Android 只有另行 op3 验证会话仍有效后才继续无名称配对。建立 TLS、身份校验与 VPN 回环保护失败，以及未知返回码、会话撤销/过期不能当作兼容性降级吞掉。配对阶段的会话校验不要求 VPN 已启动；VPN 已运行时仍保护远程 socket，原 VPN 心跳继续要求保护成功。
 
 本次本机验证：6 项网关 Rust 回归及 1 项来源 JSON 往返实际通过，包含有名 TCP/UDP 持久化、旧帧兼容、错令牌、过期/替换会话不可写、非法长度/UTF-8 和断开清理；JDK17 设备标签规范化/真实帧 79 项检查通过；模拟 socket 对生产客户端上报/心跳方法的 58 项检查通过（该模拟不代替 Android TLS/VPN）。Android 应用及 instrumentation Java 源码在 API36 SDK 下离线编译通过；完整前端回归、TypeScript/Vite 和 core/desktop 含测试源码检查通过。跨平台 CI、Android 模拟器/iOS Mac 与真实设备仍待本批核对；完整 HTTP 会话、HTTPS 解密及移动端正式安装包均未据此完成。
+
+## 本批移动构建复验
+
+设备名称来源提交 `d7805842a2ca667229d9e27b408bde93b2918575` 的[桌面 Check](https://github.com/godstealer/http-capture/actions/runs/43668302959) 已通过；[Android 首轮](https://github.com/godstealer/http-capture/actions/runs/43668303018) 在 BoringSSL ARM64 链接时发现架构不兼容，[iOS 首轮](https://github.com/godstealer/http-capture/actions/runs/43668302978) 缺少 C++ 运行时符号。这两项未记为通过，修复后需核对新来源的全部验证。
+
+Android 构建按每个 target 生成完整 NDK CMake wrapper，明确 ABI、API26 和 `c++_shared`，独立设置目标 C/C++ 编译器；两个 ABI 均打包对应 `libc++_shared.so`，检查 ELF Machine、DT_NEEDED 与 APK 内条目。Windows 的 Ninja generator 只使用原生 `ninja.exe`，不接受 `depot_tools/ninja.bat`，并覆盖旧的 make-program 缓存；开发环境需提供 CMake 和原生 Ninja。配置依据见 [Android NDK CMake](https://developer.android.com/ndk/guides/cmake)。iOS 应用和 Packet Tunnel 两个 target 均显式链接系统 `libc++`。没有降级 BoringSSL 或关闭 TLS 验证。
+
+本机最小完整 BoringSSL SSL 共享库已在 NDK r30 下实际交叉链接为 Android ARM64 和 x86_64，`llvm-readelf` 核实两种架构及 `libc++_shared.so` 动态依赖；这不等于完整 APK、Linux NDK r27 CI 或设备运行通过。脚本语法、Shell 配置 mock 22 项与 PowerShell 配置 mock 47 项检查通过；完整移动构建与模拟器仍等待修复批次的 CI 结果。原 CI 的精确 CMake 错位来源尚缺配置证据，因此不能仅归因“没有设置 CXX”；失败时另输出实际 CMake 配置诊断。
+
+## 后续 HTTP 会话观察的顺序
+
+- 先区分“正文未记录”和真实空正文，并让详情、读取/下载、回放、cURL、MCP 与会话导出遵守同一语义；既有 `android-lan` 元数据记录也需保守处理，不能把占位 0 B 当完整正文。
+- 再接入有界、只读的首份请求/最终响应头观察，保留原始 TCP 字节、背压和半关闭；观察失败或超限只停止观察，不能中断转发。
+- 下一批增加正文 framing 计数跳过及持久连接逐请求关联，覆盖 1xx/HEAD/chunked/升级与不明确边界；不缓存任意正文，也不推进暂停的 P0 全链路。
+- 每条 HTTP 观察记录采用单一写入者，避免隧道结束时用旧 Flow 克隆覆盖新观察结果；HTTPS 解密与设备端到端继续单列。

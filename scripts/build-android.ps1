@@ -20,6 +20,10 @@ if (-not $ndk) {
     if (Test-Path -LiteralPath $localNdk) { $ndk = $localNdk }
 }
 if (-not $ndk -or -not (Test-Path -LiteralPath $ndk)) { throw 'Android NDK is required; set ANDROID_NDK_HOME or install it under the Android SDK.' }
+$ndk = (Resolve-Path -LiteralPath $ndk).Path
+$env:ANDROID_NDK_HOME = $ndk
+$ndkCmake = (Join-Path $ndk 'build/cmake/android.toolchain.cmake').Replace('\', '/')
+if (-not (Test-Path -LiteralPath $ndkCmake)) { throw "Android CMake toolchain is missing: $ndkCmake" }
 if (-not (Test-Path -LiteralPath (Join-Path $sdk 'platforms/android-36/android.jar'))) {
     throw "Android API 36 platform is required under $sdk. Install platforms;android-36 with sdkmanager."
 }
@@ -94,6 +98,30 @@ if (-not $env:OPENSSL_SRC_PERL -and (Test-Path -LiteralPath $unixPerl)) {
 Set-Location -LiteralPath $projectRoot
 $cargo = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin/cargo.exe' } else { (Get-Command cargo -ErrorAction Stop).Source }
 $strip = Join-Path $llvm 'llvm-strip.exe'
+$readelf = Join-Path $llvm 'llvm-readelf.exe'
+$cxx = Join-Path $llvm 'clang++.exe'
+if (-not (Test-Path -LiteralPath $readelf)) { throw "Android ELF inspector is missing: $readelf" }
+if (-not (Test-Path -LiteralPath $cxx)) { throw "Android C++ compiler is missing: $cxx" }
+if (-not $env:CMAKE_GENERATOR) { $env:CMAKE_GENERATOR = 'Ninja' }
+function Show-BtlsCmakeDiagnostics([string]$BuildDirectory) {
+    $entries = @(Get-ChildItem -LiteralPath $BuildDirectory -Directory -Filter 'btls-sys-*' -ErrorAction SilentlyContinue)
+    $entries += @(Get-ChildItem -LiteralPath (Join-Path $BuildDirectory 'btls-sys') -Directory -ErrorAction SilentlyContinue)
+    foreach ($entry in $entries) {
+        $cmakeBuild = Join-Path $entry.FullName 'out/build'
+        $cache = Join-Path $cmakeBuild 'CMakeCache.txt'
+        if (Test-Path -LiteralPath $cache) {
+            Write-Output "BoringSSL CMake diagnostic: $cache"
+            Select-String -LiteralPath $cache -Pattern '^(ANDROID_|CMAKE_(TOOLCHAIN_FILE|SYSTEM_|CXX_COMPILER|C_COMPILER|ASM_COMPILER|GENERATOR|SYSROOT|CXX_FLAGS))' | ForEach-Object { $_.Line }
+        }
+        foreach ($version in (Get-ChildItem -LiteralPath (Join-Path $cmakeBuild 'CMakeFiles') -Directory -ErrorAction SilentlyContinue)) {
+            $compiler = Join-Path $version.FullName 'CMakeCXXCompiler.cmake'
+            if (Test-Path -LiteralPath $compiler) {
+                Write-Output "BoringSSL CMake diagnostic: $compiler"
+                Select-String -LiteralPath $compiler -Pattern '^set\(CMAKE_CXX_(COMPILER|PLATFORM_ID|SIMULATE_ID|SIZEOF_DATA_PTR|LIBRARY_ARCHITECTURE)' | ForEach-Object { $_.Line }
+            }
+        }
+    }
+}
 $architectures = if ($Architecture -eq 'both') { @('arm64-v8a', 'x86_64') } else { @($Architecture) }
 foreach ($abi in $architectures) {
     $rustArch = if ($abi -eq 'arm64-v8a') { 'aarch64' } else { 'x86_64' }
@@ -101,22 +129,75 @@ foreach ($abi in $architectures) {
     $targetEnv = "${rustArch}_linux_android"
     $compilerTarget = "--target=$rustArch-linux-android26"
     $linker = Join-Path $llvm "$rustArch-linux-android26-clang.cmd"
+    $runtime = Join-Path $llvm "../sysroot/usr/lib/$target/libc++_shared.so"
+    if (-not (Test-Path -LiteralPath $runtime)) { throw "Android C++ runtime is missing: $runtime" }
+    $cmakeGenerator = $env:CMAKE_GENERATOR
+    foreach ($generatorVariable in @("CMAKE_GENERATOR_$target", "CMAKE_GENERATOR_$targetEnv", 'TARGET_CMAKE_GENERATOR')) {
+        $configuredGenerator = (Get-Item -LiteralPath "Env:$generatorVariable" -ErrorAction SilentlyContinue).Value
+        if ($configuredGenerator) { $cmakeGenerator = $configuredGenerator; break }
+    }
+    $makeProgram = ''
+    if ($cmakeGenerator -like 'Ninja*') {
+        $nativeNinja = Get-Command ninja.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $nativeNinja) {
+            throw 'A native ninja.exe is required for the Ninja CMake generator. Install native Ninja/CMake or put its directory on PATH; depot_tools ninja.bat is not supported.'
+        }
+        $env:PATH = "$(Split-Path -Parent $nativeNinja.Source);$env:PATH"
+        $makeProgram = 'set(CMAKE_MAKE_PROGRAM [=[' + $nativeNinja.Source.Replace('\', '/') + ']=] CACHE FILEPATH "" FORCE)'
+    }
+    $cmakeToolchain = Join-Path $projectRoot "target/android-toolchains/$target.cmake"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cmakeToolchain) | Out-Null
+@"
+set(ANDROID_ABI "$abi" CACHE STRING "" FORCE)
+set(ANDROID_PLATFORM "android-26" CACHE STRING "" FORCE)
+set(ANDROID_STL "c++_shared" CACHE STRING "" FORCE)
+$makeProgram
+include("$ndkCmake")
+"@ | Set-Content -LiteralPath $cmakeToolchain -Encoding utf8
+    Set-Item -Path "Env:CMAKE_TOOLCHAIN_FILE_$targetEnv" -Value $cmakeToolchain.Replace('\', '/')
     if (-not (Test-Path -LiteralPath $linker)) { throw "Android NDK linker is missing: $linker" }
     Set-Item -Path "Env:BINDGEN_EXTRA_CLANG_ARGS_$targetEnv" -Value $compilerTarget
     Set-Item -Path "Env:CARGO_TARGET_$($targetEnv.ToUpperInvariant())_LINKER" -Value $linker
     Set-Item -Path "Env:CC_$targetEnv" -Value (Join-Path $llvm 'clang.exe').Replace('\', '/')
     Set-Item -Path "Env:CFLAGS_$targetEnv" -Value $compilerTarget
+    Set-Item -Path "Env:CXX_$targetEnv" -Value $cxx.Replace('\', '/')
+    Set-Item -Path "Env:CXXFLAGS_$targetEnv" -Value $compilerTarget
     Set-Item -Path "Env:AR_$targetEnv" -Value (Join-Path $llvm 'llvm-ar.exe').Replace('\', '/')
     $args = @('build', '--locked', '-p', 'http-capture-android', '--target', $target)
     if ($Configuration -eq 'release') { $args += '--release' }
     & $cargo @args
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($LASTEXITCODE -ne 0) {
+        $cargoStatus = $LASTEXITCODE
+        Show-BtlsCmakeDiagnostics (Join-Path $projectRoot "target/$target/$Configuration/build")
+        exit $cargoStatus
+    }
     $library = Join-Path $projectRoot "target/$target/$Configuration/libhttp_capture_android.so"
     $destination = Join-Path $androidProject "app/src/main/jniLibs/$abi"
     New-Item -ItemType Directory -Force -Path $destination | Out-Null
-    Copy-Item -LiteralPath $library -Destination (Join-Path $destination 'libhttp_capture_android.so') -Force
-    & $strip --strip-debug (Join-Path $destination 'libhttp_capture_android.so')
+    $packagedLibrary = Join-Path $destination 'libhttp_capture_android.so'
+    $packagedRuntime = Join-Path $destination 'libc++_shared.so'
+    Copy-Item -LiteralPath $library -Destination $packagedLibrary -Force
+    Copy-Item -LiteralPath $runtime -Destination $packagedRuntime -Force
+    & $strip --strip-debug $packagedLibrary
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $expectedMachine = if ($rustArch -eq 'aarch64') { 'AArch64' } else { 'Advanced Micro Devices X86-64' }
+    foreach ($elf in @($packagedLibrary, $packagedRuntime)) {
+        $header = & $readelf --file-header $elf
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if (-not ($header -match "Machine:\s+$expectedMachine\s*$")) {
+            throw "Android library has the wrong ELF architecture: $elf (expected $expectedMachine)"
+        }
+    }
+    $dynamic = & $readelf --dynamic $packagedLibrary
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    foreach ($entry in $dynamic) {
+        if ($entry -match '\(NEEDED\).*Shared library: \[([^\]]+)\]') {
+            $needed = $Matches[1]
+            if ($needed -like 'libc++*' -and -not (Test-Path -LiteralPath (Join-Path $destination $needed))) {
+                throw "Required Android C++ runtime is not packaged: $needed ($abi)"
+            }
+        }
+    }
 }
 $task = if ($Configuration -eq 'release') { ':app:assembleRelease' } else { ':app:assembleDebug' }
 $env:GRADLE_USER_HOME = Join-Path $projectRoot '.local/gradle-user-home'
