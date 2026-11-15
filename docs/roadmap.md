@@ -6,11 +6,13 @@
 
 ## 当前未完成与待验证（2026-11-15）
 
-**本批 CI 复验中**：`23e0687` 的桌面 Check 与 iOS Mac 验证已通过，后者含模拟器启动及无签名 iPhone 编译；Android 的 BoringSSL 双 ABI 构建与运行库打包已通过，模拟器在代理 hint 重启后的来源断言仍失败。现补齐探针的 VPN/框架代理/进程选择器一致性等待，保留真实 TUN 来源断言，JDK 25 项及 API36 Probe Java 编译通过，待集中推送后复验。没有发布移动正式包；详见[构建复验与后续顺序](mobile-lan-capture.md#本批移动构建复验)。
+**本批 CI 已通过**：[Android API36 双架构构建与模拟器烟测](https://github.com/godstealer/http-capture/actions/runs/43674526716) 已在 `94c1e4d` 上通过（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），原严格 TUN 来源断言保留。[iOS Mac 验证](https://github.com/godstealer/http-capture/actions/runs/43671382438) 在相关源码 `23e0687` 上通过模拟器启动及无签名 iPhone 编译，此后 iOS/Rust 源码未变；不将其记为新的同源 iOS 或真机验收。先前 BoringSSL 链接失败与代理 hint 重启来源断言失败的记录保留，修复后的成功结果不替代设备端到端验收。
 
-**开发增量（2026-11-15，未发布）：局域网设备名称**：Android 在原有一次性配对后，通过独立的已认证 TLS 操作上报制造商/型号标签；PC 配对状态、TCP/UDP 记录来源、详情、提示与搜索接入独立 `deviceName`，不把设备名当作来源应用或硬件身份。标签限制 128 UTF-8 字节，赋值时重验会话，断开/新配对清空、过期隐藏；旧 PC 可在额外心跳确认会话有效后继续无标签转发，二维码与原始配对帧不变。本批 6 项网关回环/安全回归及 1 项来源 JSON 往返已在本机实际执行通过，JDK17 标签编码 79 项检查与生产客户端方法的模拟 socket 58 项检查通过，Android 应用/设备测试 Java 离线编译、完整前端回归、类型检查、生产构建及 core/desktop 含测试源码检查通过。跨平台 Check、Android 模拟器/iOS Mac 与设备端到端尚待核对；本增量未发正式版。原桌面更新器测试的系统拦截记录不因本次 core 测试通过而关闭。
+**0.1.82 已发布：PC 局域网设备名称**：Android 测试客户端通过已认证 TLS 会话上报制造商/型号；PC 配对状态、TCP/UDP 来源、详情、提示与搜索显示独立“设备名称（自报）”。名称不是应用或硬件身份；128 UTF-8 字节限制、会话重验、断开/新配对清空、过期隐藏和旧 PC 有效会话兼容均已接通。网关 6 项、来源 JSON 1 项本机回归、Java 编码 79 项、生产方法模拟 socket 58 项及就绪门控 25 项通过；完整前端回归/构建、同源 Check 和 Android 模拟器通过。移动正式包与设备扫码/VPN 端到端尚未完成。原本机更新器测试被系统拦截的问题仍单列保留。
 
-**本次桌面正式发布：0.1.78（2026-11-14）**：Linux 更新显示、标签关闭、cURL 导入、响应搜索和请求体字段样式已集中交付。来源 `57fee31a9bc09c5c663b153c201dbbd2d460661b` 的[同源 Check #78](https://github.com/godstealer/http-capture/actions/runs/43570305682) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43572088832) 全绿，各平台 10 项原生更新生命周期测试、两种 Mac 应用代码签名检查通过。22 个真实公开附件已独立下载核验，17 项 SHA256、五个更新包签名和兼容频道一致性通过，GitHub Latest 已推进至 0.1.78。最终完整前端回归、类型检查、生产构建及 37 项发布脚本回归通过。**本机原生更新器测试仍未执行**：复测在启动前被系统拒绝访问，随后测试 EXE 不存在；未关闭防护或加入白名单，CI 成功不证明本机拦截是误报，原因仍待确认。
+**本次桌面正式发布：0.1.82（2026-11-15）**：来源 `94c1e4df961fecc68e50effeed509ebdda7e7e99` 的[同源 Check #82](https://github.com/godstealer/http-capture/actions/runs/43675127242) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43675722681) 全部通过；每个平台 10 项原生更新生命周期测试、两种 Mac 应用代码签名检查通过。22 个公开附件已独立下载核验，17 项 SHA256、五个更新包签名及兼容更新频道一致性均通过，GitHub Latest 已推进至 0.1.82。本次仅交付桌面安装包，范围见[更新说明](release-2026-11-15-lan-devices.md)。
+
+**上一桌面正式发布：0.1.78（2026-11-14）**：Linux 更新显示、标签关闭、cURL 导入、响应搜索及请求体交互和样式已交付；同源 Check、四平台发布、原生更新测试和 22 个公开附件核验通过，目标桌面操作仍待用户验收。
 
 **0.1.78 已发布：请求体字段样式**：按用户补充的视觉问题，将字段区改为单层键值表格，使用统一列标题和紧凑输入行；“添加字段”为表格底部的整行轻按钮，删除为图标，修改状态和应用按钮放在独立页脚。沿用主题变量，按面板容器宽度切换窄布局。现有表单交互、翻译覆盖、类型检查和生产构建通过；实际桌面视觉验收待用户查看。
 
@@ -24,15 +26,15 @@
 
 0.1.75 已交付手动请求默认跟随重定向、桌面 wreq/BoringSSL 引擎及[自定义发送引擎协议](custom-send-engine.md)，见[2026-11-12 更新说明](release-2026-11-12-redirects.md)。源码 `26122d1` 的同源 Check、四平台构建、更新器生命周期测试和 22 个公开附件已核对；真实网站发送、自定义联网实现及 M1 实机安装仍需验收。本机先前被杀软删除的 Rust 测试程序在防护开启下重新构建并通过四项测试，原告警性质仍未确定。
 
-最新公开桌面正式版为 **[0.1.78 / build-57fee31a9bc0](https://github.com/godstealer/http-capture/releases/tag/build-57fee31a9bc0)**，来源 `57fee31a9bc09c5c663b153c201dbbd2d460661b`。[同源 Check #78](https://github.com/godstealer/http-capture/actions/runs/43570305682) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43572088832) 成功；22 个公开附件已独立下载核验，17 项 SHA256、五个更新包签名以及兼容更新频道一致性均通过。0.1.77、0.1.75、0.1.73 和 0.1.71 的记录保留为历史验收说明。
+最新公开桌面正式版为 **[0.1.82 / build-94c1e4df961f](https://github.com/godstealer/http-capture/releases/tag/build-94c1e4df961f)**。来源 `94c1e4df961fecc68e50effeed509ebdda7e7e99` 的[同源 Check #82](https://github.com/godstealer/http-capture/actions/runs/43675127242) 与[四平台 Release](https://github.com/godstealer/http-capture/actions/runs/43675722681) 全部通过；每个平台 10 项原生更新生命周期测试、两种 Mac 应用代码签名检查通过。22 个公开附件已独立下载核验，17 项 SHA256、五个更新包签名及兼容更新频道一致性均通过，GitHub Latest 已推进至 0.1.82。0.1.78、0.1.77、0.1.75、0.1.73 和 0.1.71 的记录保留为历史说明。
 
 此前桌面正式版为 **[0.1.71 / build-279937df7b62](https://github.com/godstealer/http-capture/releases/tag/build-279937df7b62)**，来源 `279937df7b626664ac27972e83632c02a22982ea`。[同源 Check](https://github.com/godstealer/http-capture/actions/runs/41639760951) 的前端、Windows、Ubuntu、macOS 全部成功；[Release](https://github.com/godstealer/http-capture/actions/runs/41640780152) 的四平台构建、两种 Mac 应用代码签名校验、更新器测试与发布全部成功。公开 22 个附件，正式版与兼容更新频道的 `latest.json` SHA256 一致，均指向 0.1.71。本版加入 XML 正文格式化和 macOS 临时应用签名；M1 用户此前报告的“已损坏”仍需新包在真实设备上复测。临时签名不等于 Apple Developer ID 签名与公证。Android 局域网协同抓包仍待设备端到端验收，移动端无正式安装包。
 
 | 分类 | 尚未完成的工作 | 当前处理方式 |
 | --- | --- | --- |
-| 当前开发 | [PC 二维码与 Android VPN 局域网协同抓包](mobile-lan-capture.md)：PC 独立认证接收端、二维码、Android 扫码、TCP/UDP 转发、设备来源和断线清理 | 本地已接通安全配对与 TCP/UDP 远程隧道，并可记录连接/首个 HTTP 请求元数据；设备名称已接通为未发布增量；完整 HTTP 会话、模拟器/真机端到端验证仍待完成。HTTPS 正文解密单列可选能力 |
+| 当前开发 | [PC 二维码与 Android VPN 局域网协同抓包](mobile-lan-capture.md)：认证接收端、扫码、TCP/UDP 转发与来源 | PC 自报设备名称已随 0.1.82 发布；Android 测试客户端及安全隧道已有代码与回归，完整 HTTP 会话、扫码/VPN 远程端到端和真机仍待完成。HTTPS 正文解密单列可选能力 |
 | 移动版待开发 | Android/iOS 完整高级请求编辑器与尚未覆盖的桌面高级规则能力 | 现有基础抓包、历史、请求库、部分规则和配置迁移不能等同桌面功能全部移植；按需求逐项补齐 |
-| 移动版待验收 | Android 真机 VPN、证书、DNS、UDP、切网、停止重启；iOS 签名 iPhone 的 VPN/流量测试 | [Android API 36 双架构构建及模拟器回归](https://github.com/godstealer/http-capture/actions/runs/40260325332) 和 [iOS Mac 模拟器/无签名 iPhone 构建](https://github.com/godstealer/http-capture/actions/runs/40261185176) 已通过；移动端仍不交付正式安装包，直到目标设备验证通过；iOS App Store 上架暂缓 |
+| 移动版待验收 | Android 真机 VPN、证书、DNS、UDP、切网与启停；iOS 签名 iPhone 的 VPN/流量 | [本批 Android API36 构建/模拟器](https://github.com/godstealer/http-capture/actions/runs/43674526716) 及 [iOS 相关源码 Mac 构建](https://github.com/godstealer/http-capture/actions/runs/43671382438) 已通过；扫码/VPN 远程端到端及真机仍待验，当前不交付正式移动安装包，iOS App Store 暂缓 |
 | 暂缓开发 | P0 全链路正文文件引用、脚本/断点和 IPC 按需读取、取消清理及大文件并发峰值；现有 Flow/部分 IPC/前端仍保留完整 Base64 | 按用户 2026-10-23 决定，先放下；实际使用中出现具体问题时再处理，不宣称 P0 完成 |
 | 继续开发 | macOS 系统代理接管、macOS/Linux CA 自动管理、崩溃即时恢复和非 GNOME 桌面适配 | R4 跨平台集成；目标系统操作必须单独验收 |
 | 继续开发 | H3/浏览器引擎 SSE、WebSocket 脚本/断点及主动压缩、H2/H3 扩展 CONNECT、QPACK/Alt-Svc/trailers | R6 协议能力；固定目标 QUIC 反向代理不等于通用 TUN H3 抓包 |
@@ -42,7 +44,7 @@
 
 待验证的项目与未开发项分开记录：
 
-- **发布后复核**：0.1.78 的同源 Check、四平台构建、各平台 10 项更新器生命周期测试及两种 Mac 应用代码签名检查已通过；22 个公开附件已本机下载，17 项 SHA256、五个更新签名、频道一致性和 GitHub Latest 已独立核对。桌面 WebView 的 Ctrl+F/字段视觉与键盘操作、Linux 便携版实际更新查询、标签关闭操作、M1 安装与启动、跨版本更新、真实网站的 wreq 发送、自定义联网程序和外部集合实际导出文件仍待验收。本机原生测试启动受阻单列保留，不能据 CI 成功关闭该问题。
+- **发布后复核**：0.1.82 同源 Check、四平台构建、各平台 10 项原生更新测试、两 Mac 签名及 22 个公开附件/更新频道已核验。设备名称在真实手机/PC 的显示、旧客户端配对、桌面 WebView Ctrl+F/字段视觉与键盘操作、Linux 便携更新查询、标签关闭、M1 安装、跨版本更新、真实网站 wreq、自定义联网程序及外部集合文件仍待验收。本机原生测试拦截原因继续单列。
 - **安装版与系统行为**：四平台真实安装/升级/卸载、数据保留、原生文件选择/剪贴板、标题栏和系统菜单退出、系统代理恢复、CA 安装/卸载，以及 Windows 代码签名与 macOS 签名公证配置。
 - **本轮新增功能**：真实证书文件的 P12/PFX/加密 PEM 与 httpcloak mTLS；两台设备上的加密导出、合并预览/导入及重启；浏览器无文件选择 API 时的会话/正文下载；压缩 SSE、历史 gRPC 和固定目标 QUIC 反向代理的目标环境测试。
 - **已有功能的业务验收**：真实 AI 客户端 MCP、插件编辑与列表、集合/环境恢复、H2 请求头顺序的 Reqable MITM 对照、实际网站重放、Linux/macOS 流量来源及 TUN/UDP/QUIC 进程识别。用户尚未安排时继续保留为待验，不据自动测试勾选。
