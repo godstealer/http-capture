@@ -6,11 +6,13 @@
 
 ## 当前未完成与待验证（2026-11-16）
 
+**本批开发验证完成（2026-11-16，尚未发版）**：来源 `e8930ee9f7537e5109d825e7d9e2720ad139dd07` 的[Check #83](https://github.com/godstealer/http-capture/actions/runs/43793782841)、[Android 构建与模拟器](https://github.com/godstealer/http-capture/actions/runs/43793782823)及[iOS Mac 工作流](https://github.com/godstealer/http-capture/actions/runs/43793782877)均已成功，公开运行状态与提交身份已核对。请求体平铺表格与正文可用性契约已集中推送开发分支，未推进 main、Release 或更新频道。正式版仍为 0.1.82；PC/手机扫码、VPN 远程端到端、iPhone 签名设备及真实安装仍待验收。
+
 **开发增量（2026-11-16，未发布）：局域网正文可用性契约**：Flow 增加按 request/response/originalRequest/originalResponse 分开的 `bodyCapture` 状态；缺少字段的旧 `android-lan` 记录保守视为 `notRecorded`，不会把兼容空字符串或旧缓存 0 B 引用当作完整正文。查看连接/头部与 JSON 元数据快照继续可用；未记录正文的读取、下载、复制重发、cURL/HAR 和 MCP 组合请求均受保护。显式 `recorded` 的真实空体仍可用，与接收完成状态分开。含未记录实体的会话 JSON 使用 version 2，使 0.1.82 等旧读取器明确拒绝；完整记录仍输出兼容 version 1，新读取器支持两种版本。共享核心、前端与移动端消费入口已接通，局域网完整 HTTP 会话观察、扫码/VPN 远程端到端和真机验收仍未完成。本批本地检查与后续集中 CI 结果见[正文可用性契约](mobile-lan-capture.md#正文可用性契约2026-11-16-开发增量)。
 
 **开发增量（2026-11-15，未发布）：请求体平铺表格**：URL 编码与 Form-data 使用顶部行内类型栏、无圆角嵌套卡片的等宽键值单元格；默认尾部空行，编辑后自动追加，空占位行不进入正文。字段可临时停用并恢复；类型切换/删除收进右侧菜单，修改后显式应用到请求体。补齐首字段、添加/删除以及菜单选择后的焦点和方向键/回车/Escape 操作。完整前端回归、TypeScript 与生产构建通过；真实 Chrome 验证连续输入、停用缺失文件、菜单键盘与焦点、浅深色/窄面板布局。本地验证通过，本批集中推送后的同源 CI 结果另记；尚未纳入安装包，0.1.82 的发布附件未改变。
 
-**本批 CI 已通过**：[Android API36 双架构构建与模拟器烟测](https://github.com/godstealer/http-capture/actions/runs/43674526716) 已在 `94c1e4d` 上通过（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），原严格 TUN 来源断言保留。[iOS Mac 验证](https://github.com/godstealer/http-capture/actions/runs/43671382438) 在相关源码 `23e0687` 上通过模拟器启动及无签名 iPhone 编译，此后 iOS/Rust 源码未变；不将其记为新的同源 iOS 或真机验收。先前 BoringSSL 链接失败与代理 hint 重启来源断言失败的记录保留，修复后的成功结果不替代设备端到端验收。
+**上一批移动 CI（0.1.82 来源）已通过**：[Android API36 双架构构建与模拟器烟测](https://github.com/godstealer/http-capture/actions/runs/43674526716) 已在 `94c1e4d` 上通过（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），原严格 TUN 来源断言保留。[iOS Mac 验证](https://github.com/godstealer/http-capture/actions/runs/43671382438) 在相关源码 `23e0687` 上通过模拟器启动及无签名 iPhone 编译，此后 iOS/Rust 源码未变；不将其记为新的同源 iOS 或真机验收。先前 BoringSSL 链接失败与代理 hint 重启来源断言失败的记录保留，修复后的成功结果不替代设备端到端验收。
 
 **0.1.82 已发布：PC 局域网设备名称**：Android 测试客户端通过已认证 TLS 会话上报制造商/型号；PC 配对状态、TCP/UDP 来源、详情、提示与搜索显示独立“设备名称（自报）”。名称不是应用或硬件身份；128 UTF-8 字节限制、会话重验、断开/新配对清空、过期隐藏和旧 PC 有效会话兼容均已接通。网关 6 项、来源 JSON 1 项本机回归、Java 编码 79 项、生产方法模拟 socket 58 项及就绪门控 25 项通过；完整前端回归/构建、同源 Check 和 Android 模拟器通过。移动正式包与设备扫码/VPN 端到端尚未完成。原本机更新器测试被系统拦截的问题仍单列保留。
 

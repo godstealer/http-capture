@@ -26,7 +26,7 @@
 
 会话 JSON 保留完整元数据与显式状态，未记录实体的兼容 `bodyBase64` 为空占位而不是长度证明。只要实际存在的实体中含 `notRecorded`，文件封装采用 `http-capture-session` version 2，让旧版读取器明确拒绝；全部实体已记录时继续使用 version 1。新导入器同时接受 1/2，并对旧 LAN 快照归一化。共享核心在同一只读事务内先扫描最小元数据选择版本，再逐条写出，版本与内容不会跨快照；不读取全部历史正文做预扫，也不推进暂停的 P0 大正文链路。
 
-本批仅为开发增量，尚未发布新桌面或移动安装包。模型/Store 契约 12 项、受影响 Store 54 项（包含前述 Store 用例）、认证网关 6 项、MCP 43 项均在本机实际运行通过；Android 纯 Java 回归与 API36 离线编译通过。完整前端回归、类型检查、生产构建、4 项真实 HTTP 控制 API 回归及桌面含测试源码检查均已通过。集中跨平台 CI 与 iOS Swift Mac 编译结果待本批核对，不能据 Java 或 Rust 通过宣称完成设备验收。
+本批仅为开发增量，尚未发布新桌面或移动安装包。模型/Store 契约 12 项、受影响 Store 54 项（包含前述 Store 用例）、认证网关 6 项、MCP 43 项均在本机实际运行通过；Android 纯 Java 回归与 API36 离线编译通过。完整前端回归、类型检查、生产构建、4 项真实 HTTP 控制 API 回归及桌面含测试源码检查均已通过。来源 `e8930ee9f7537e5109d825e7d9e2720ad139dd07` 的[Check #83](https://github.com/godstealer/http-capture/actions/runs/43793782841)、[Android 构建与模拟器](https://github.com/godstealer/http-capture/actions/runs/43793782823)及[iOS Mac 工作流](https://github.com/godstealer/http-capture/actions/runs/43793782877)均已成功，公开运行状态与提交身份已核对。iOS 的同源 Mac 工作流已通过；这不替代签名 iPhone、Android 真机或扫码/VPN 远程端到端验收。
 
 ## 设备名称（PC 0.1.82，Android 测试客户端）
 
@@ -52,7 +52,7 @@ Android 构建按每个 target 生成完整 NDK CMake wrapper，明确 ABI、API
 
 ## 后续 HTTP 会话观察的顺序
 
-- 正文可用性契约已接通为本地开发增量；先完成集中跨平台 CI，再进入首份 HTTP 头部观察。旧 `android-lan` 元数据不再被当作完整空正文，设备端到端与真实空体仍需分别验证。
+- 正文可用性契约及同源 Check、Android/iOS 工作流已通过，接下来实现有界首份 HTTP 请求/最终响应头观察。旧 `android-lan` 元数据不再被当作完整空正文，设备端到端与真实空体仍需分别验证。
 - 再接入有界、只读的首份请求/最终响应头观察，保留原始 TCP 字节、背压和半关闭；观察失败或超限只停止观察，不能中断转发。
 - 下一批增加正文 framing 计数跳过及持久连接逐请求关联，覆盖 1xx/HEAD/chunked/升级与不明确边界；不缓存任意正文，也不推进暂停的 P0 全链路。
 - 每条 HTTP 观察记录采用单一写入者，避免隧道结束时用旧 Flow 克隆覆盖新观察结果；HTTPS 解密与设备端到端继续单列。
