@@ -1,4 +1,5 @@
 import type { Flow, Header } from './types';
+import {assertRecordedBodies} from './bodyCapture';
 
 const header = (headers: Header[], name: string) => headers.filter(h => h.name.toLowerCase() === name).map(h => h.value).join(', ');
 const byteLength = (value: string) => value.length * 3 / 4 - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
@@ -11,6 +12,7 @@ function base64(value: Uint8Array) {
 export async function createHar(flows: Flow[], decode: (body: string, encoding: string) => Promise<Uint8Array>, raw = false) {
   const entries = [];
   for (const flow of flows) {
+    assertRecordedBodies(flow,['request','response']);
     const request = flow.request, response = flow.response;
     const requestBytes = bytes(request.bodyBase64);
     let postData;

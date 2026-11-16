@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 const {buildSync}=require('esbuild');
 const bundled=buildSync({entryPoints:['apps/frontend/src/flowRecords.ts'],bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text;
 const moduleUnderTest={exports:{}};new Function('module','exports','require',bundled)(moduleUnderTest,moduleUnderTest.exports,require);
-const {isFlowMetadata,flowBodyLength,loadCompleteFlow,loadFlowRecord,loadHistorySnapshot,createHistoryRefresh,isMissingFlowEndpoint}=moduleUnderTest.exports;
+const {isFlowMetadata,flowBodyLength,loadCompleteFlow,loadFlowSnapshot,loadFlowRecord,loadHistorySnapshot,createHistoryRefresh,isMissingFlowEndpoint}=moduleUnderTest.exports;
 const encoded=text=>Buffer.from(text).toString('base64');
 const makeFull=(id='one')=>({id,parentId:null,source:'replay',startedAt:1,durationMs:2,state:'complete',request:{method:'POST',url:'https://example.test/',headers:[],bodyBase64:encoded('request'),tls:{preset:'native'}},response:{status:200,version:'HTTP/2',headers:[],bodyBase64:encoded('response')},originalRequest:{method:'POST',url:'https://example.test/',headers:[],bodyBase64:'',tls:{preset:'native'}},originalResponse:{status:201,version:'HTTP/2',headers:[],bodyBase64:encoded('original')},notes:[],error:null});
 function metadata(full=makeFull(),revision='store:1'){
@@ -98,5 +98,45 @@ const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve
   const oldestCalls=[];const oldest=createHistoryRefresh(()=>0,async command=>{oldestCalls.push(command);if(command==='list_flows')return [full];throw Error('HTTP 404: unavailable')});
   await oldest(rows=>assert.deepEqual(rows,[full]));await oldest(()=>{});assert.deepEqual(oldestCalls,['flow_metadata_changes','flow_changes','flow_revision','list_flows','flow_revision','list_flows']);
   const snapshotCalls=[];assert.deepEqual(await loadHistorySnapshot(async command=>{snapshotCalls.push(command);if(command==='list_flows')return [full];throw Error('HTTP 404: absent')}),[full]);assert.deepEqual(snapshotCalls,['flow_metadata_changes','list_flows']);
+
+  // Metadata-only observations are distinct from real empty captured entities.
+  const legacyLan={...makeFull('legacy-lan'),source:'capture',trafficOrigin:{entry:'android-lan',processStatus:'remote'}};
+  const legacyBefore=structuredClone(legacyLan);
+  assert.equal(flowBodyLength(legacyLan,'request'),undefined);
+  await assert.rejects(()=>loadCompleteFlow(legacyLan,()=>assert.fail('unrecorded actions must not fetch')),/not recorded/);
+  const legacySnapshot=await loadFlowSnapshot(legacyLan,()=>assert.fail('legacy snapshots need no fetch'));
+  for(const variant of ['request','response','originalRequest','originalResponse']){
+    assert.equal(legacySnapshot[variant].bodyBase64,'','legacy placeholder/prefix bytes never enter JSON as captured payloads');
+    assert.equal(legacySnapshot.bodyCapture[variant],'notRecorded');
+  }
+  assert.deepEqual(legacyLan,legacyBefore,'normalizing a snapshot never edits the live record');
+
+  const oldServiceMeta=metadata({...legacyLan,request:{...legacyLan.request,bodyBase64:''},response:{...legacyLan.response,bodyBase64:''},originalRequest:null,originalResponse:null});
+  const oldServiceBefore=structuredClone(oldServiceMeta);
+  const oldRows=await loadHistorySnapshot(async()=>snapshot('old-service',[row(oldServiceMeta)]));
+  assert.equal(oldRows[0].bodyCapture.request,'notRecorded');assert.deepEqual(oldRows[0].bodyReferences,{});assert.deepEqual(oldServiceMeta,oldServiceBefore);
+  assert.equal(flowBodyLength(oldRows[0],'request'),undefined);await assert.rejects(()=>loadCompleteFlow(oldServiceMeta,()=>assert.fail('old zero references never authorize a body read')),/not recorded/);
+  const oldSnapshot=await loadFlowSnapshot(oldServiceMeta,async()=>({...legacyLan,originalRequest:null,originalResponse:null}));assert.equal(oldSnapshot.request.bodyBase64,'');assert.equal(oldSnapshot.bodyCapture.request,'notRecorded');
+  let oldRefreshRows;await createHistoryRefresh(()=>0,async()=>snapshot('old-service',[row(oldServiceMeta)]))(rows=>{oldRefreshRows=rows});assert.deepEqual(oldRefreshRows[0].bodyReferences,{});
+  const explicitEmpty={...legacyLan,originalRequest:null,originalResponse:null,bodyCapture:{request:'recorded',response:'recorded'},request:{...legacyLan.request,bodyBase64:''},response:{...legacyLan.response,bodyBase64:''}};
+  assert.equal(flowBodyLength(explicitEmpty,'request'),0);
+  assert.equal(await loadCompleteFlow(explicitEmpty),explicitEmpty,'explicitly recorded empty LAN bodies remain complete');
+  const partial={...explicitEmpty,bodyCapture:{request:'recorded',response:'notRecorded'},response:{...explicitEmpty.response,bodyBase64:encoded('not actual response bytes')}};
+  const partialMeta=metadata(partial);delete partialMeta.bodyReferences.response;
+  const snapshotCalls2=[];
+  const partialSnapshot=await loadFlowSnapshot(partialMeta,async(command,args)=>{snapshotCalls2.push([command,args]);return partial});
+  assert.equal(partialSnapshot.request.bodyBase64,'');assert.equal(partialSnapshot.response.bodyBase64,'');assert.equal(partialSnapshot.bodyCapture.response,'notRecorded');
+  assert.deepEqual(snapshotCalls2,[['get_flow',{id:partial.id,expectedVersion:'store:1'}]]);
+  await assert.rejects(()=>loadCompleteFlow(partialMeta,()=>assert.fail('reject before hydration')),/not recorded/);
+  assert.equal((await loadCompleteFlow(partialMeta,async()=>partial,['request'])).bodyCapture.response,'notRecorded','request-only actions do not require an unavailable response body');
+  await assert.rejects(()=>loadCompleteFlow(partialMeta,()=>assert.fail('response copy cannot fetch'),['response']),/not recorded/);
+  const badReference=structuredClone(partialMeta);badReference.bodyReferences.response={byteLength:0};
+  await assert.rejects(()=>loadFlowSnapshot(badReference,()=>assert.fail('unrecorded slots must never have byte references')),/reference/);
+  const silentlyUpgraded={...partial,bodyCapture:{request:'recorded',response:'recorded'}};
+  await assert.rejects(()=>loadFlowSnapshot(partialMeta,async()=>silentlyUpgraded),/capture state/);
+  for(const states of [null,[],7,{request:null},{request:'partial'},{other:'recorded'}]){
+    const malformed={...explicitEmpty,bodyCapture:states};
+    await assert.rejects(()=>loadFlowSnapshot(malformed),/capture metadata/);
+  }
   console.log('Flow records: all 15,003 metadata rows, four absent body slots, exact pinned actions, prefix/missing/malformed rejection, delta/delete/reset/reopen, apply/epoch/concurrency races and endpoint-only legacy fallback passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

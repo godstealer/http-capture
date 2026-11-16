@@ -37,10 +37,11 @@ function mount(Component,value) {
   // Commit callback refs after building the tree, with keyed row identity as
   // React would provide. Reattaching refs on each render intentionally detects
   // a focus implementation that steals focus again after ordinary typing.
+  const assignRef=(ref,value)=>{if(typeof ref==='function')ref(value);else if(ref&&typeof ref==='object')ref.current=value;};
   h.commitRefs=()=>{
     const present=new Set();
-    function visit(value,parent='root',index=0,row=null) {
-      if(Array.isArray(value)){value.forEach((child,i)=>visit(child,parent,i,row));return;}
+    function visit(value,parent='root',index=0,row=null,details=null) {
+      if(Array.isArray(value)){value.forEach((child,i)=>visit(child,parent,i,row,details));return;}
       if(!value||typeof value!=='object')return;
       const path=parent+'/'+(value.key===undefined?`${index}:${typeof value.type==='string'?value.type:'component'}`:`key:${value.key}`);
       if(typeof value.type==='string') {
@@ -51,7 +52,9 @@ function mount(Component,value) {
             type:value.type,
             focus(options){h.focused=element;h.focusCalls.push({element,options});},
             select(){h.selectCalls.push(element);},
-            closest(selector){assert.equal(selector,'.request-body-row');return element.row;},
+            closest(selector){assert(['.request-body-row','details'].includes(selector));return selector==='details'?element.details:element.row;},
+            querySelector(selector){assert.equal(selector,'summary');return [...h.dom.values()].find(node=>node.type==='summary'&&node.details===element)??null;},
+            removeAttribute(name){element.removedAttributes??=[];element.removedAttributes.push(name);},
             scrollIntoView(options){h.scrollCalls.push({element,options});},
           };
           h.dom.set(path,element);
@@ -59,14 +62,16 @@ function mount(Component,value) {
         element.props=value.props;value.element=element;
         if(value.props.className?.split(' ').includes('request-body-row'))row=element;
         element.row=row;
-        if(element.ref&&element.ref!==value.props.ref)element.ref(null);
+        if(value.type==='details')details=element;
+        element.details=details;
+        if(element.ref&&element.ref!==value.props.ref)assignRef(element.ref,null);
         element.ref=value.props.ref;
-        if(typeof value.props.ref==='function')value.props.ref(element);
+        assignRef(value.props.ref,element);
       }
-      visit(value.props?.children,path,0,row);
+      visit(value.props?.children,path,0,row,details);
     }
     visit(h.tree);
-    for(const [path,element] of h.dom)if(!present.has(path)){element.ref?.(null);h.dom.delete(path);}
+    for(const [path,element] of h.dom)if(!present.has(path)){assignRef(element.ref,null);h.dom.delete(path);}
   };
   h.render=()=>{
     let iterations=0;
@@ -74,11 +79,15 @@ function mount(Component,value) {
     return h.tree;
   };
   h.all=predicate=>nodes(h.tree).filter(predicate);
-  h.button=label=>h.all(n=>n.type==='button'&&text(n)===label)[0];
+  h.button=label=>h.all(n=>n.type==='button'&&(text(n)===label||n.props['aria-label']===label))[0];
   h.input=(label,index=0)=>h.all(n=>(n.type==='input'||n.type==='select')&&n.props['aria-label']===label)[index];
   h.change=(label,value,index=0)=>{const node=h.input(label,index);assert(node,`${label} ${index} exists`);node.props.onChange({target:{value},currentTarget:{value}});h.render();};
   h.choose=value=>h.change('正文类型',value);
-  h.click=label=>{const node=h.button(label);assert(node,`${label} button exists`);assert(!node.props.disabled,`${label} is enabled`);node.props.onClick();h.render();};
+  h.click=label=>{const node=h.button(label);assert(node,`${label} button exists`);assert(!node.props.disabled,`${label} is enabled`);node.props.onClick({currentTarget:node.element});h.render();};
+  h.toggle=(label,checked,index=0)=>{const node=h.input(label,index);assert(node,`${label} ${index} exists`);assert(!node.props.disabled,`${label} ${index} is enabled`);node.props.onChange({target:{checked},currentTarget:{checked}});h.render();};
+  h.fieldRows=()=>h.all(n=>n.type==='div'&&n.props.className?.split(' ').includes('request-body-row'));
+  h.fieldAction=(index,label)=>{const row=h.fieldRows()[index];assert(row,`field row ${index} exists`);const node=nodes(row).find(n=>n.type==='button'&&(text(n)===label||n.props['aria-label']===label));assert(node,`${label} exists in row ${index}`);assert(!node.props.disabled,`${label} is enabled in row ${index}`);node.props.onClick({currentTarget:node.element});h.render();};
+  h.fieldUpload=(index,file)=>{const row=h.fieldRows()[index];const node=nodes(row).find(n=>n.type==='input'&&n.props.type==='file');assert(node,`file input exists in row ${index}`);node.props.onChange({target:{files:file?[file]:[]},currentTarget:{value:'selected'}});h.render();};
   h.raw=()=>h.all(n=>typeof n.type==='function'&&n.type.name==='BodyCodeEditor')[0];
   h.editRaw=value=>{assert(h.raw());h.raw().props.onChange(value);h.render();};
   h.tick=async()=>{await new Promise(resolve=>setImmediate(resolve));h.render();};
@@ -117,23 +126,28 @@ function mount(Component,value) {
   blank.click('添加表单字段');await blank.settle();
   assert.equal(blank.input('正文类型').props.value,'form');assert(blank.input('字段名'));assert(blank.input('字段值'));
   assert.equal(blank.button('应用到请求体').props.disabled,true);assert.equal(blank.changes.length,0);
-  blank.click('添加字段');assert.equal(blank.all(n=>n.type==='input'&&n.props['aria-label']==='字段名').length,2);
+  blank.click('添加字段');assert.equal(blank.all(n=>n.type==='input'&&n.props['aria-label']==='字段名').length,1,'Add focuses the existing trailing placeholder rather than duplicating it');
   assert.equal(blank.button('应用到请求体').props.disabled,true,'new untouched placeholders are not payload changes');
   blank.button('应用到请求体').props.onClick();await blank.settle();assert.equal(blank.changes.length,0,'a pristine form cannot create an equals-sign body');
-  blank.change('字段名','q');blank.change('字段值','a b');assert(text(blank.tree).includes('有修改尚未应用'));
+  const blankName=blank.input('字段名').element;
+  blank.change('字段名','q');assert.equal(blank.fieldRows().length,2,'editing the trailing placeholder appends one fresh row');
+  blank.change('字段值','a b');assert.equal(blank.fieldRows().length,2,'ordinary typing does not keep appending rows');
+  assert(blank.input('字段名').element===blankName,'converting a placeholder keeps the existing input identity');
+  assert.equal(blank.input('启用字段',1).props.disabled,true);assert.equal(blank.input('启用字段',1).props.checked,false);
+  assert(text(blank.tree).includes('有修改尚未应用'));
   assert.equal(blank.props.draft.bodyBase64,'','staged fields do not silently alter the sent body');
   blank.click('应用到请求体');await blank.settle();
   assert.equal(decoded(blank.props.draft.bodyBase64),'q=a+b');assert.equal(blank.props.draft.method,'GET');assert.equal(blank.button('应用到请求体').props.disabled,true);
-  assert(text(blank.tree).includes('与当前请求体一致'));blank.dispose();
+  assert(text(blank.tree).includes('与当前请求体一致'));assert.equal(blank.fieldRows().length,2,'Apply retains one trailing placeholder');blank.dispose();
 
   const addFocus=mount(Component,draft('first=one&last=two','application/x-www-form-urlencoded'));await addFocus.settle();
   const originalFirst=addFocus.input('字段名').element,originalLast=addFocus.input('字段名',1).element;
-  const beforeAdd=addFocus.props.draft.bodyBase64;
+  const beforeAdd=addFocus.props.draft.bodyBase64,originalTail=addFocus.input('字段名',2).element;
   assert.equal(addFocus.focusCalls.length,0);assert.equal(addFocus.scrollCalls.length,0);
   addFocus.click('添加字段');
   const fieldNames=()=>addFocus.all(n=>n.type==='input'&&n.props['aria-label']==='字段名');
-  assert.equal(fieldNames().length,3,'Add appends one visible editable row');
-  const added=addFocus.input('字段名',2).element;
+  assert.equal(fieldNames().length,3,'loaded fields already include one trailing editable row');
+  const added=addFocus.input('字段名',2).element;assert(added===originalTail,'Add reuses the existing trailing input');
   assert(addFocus.focused===added,'the appended name input receives focus');
   assert.equal(addFocus.focusCalls.length,1);assert.deepEqual(addFocus.focusCalls[0].options,{preventScroll:true});
   assert.equal(addFocus.scrollCalls.length,1);assert(addFocus.scrollCalls[0].element===added.row,'the new row, rather than the whole panel, scrolls into view');
@@ -141,11 +155,11 @@ function mount(Component,value) {
   assert(addFocus.input('字段名').element===originalFirst);assert(addFocus.input('字段名',1).element===originalLast);
   assert.equal(addFocus.input('字段名').props.value,'first');assert.equal(addFocus.input('字段值').props.value,'one');assert.equal(addFocus.input('字段名',1).props.value,'last');assert.equal(addFocus.input('字段值',1).props.value,'two');
   assert.equal(addFocus.props.draft.bodyBase64,beforeAdd);assert.equal(addFocus.changes.length,0,'adding and focusing never mutates the sent body');
-  addFocus.change('字段名','third',2);addFocus.render();await addFocus.settle();
+  addFocus.change('字段名','third',2);addFocus.render();await addFocus.settle();assert.equal(fieldNames().length,4,'typing in the old tail creates exactly one new tail');assert(addFocus.input('字段名',2).element===added);
   assert.equal(addFocus.focusCalls.length,1,'typing and ref reattachment must not repeatedly steal focus');assert.equal(addFocus.scrollCalls.length,1);
   const rapidAdd=addFocus.button('添加字段');rapidAdd.props.onClick();rapidAdd.props.onClick();addFocus.render();
-  assert.equal(fieldNames().length,5,'batched Add clicks preserve both appended rows');
-  const newest=addFocus.input('字段名',4).element;
+  assert.equal(fieldNames().length,4,'batched Add clicks reuse the same trailing row');
+  const newest=addFocus.input('字段名',3).element;
   assert(addFocus.focused===newest,'rapid Add clicks focus the last appended row');assert.equal(addFocus.focusCalls.length,2);assert.equal(addFocus.scrollCalls.length,2);assert(addFocus.scrollCalls[1].element===newest.row);
   assert.equal(addFocus.changes.length,0);assert.equal(addFocus.props.draft.bodyBase64,beforeAdd);
   addFocus.choose('raw');addFocus.choose('form');await addFocus.settle();assert.equal(addFocus.focusCalls.length,2,'returning to a staged form does not replay a stale Add focus request');
@@ -154,11 +168,12 @@ function mount(Component,value) {
   // Real captured empty pairs are distinct from optional editor placeholders.
   const captured=mount(Component,draft('=&a=one%20two','application/x-www-form-urlencoded'));
   await captured.settle();assert.equal(captured.input('字段名').props.value,'');assert.equal(captured.input('字段值').props.value,'');
+  assert.equal(captured.fieldRows().length,3);assert.equal(captured.input('启用字段').props.checked,true,'a captured empty pair is a real enabled field');assert.equal(Boolean(captured.input('启用字段').props.disabled),false);assert.equal(captured.input('启用字段',2).props.disabled,true,'only the untouched trailing placeholder is disabled');
   assert.equal(captured.changes.length,0);assert.equal(captured.button('应用到请求体').props.disabled,true);
   assert.equal(decoded(captured.props.draft.bodyBase64),'=&a=one%20two','viewing a form preserves original percent encoding');
   captured.change('字段值','changed',1);captured.click('添加字段');captured.click('应用到请求体');await captured.settle();
   assert.equal(decoded(captured.props.draft.bodyBase64),'=&a=changed','real empty pair survives while pristine placeholder is omitted');
-  const remove=captured.all(n=>n.type==='button'&&n.props['aria-label']==='移除字段')[0];remove.props.onClick();captured.render();
+  captured.fieldAction(0,'移除字段');
   captured.click('应用到请求体');await captured.settle();assert.equal(decoded(captured.props.draft.bodyBase64),'a=changed');captured.dispose();
 
   const staged=mount(Component,draft('a=original','application/x-www-form-urlencoded'));
@@ -188,6 +203,46 @@ function mount(Component,value) {
   assert.deepEqual([...multipartData],[['part','Multipart staged']]);
   isolated.choose('form');await isolated.settle();assert(!isolated.input('字段名'),'applying one encoding invalidates old drafts in the other encoding');assert(isolated.button('新建表单'));isolated.dispose();
 
+  // A disabled row is staged state, not a destructive edit of its stored value.
+  // Disabled empty file rows must be filtered before missing-file validation.
+  const fields=mount(Component,draft());fields.choose('multipart');await fields.settle();
+  fields.change('字段名','keep');fields.change('字段值','first');
+  fields.change('字段名','dup',1);fields.change('字段值','one',1);
+  fields.change('字段名','dup',2);fields.change('字段值','two',2);
+  assert.equal(fields.fieldRows().length,4);
+  fields.toggle('启用字段',false,1);
+  fields.fieldAction(3,'文件');fields.change('字段名','upload',3);
+  assert.equal(fields.fieldRows().length,5,'changing a trailing row to file creates one new placeholder');
+  assert.equal(fields.input('启用字段',3).props.checked,true,'choosing a kind activates the former placeholder');
+  const fileMenu=nodes(fields.fieldRows()[3]).find(n=>n.type==='details');
+  assert(fileMenu.element.removedAttributes.includes('open'),'choosing a field kind closes its own menu');
+  assert.equal(nodes(fields.fieldRows()[3]).find(n=>n.props?.role==='menuitemradio'&&text(n)==='文件').props['aria-checked'],true);
+  fields.toggle('启用字段',false,3);
+  assert.equal(fields.changes.length,0);assert.equal(fields.props.draft.bodyBase64,'','toggles/type changes never rewrite the payload before Apply');
+  fields.click('应用到请求体');await fields.settle();
+  assert.equal(fields.changes.length,1);assert(!fields.all(n=>n.props?.role==='alert').length,'an excluded empty file does not block Apply');
+  const formData=async h=>new Response(Buffer.from(h.props.draft.bodyBase64,'base64'),{headers:{'Content-Type':h.props.draft.headers.find(x=>!x.disabled&&x.name.toLowerCase()==='content-type').value}}).formData();
+  assert.deepEqual([...(await formData(fields))],[['keep','first'],['dup','two']]);
+  assert.equal(fields.input('字段名',1).props.value,'dup');assert.equal(fields.input('字段值',1).props.value,'one');assert.equal(fields.input('启用字段',1).props.checked,false,'Apply retains excluded rows for restoration');
+  assert(fields.input('上传文件'),'the excluded file row remains editable');
+  fields.toggle('启用字段',true,1);fields.click('应用到请求体');await fields.settle();
+  assert.deepEqual([...(await formData(fields))],[['keep','first'],['dup','one'],['dup','two']],'re-enabled duplicate fields return at their original position');
+  fields.toggle('启用字段',true,3);const beforeMissing=fields.props.draft.bodyBase64,beforeMissingChanges=fields.changes.length;
+  fields.click('应用到请求体');await fields.settle();assert.equal(fields.changes.length,beforeMissingChanges);assert.equal(fields.props.draft.bodyBase64,beforeMissing);assert(text(fields.tree).includes('请为文件字段选择文件'));
+  const binary=new Blob([Uint8Array.of(0,255,1)],{type:'application/octet-stream'});binary.name='probe.bin';
+  fields.fieldUpload(3,binary);fields.click('应用到请求体');await fields.settle();
+  const uploaded=await formData(fields);assert.equal(uploaded.get('upload').name,'probe.bin');assert.deepEqual(Buffer.from(await uploaded.get('upload').arrayBuffer()),Buffer.from([0,255,1]));
+  const beforeCancel=fields.props.draft.bodyBase64,beforeCancelChanges=fields.changes.length;
+  fields.fieldUpload(3,null);assert.equal(fields.props.draft.bodyBase64,beforeCancel);assert.equal(fields.changes.length,beforeCancelChanges);assert.equal(fields.button('应用到请求体').props.disabled,true,'cancelling file selection does not dirty or erase a selected file');assert(text(fields.tree).includes('probe.bin'));
+  fields.fieldAction(3,'文本');assert(!fields.input('上传文件'),'switching to text clears the old file editor');assert.equal(fields.button('应用到请求体').props.disabled,false);
+  fields.change('字段值','replacement',3);fields.click('应用到请求体');await fields.settle();assert.equal((await formData(fields)).get('upload'),'replacement');
+  fields.fieldAction(3,'文件');assert(!text(fields.tree).includes('probe.bin'),'switching back does not resurrect an old file');fields.toggle('启用字段',false,3);fields.click('应用到请求体');await fields.settle();assert.equal((await formData(fields)).get('upload'),null);fields.dispose();
+
+  const removedAll=mount(Component,draft('a=one','application/x-www-form-urlencoded'));await removedAll.settle();
+  removedAll.fieldAction(0,'移除字段');assert.equal(removedAll.fieldRows().length,1,'deleting the last field keeps one input row');assert.equal(removedAll.input('启用字段').props.disabled,true);
+  assert.equal(nodes(removedAll.fieldRows()[0]).find(n=>n.props?.['aria-label']==='移除字段').props.disabled,true,'the placeholder cannot be deleted');
+  removedAll.click('应用到请求体');await removedAll.settle();assert.equal(removedAll.props.draft.bodyBase64,'');assert.equal(removedAll.fieldRows().length,1);assert.equal(removedAll.input('正文类型').props.value,'form');removedAll.dispose();
+
   const initial=draft('payload','text/plain',{method:'PUT',url:'https://example.test/new',headers:[
     {name:'X-Keep',value:'first'},{name:'Content-Type',value:'text/plain'},
     {name:'Content-Length',value:'999'},{name:'Transfer-Encoding',value:'chunked'},{name:'Content-Encoding',value:'gzip'},
@@ -216,5 +271,5 @@ function mount(Component,value) {
   merge.finish();await latest.settle();assert.equal(latest.changes.length,1);assert.equal(latest.props.draft.bodyBase64,'AP8B');assert.equal(latest.props.draft.method,'PUT');assert.equal(latest.props.draft.url,'https://example.test/updated');assert(latest.props.draft.headers.some(h=>h.name==='X-Latest'));latest.dispose();
   const pending=slowFile(),unmounted=mount(Component,draft());startFile(unmounted,pending.file);unmounted.dispose();pending.finish();await new Promise(resolve=>setImmediate(resolve));assert.equal(unmounted.changes.length,0);assert.equal(unmounted.lateUpdates,0);
 
-  console.log('Request body UI: Add row/focus/nearest-scroll/batched-clicks, empty/MIME state, GET query hint, untouched placeholders, captured empty fields, explicit apply/dirty state, form draft preservation/reload, clear-body metadata, stale apply and file races passed.');
+  console.log('Request body UI: trailing row/focus/nearest-scroll/batched Add reuse, enable/disable restoration, multipart kind/file controls, empty/MIME state, GET query hint, untouched placeholders, captured empty fields, explicit apply/dirty state, form draft preservation/reload, clear-body metadata, stale apply and file races passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

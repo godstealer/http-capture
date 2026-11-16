@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
-import {flowBodyLength,isFlowMetadata,loadCompleteFlow} from './flowRecords';
+import {flowBodyLength,isFlowMetadata,loadFlowSnapshot} from './flowRecords';
+import {bodyCaptureState,bodyVariants} from './bodyCapture';
 import type {BodyVariant,Flow,FlowRecord} from './types';
 
 export const AUTO_RECORDED_FLOW_BYTES=64*1024;
@@ -26,7 +27,7 @@ export function smallRecordedFlow(record:FlowRecord):boolean {
  * require a separate explicit load action. No cache survives a hidden panel,
  * disconnection or changed ID/version, including a hide/reopen at the same ID. */
 export function useRecordedFlow(record:FlowRecord|null|undefined,visible=true,connected=true){
-  const identity:Identity=record?(isFlowMetadata(record)?JSON.stringify([record.id,record.bodyRevision]):record):null;
+  const identity:Identity=record?(isFlowMetadata(record)?JSON.stringify([record.id,record.bodyRevision,bodyVariants.map(variant=>bodyCaptureState(record,variant))]):record):null;
   const context=useRef<Context>({identity,visible,connected});
   if(context.current.identity!==identity||context.current.visible!==visible||context.current.connected!==connected){
     context.current={identity,visible,connected};
@@ -40,7 +41,7 @@ export function useRecordedFlow(record:FlowRecord|null|undefined,visible=true,co
     pending.current=expected;
     setLoaded({context:expected,flow:null,loading:true,error:''});
     try{
-      const full=await loadCompleteFlow(source);
+      const full=await loadFlowSnapshot(source);
       if(context.current===expected)setLoaded({context:expected,flow:full,loading:false,error:''});
     }catch(error){
       if(context.current===expected)setLoaded({context:expected,flow:null,loading:false,error:String(error)});

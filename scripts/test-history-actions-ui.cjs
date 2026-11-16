@@ -121,5 +121,19 @@ function metadata(value=full){const result=structuredClone(value);result.bodyRev
   assert(chunks.some(chunk=>chunk.bytes.length===65536),'large record uses bounded upload chunks');
   let largeOffset=0;for(const chunk of chunks){assert.equal(chunk.offset,largeOffset);largeOffset+=chunk.bytes.length}
   assert.deepEqual(JSON.parse(Buffer.concat(chunks.map(chunk=>Buffer.from(chunk.bytes))).toString()).flows,[largeFull]);
+
+  const recordedCallCount=calls.length,recordedCopyCount=copies.length;
+  const legacyLan={...structuredClone(full),trafficOrigin:{entry:'android-lan'},source:'capture'};
+  const deniedMenu=harness(Menu,{target:{flow:legacyLan,x:20,y:20,anchor:new Element()},onClose(){},onEdit(){assert.fail('metadata cannot become a draft')},onReplay(){assert.fail('metadata cannot replay')},onCopy:value=>copies.push(value),onError:value=>errors.push(value),replayDisabled:false});
+  for(const label of ['编辑Ctrl+Shift+Enter','直接 Replay立即发送','复制 cURLCtrl+Shift+C','复制请求 JSON'])assert(deniedMenu.button(label).props.disabled,label+' is unavailable without captured request bytes');
+  deniedMenu.button('复制 cURLCtrl+Shift+C').props.onClick();await deniedMenu.tick();
+  assert.equal(calls.length,recordedCallCount);assert.equal(copies.length,recordedCopyCount,'even programmatic activation cannot fabricate an empty cURL');assert.match(errors.at(-1),/not recorded/);
+  deniedMenu.button('复制 URLCtrl+C').props.onClick();deniedMenu.button('复制请求头').props.onClick();assert.equal(copies.length,recordedCopyCount+2,'URL/header metadata remains usable');deniedMenu.dispose();
+  const lanView=harness(Capture,{...props,flows:[legacyLan]});lanView.find(n=>n.type==='tr'&&n.props.onDoubleClick).props.onClick({shiftKey:false,ctrlKey:false,metaKey:false});lanView.render();
+  lanView.all(n=>n.type==='button'&&text(n)==='正文')[0].props.onClick();lanView.render();
+  const bodyView=lanView.find(n=>n.type?.name==='MessageView'&&n.props.variant==='originalRequest');const bodyOnly=harness(bodyView.type,bodyView.props);assert(text(bodyOnly.tree).includes('正文未记录'));assert(!text(bodyOnly.tree).includes('（空正文）'));bodyOnly.dispose();
+  assert(lanView.button('发送到重放').props.disabled);assert.equal(calls.length,recordedCallCount);lanView.dispose();
+  const notObservedOverview=harness(RequestOverview,{request:legacyLan.request,flow:legacyLan});
+  assert(notObservedOverview.all(n=>n.type?.name==='PropertyTable').flatMap(n=>n.props.rows).filter(([name])=>name==='请求'||name==='响应').every(([,value])=>value==='正文未记录'),'full legacy placeholders must not bypass size availability through bodyBase64');notObservedOverview.dispose();
   console.log('History actions UI: metadata-only display, original empty body, pinned copy/edit/rewrite, hidden-result guards, exact exports and save-picker cancellation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

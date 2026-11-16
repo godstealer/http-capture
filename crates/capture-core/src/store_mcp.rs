@@ -66,7 +66,9 @@ impl Store {
                 THEN json_extract(data,'$.trafficOrigin.application.uid') END,
             'originLabel',substr(json_extract(data,'$.trafficOrigin.application.label'),1,128),
             'clientProtocol',json_extract(data,'$.clientProtocol'),
-            'upstreamProtocol',json_extract(data,'$.response.version')) FROM flows
+            'upstreamProtocol',json_extract(data,'$.response.version'),
+            'bodyCapture',json_extract(data,'$.bodyCapture'),'_captureBodyType',json_type(data,'$.bodyCapture'),
+            'trafficOrigin',json_object('entry',json_extract(data,'$.trafficOrigin.entry'))) FROM flows
             WHERE (?1 IS NULL OR rowid<?1)
               AND (?2 IS NULL OR instr(lower(json_extract(data,'$.request.url')),lower(?2))>0)
               AND (?3 IS NULL OR upper(json_extract(data,'$.request.method'))=upper(?3))
@@ -80,7 +82,9 @@ impl Store {
         while let Some(row) = rows.next()? {
             if requests.len() == filter.limit { more = true; break; }
             last = Some(row.get::<_,i64>(0)?);
-            requests.push(serde_json::from_str(&row.get::<_,String>(1)?)?);
+            let mut metadata = serde_json::from_str(&row.get::<_,String>(1)?)?;
+            super::body_capture::annotate_mcp_metadata(&mut metadata);
+            requests.push(metadata);
         }
         Ok(McpRequestPage { requests, next_cursor: if more { last.map(|v|v.to_string()) } else { None } })
     }
@@ -92,6 +96,8 @@ impl Store {
             'id',id,'parentId',json_extract(data,'$.parentId'),'startedAt',started_at,
             'durationMs',json_extract(data,'$.durationMs'),'source',json_extract(data,'$.source'),
             'state',json_extract(data,'$.state'),'clientProtocol',json_extract(data,'$.clientProtocol'),
+            'bodyCapture',json_extract(data,'$.bodyCapture'),'_captureBodyType',json_type(data,'$.bodyCapture'),
+            'trafficOrigin',json_object('entry',json_extract(data,'$.trafficOrigin.entry')),
             'request',json_object('method',substr(json_extract(data,'$.request.method'),1,32),
                 'url',substr(json_extract(data,'$.request.url'),1,8192),'engine',json_extract(data,'$.request.engine'),
                 'headers',json((SELECT json_group_array(json_object('name',substr(json_extract(value,'$.name'),1,256),'value',substr(json_extract(value,'$.value'),1,512),'disabled',json_extract(value,'$.disabled'))) FROM (SELECT value FROM json_each(flows.data,'$.request.headers') LIMIT 81)))),
@@ -100,7 +106,11 @@ impl Store {
                 'headers',json((SELECT json_group_array(json_object('name',substr(json_extract(value,'$.name'),1,256),'value',substr(json_extract(value,'$.value'),1,512),'disabled',json_extract(value,'$.disabled'))) FROM (SELECT value FROM json_each(flows.data,'$.response.headers') LIMIT 81))),
                 'trailers',json((SELECT json_group_array(json_object('name',substr(json_extract(value,'$.name'),1,256),'value',substr(json_extract(value,'$.value'),1,512),'disabled',json_extract(value,'$.disabled'))) FROM (SELECT value FROM json_each(flows.data,'$.response.trailers') LIMIT 81))))
                 ELSE 'null' END)) FROM flows WHERE id=?1", [id], |row|row.get(0)).optional()?;
-        value.map(|raw|serde_json::from_str(&raw).map_err(Into::into)).transpose()
+        value.map(|raw|{
+            let mut metadata = serde_json::from_str(&raw)?;
+            super::body_capture::annotate_mcp_metadata(&mut metadata);
+            Ok(metadata)
+        }).transpose()
     }
     pub fn mcp_read_body(&self, id: &str, direction: &str, offset: u64, length: usize) -> Result<McpBodyChunk> {
         ensure!(!id.is_empty() && id.len() <= 128, "Invalid request ID");
@@ -109,6 +119,7 @@ impl Store {
         let path = match direction { "request"=>"$.request.bodyBase64", "response"=>"$.response.bodyBase64", _=>anyhow::bail!("direction must be request or response") };
         let mut conn = self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
         let tx = conn.transaction()?;
+        super::body_capture::ensure_recorded(&tx, id, direction)?;
         let (kind, encoded_len, ending, marker): (Option<String>,Option<usize>,Option<Vec<u8>>,Option<String>) = tx.query_row(
             "SELECT json_type(data,?2),length(CAST(json_extract(data,?2) AS BLOB)),substr(CAST(json_extract(data,?2) AS BLOB),-4),
              CASE WHEN substr(json_extract(data,?2),1,6)='@body:' THEN json_extract(data,?2) END FROM flows WHERE id=?1",

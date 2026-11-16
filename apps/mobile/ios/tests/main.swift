@@ -105,6 +105,56 @@ do {
            "请求头顺序或重复项在详情中丢失")
     expect(detail.contains("[停用] X-Ignored: off"), "停用请求头未标明")
     expect(detail.contains("请求：3 字节"), "详情没有显示正文大小")
+    // A cached zero-byte reference must never make an unrecorded LAN body editable.
+    var legacyLAN = flow
+    legacyLAN["trafficOrigin"] = ["entry": "android-lan"]
+    legacyLAN["bodyReferences"] = ["request": ["byteLength": 0]]
+    expect(!RecordedBodyCapture.hasBody(legacyLAN, variant: "request"),
+           "旧 LAN 占位 0 B 不应暴露为可读正文")
+    let missingDetail = FlowDetailFormatter.format(legacyLAN)
+    expect(missingDetail.contains("请求：正文未记录") && !missingDetail.contains("请求：0 字节"),
+           "未记录正文被详情伪装为空正文")
+    do {
+        _ = try RecordedRequestCopy(flow: legacyLAN)
+        preconditionFailure("旧 LAN 未记录正文不应复制成可重发请求")
+    } catch RecordedRequestCopy.CopyError.invalid(let reason) {
+        expect(reason.contains("正文未记录"), "未记录正文的复制错误不明确")
+    }
+    var recordedEmptyLAN = legacyLAN
+    recordedEmptyLAN["bodyCapture"] = ["request": "recorded"]
+    let emptyLANCopy = try RecordedRequestCopy(flow: recordedEmptyLAN)
+    let emptyLANDraft = try emptyLANCopy.draft()
+    expect(RecordedBodyCapture.hasBody(recordedEmptyLAN, variant: "request")
+           && emptyLANCopy.byteLength == 0 && emptyLANDraft.body.isEmpty,
+           "显式记录的 LAN 空正文必须允许复制")
+    let malformedCaptures: [Any] = [NSNull(), ["request": NSNull()], ["request": 0],
+                                    ["request": "unknown"], ["request": "notRecorded"], ["request": "Recorded"], ["bad"]]
+    for malformed in malformedCaptures {
+        var changed = flow
+        changed["bodyCapture"] = malformed
+        changed["bodyReferences"] = ["request": ["byteLength": 0]]
+        expect(!RecordedBodyCapture.isRecorded(changed, variant: "request"),
+               "显式无效或未记录状态必须保守拒绝")
+        do {
+            _ = try RecordedRequestCopy(flow: changed)
+            preconditionFailure("正文缺失标记被缓存 0 B 引用绕过")
+        } catch RecordedRequestCopy.CopyError.invalid(let reason) {
+            expect(reason.contains("正文未记录"), "明确缺失状态不应显示普通空正文")
+        }
+    }
+    var oldEmpty = flow
+    oldEmpty["bodyReferences"] = ["request": ["byteLength": 0]]
+    let emptyCopy = try RecordedRequestCopy(flow: oldEmpty)
+    let emptyDraft = try emptyCopy.draft()
+    expect(emptyCopy.byteLength == 0 && emptyDraft.body.isEmpty,
+           "正常旧记录的空正文不应被禁用")
+    for variant in ["request", "response", "originalRequest", "originalResponse"] {
+        var marked = flow
+        marked["bodyCapture"] = [variant: "notRecorded"]
+        expect(!RecordedBodyCapture.isRecorded(marked, variant: variant),
+               "每个正文变体都必须尊重缺失标记")
+    }
+    expect(!RecordedBodyCapture.isRecorded(flow, variant: "invalid"), "未知正文变体不应被允许")
     var copy = try RecordedRequestCopy(flow: flow)
     expect(copy.headers == "X-Test: one\nX-Test: two\n# X-Ignored: off",
            "请求头顺序、重复项或停用状态丢失")

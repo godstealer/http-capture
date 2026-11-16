@@ -23,10 +23,16 @@ fn body_chunk() -> Value {
 fn projected_request() -> Value {
     object(json!({"method":string(),"url":string(),"headers":array(header()),"headersTruncated":{"type":"boolean"},"hasScripts":{"type":"boolean"},"bodyBytes":integer(),"body":body_chunk()}), &["method","url","headers","headersTruncated","hasScripts","bodyBytes"])
 }
+fn body_capture() -> Value {
+    json!({"type":"object","properties":{
+        "request":{"enum":["recorded","notRecorded"]},"response":{"enum":["recorded","notRecorded"]},
+        "originalRequest":{"enum":["recorded","notRecorded"]},"originalResponse":{"enum":["recorded","notRecorded"]}
+    },"additionalProperties":false})
+}
 fn flow() -> Value {
     let request=object(json!({"method":string(),"url":string(),"engine":nullable_string(),"headers":array(header()),"headersTruncated":{"type":"boolean"}}), &["method","url","headers"]);
     let response=object(json!({"status":{"type":"integer"},"version":string(),"headers":array(header()),"trailers":array(header()),"headersTruncated":{"type":"boolean"},"trailersTruncated":{"type":"boolean"}}), &["status","version","headers","trailers"]);
-    object(json!({"id":string(),"parentId":nullable_string(),"startedAt":integer(),"durationMs":{"type":["number","null"]},"source":string(),"state":string(),"clientProtocol":nullable_string(),"request":request,"response":{"anyOf":[response,{"type":"null"}]}}), &["id","request","response","source","state"])
+    object(json!({"id":string(),"parentId":nullable_string(),"startedAt":integer(),"durationMs":{"type":["number","null"]},"source":string(),"state":string(),"bodyCapture":body_capture(),"clientProtocol":nullable_string(),"request":request,"response":{"anyOf":[response,{"type":"null"}]}}), &["id","request","response","source","state"])
 }
 fn versioned(result: Value) -> Value {
     object(json!({"result":result,"expectedRevision":integer(),"expectedLibraryRevision":integer()}), &["result","expectedRevision","expectedLibraryRevision"])
@@ -38,7 +44,7 @@ fn scripts() -> Value {
 pub fn output_schema(name: &str) -> Option<Value> {
     Some(match name {
         "capture_status"=>object(json!({"running":{"type":"boolean"},"address":nullable_string(),"sendEngines":array(object(json!({"id":string(),"available":{"type":"boolean"},"reason":nullable_string(),"profiles":array(string()),"browserVersions":{"type":"object","additionalProperties":{"type":"array","items":{"type":"integer"}}}}), &["id","available","reason","profiles","browserVersions"])),"upstreamEnabled":{"type":"boolean"}}), &["running","address","sendEngines","upstreamEnabled"]),
-        "list_requests"=>object(json!({"requests":array(object(json!({"id":string(),"method":string(),"url":string(),"status":{"type":["integer","null"]},"state":string(),"source":string(),"startedAt":integer(),"durationMs":{"type":["number","null"]},"clientProtocol":nullable_string(),"upstreamProtocol":nullable_string()}), &["id","method","url","state","source"])),"nextCursor":nullable_string()}), &["requests","nextCursor"]),
+        "list_requests"=>object(json!({"requests":array(object(json!({"id":string(),"method":string(),"url":string(),"status":{"type":["integer","null"]},"state":string(),"source":string(),"startedAt":integer(),"durationMs":{"type":["number","null"]},"clientProtocol":nullable_string(),"upstreamProtocol":nullable_string(),"bodyCapture":body_capture()}), &["id","method","url","state","source"])),"nextCursor":nullable_string()}), &["requests","nextCursor"]),
         "get_request"|"send_request"=>flow(),
         "read_body"|"read_pending_body"=>body_chunk(),
         "cancel_request"=>object(json!({"cancelled":{"type":"boolean"}}), &["cancelled"]),

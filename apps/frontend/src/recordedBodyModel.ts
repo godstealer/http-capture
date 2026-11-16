@@ -1,5 +1,6 @@
 import type {BodyVariant, FlowMetadata, Header} from './types';
 import {invoke} from './api';
+import {assertBodyRecorded, bodyCaptureState} from './bodyCapture';
 
 export const RECORDED_BODY_PAGE_BYTES=64*1024;
 export const RECORDED_BODY_COMPLETE_BYTES=8*1024*1024;
@@ -8,11 +9,12 @@ export interface RecordedBodyPage {offset:number;totalBytes:number;bodyBase64:st
 function requireValue(condition:unknown,message:string):asserts condition {if(!condition)throw Error(message)}
 
 export function recordedBodyIdentity(flow:FlowMetadata,variant:BodyVariant):string {
-  return JSON.stringify([flow.id,flow.bodyRevision,variant]);
+  return JSON.stringify([flow.id,flow.bodyRevision,variant,bodyCaptureState(flow,variant)]);
 }
 export function recordedBodyRequest(flow:FlowMetadata,variant:BodyVariant,page:number):RecordedBodyRead {
   requireValue(['request','response','originalRequest','originalResponse'].includes(variant),'Recorded body variant is unavailable');
   requireValue(typeof flow.id==='string'&&!!flow.id&&flow.id.length<=128&&typeof flow.bodyRevision==='string'&&!!flow.bodyRevision&&flow.bodyRevision.length<=128,'Recorded body reference is unavailable');
+  assertBodyRecorded(flow,variant);
   const total=flow.bodyReferences[variant]?.byteLength;
   requireValue(typeof total==='number'&&Number.isSafeInteger(total)&&total>=0,'Recorded body is unavailable');
   requireValue(Number.isSafeInteger(page)&&page>=0&&page<Math.max(1,Math.ceil(total/RECORDED_BODY_PAGE_BYTES)),'Recorded body page is unavailable');

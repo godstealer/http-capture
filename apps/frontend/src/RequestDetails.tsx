@@ -1,5 +1,6 @@
 import { t, currentLanguage } from './i18n';
 import type { FlowRecord, Header, RequestDraft, RequestMetadata, TlsDetailsData } from './types';
+import {isBodyRecorded} from './bodyCapture';
 import { flowBodyLength } from './flowRecords';
 import { Copy } from 'lucide-react';
 import { headerLines } from './messageText';
@@ -32,7 +33,8 @@ export function TrafficOriginDetails({ flow }: { flow: FlowRecord }) {
   </details>;
 }
 export function RequestOverview({ request, flow }: { request: RequestDraft | RequestMetadata; flow?: FlowRecord }) {
-  const requestLength = 'bodyBase64' in request ? request.bodyBase64.length * 3 / 4 - (request.bodyBase64.endsWith('==') ? 2 : request.bodyBase64.endsWith('=') ? 1 : 0) : flow ? flowBodyLength(flow, request === flow.originalRequest ? 'originalRequest' : 'request') : undefined;
+  const requestVariant=flow?.request===request?'request':flow?.originalRequest===request?'originalRequest':undefined;
+  const requestLength = flow&&requestVariant ? flowBodyLength(flow,requestVariant) : 'bodyBase64' in request ? request.bodyBase64.length * 3 / 4 - (request.bodyBase64.endsWith('==') ? 2 : request.bodyBase64.endsWith('=') ? 1 : 0) : undefined;
   return <div className="request-details">
     <PropertyTable rows={[
       ['URL', request.url || t("未填写")], [t("状态"), flow?.state === 'blocked' ? t('已阻止') : flow ? flow.error ? t("失败") : flow.response ? t("已完成") : t("处理中") : t("未发送")],
@@ -45,7 +47,7 @@ export function RequestOverview({ request, flow }: { request: RequestDraft | Req
       [t("开始时间"), flow ? new Date(flow.startedAt).toLocaleString(currentLanguage()) : t("未发送")], [t("总时长"), flow ? `${flow.durationMs} ms` : '—'],
     ]} /></details>
     <details open><summary>{t("正文大小")}</summary><PropertyTable rows={[
-      [t("请求"), size(requestLength)], [t("响应"), flow?.response ? size(flowBodyLength(flow, 'response')) : '—'],
+      [t("请求"), flow&&requestVariant&&!isBodyRecorded(flow,requestVariant)?t('正文未记录'):size(requestLength)], [t("响应"), flow?.response ? !isBodyRecorded(flow,'response')?t('正文未记录'):size(flowBodyLength(flow, 'response')) : '—'],
     ]} /></details>
     {flow?.error && <p className="error-box">{flow.error}</p>}
   </div>;

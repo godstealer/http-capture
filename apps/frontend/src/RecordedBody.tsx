@@ -2,6 +2,7 @@ import {lazy,Suspense,useEffect,useMemo,useRef,useState} from 'react';
 import {downloadFlowBody,invoke} from './api';
 import type {BodyVariant,FlowMetadata,Header} from './types';
 import {t} from './i18n';
+import {isBodyRecorded} from './bodyCapture';
 import ResponseBody from './ResponseBody';
 import RecordedSseLive from './RecordedSseLive';
 import {parseSseEncodings} from './sseEncoding';
@@ -15,7 +16,8 @@ export interface RecordedBodyProps {
   active?:boolean;connected?:boolean;mode?:'body'|'base64'|'raw';onReloadMetadata?:()=>void;
 }
 export default function RecordedBody({flow,variant,headers,onCopy,active=true,connected=true,mode='body',onReloadMetadata}:RecordedBodyProps) {
-  const key=recordedBodyIdentity(flow,variant),total=flow.bodyReferences[variant]?.byteLength;
+  const recorded=isBodyRecorded(flow,variant);
+  const key=recordedBodyIdentity(flow,variant),total=recorded?flow.bodyReferences[variant]?.byteLength:undefined;
   const [position,setPosition]=useState({key,index:0}),[reload,setReload]=useState(0),[loading,setLoading]=useState(false);
   const [data,setData]=useState<{key:string;offset:number;page:RecordedBodyPage}|null>(null);
   const [failure,setFailure]=useState<{key:string;message:string}|null>(null),[view,setView]=useState<'text'|'hex'|'base64'>('text');
@@ -51,7 +53,7 @@ export default function RecordedBody({flow,variant,headers,onCopy,active=true,co
     return()=>{completeAbort.current?.abort();completeAbort.current=null};
   },[pageKey,active,connected]);
   useEffect(()=>{
-    if(!active||!connected){setLoading(false);setData(null);setFailure(null);return;}
+    if(!active||!connected||!recorded){setLoading(false);setData(null);setFailure(null);return;}
     let live=true;setLoading(true);setFailure(null);setData(null);
     let request;
     try {request=recordedBodyRequest(flow,variant,index)}catch(error){setFailure({key,message:String(error)});setLoading(false);return;}
@@ -61,7 +63,7 @@ export default function RecordedBody({flow,variant,headers,onCopy,active=true,co
       setData({key,offset:request.offset,page});
     }).catch(error=>{if(live)setFailure({key,message:String(error)})}).finally(()=>{if(live)setLoading(false)});
     return()=>{live=false};
-  },[key,index,reload,active,connected,total]);
+  },[key,index,reload,active,connected,total,recorded]);
   function jumpToPage() {
     if(loading||!active||!connected)return;
     const value=jumpDraft.value.trim(),number=Number(value);
@@ -93,6 +95,7 @@ export default function RecordedBody({flow,variant,headers,onCopy,active=true,co
     finally {if(downloadAbort.current===controller)downloadAbort.current=null;}
   }
   if(!active)return null;
+  if(!recorded)return <div className="formatted-response recorded-body" role="status"><p>{t('正文未记录')}</p><p className="format-note">{t('此记录仅包含连接或头部信息，未保存正文；不能按空正文读取、下载或重放。')}</p></div>;
   if(!connected)return <p role="status">{t('内核已断开，连接后读取历史正文。')}</p>;
   return <div className="formatted-response recorded-body">
     <div className="format-toolbar"><span>{typeof total==='number'?t('完整正文 {v0} 字节',{v0:total}):t('此记录没有该正文')}</span>

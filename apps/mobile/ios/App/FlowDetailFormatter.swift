@@ -1,5 +1,22 @@
 import Foundation
 
+enum RecordedBodyCapture {
+    static func isRecorded(_ flow: [String: Any], variant: String) -> Bool {
+        guard ["request", "response", "originalRequest", "originalResponse"].contains(variant) else { return false }
+        if let raw = flow["bodyCapture"] {
+            guard let capture = raw as? [String: Any] else { return false }
+            if let state = capture[variant] { return state as? String == "recorded" }
+        }
+        return ((flow["trafficOrigin"] as? [String: Any])?["entry"] as? String) != "android-lan"
+    }
+
+    static func hasBody(_ flow: [String: Any], variant: String) -> Bool {
+        guard isRecorded(flow, variant: variant),
+              let references = flow["bodyReferences"] as? [String: Any] else { return false }
+        return references[variant] is [String: Any]
+    }
+}
+
 enum FlowDetailFormatter {
     static func format(_ flow: [String: Any]) -> String {
         let request = flow["request"] as? [String: Any] ?? [:]
@@ -28,13 +45,15 @@ enum FlowDetailFormatter {
         }
         appendHeaders("请求头", side: request, into: &lines)
         if let response { appendHeaders("响应头", side: response, into: &lines) }
-        if let bodies = flow["bodyReferences"] as? [String: Any] {
-            lines += ["", "正文大小"]
-            for (key, label) in [("request", "请求"), ("response", "响应")] {
-                if let body = bodies[key] as? [String: Any],
-                   let bytes = body["byteLength"] as? Int {
-                    lines.append("\(label)：\(bytes) 字节")
-                }
+        let bodies = flow["bodyReferences"] as? [String: Any] ?? [:]
+        lines += ["", "正文"]
+        for (key, label) in [("request", "请求"), ("response", "响应")] {
+            guard flow[key] is [String: Any] else { continue }
+            if !RecordedBodyCapture.isRecorded(flow, variant: key) {
+                lines.append("\(label)：正文未记录")
+            } else if let body = bodies[key] as? [String: Any],
+                      let bytes = body["byteLength"] as? Int {
+                lines.append("\(label)：\(bytes) 字节")
             }
         }
         if let notes = flow["notes"] as? [String], !notes.isEmpty {

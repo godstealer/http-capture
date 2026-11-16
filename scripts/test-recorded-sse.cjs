@@ -37,5 +37,7 @@ function serve(bytes, calls) {
   await assert.rejects(readRecordedSseGrowth(flow('v3', extended.length), SIZE, { isCurrent: () => true, onChunk: () => delivered++ }, async () => ({ offset: SIZE, totalBytes: extended.length, bodyBase64: 'AA==', nextOffset: null })), /Incomplete recorded body range/);
   assert.equal(delivered, 0);
   await assert.rejects(readRecordedSseGrowth(flow('v4', 8 * 1024 * 1024 + 1), 0, { isCurrent: () => true, onChunk: () => delivered++ }, async () => { throw Error('must not read'); }), /范围不可用/);
+
+  await assert.rejects(readRecordedSseGrowth({...flow('unrecorded',0),bodyCapture:{response:'notRecorded'}},0,{isCurrent:()=>true,onChunk:()=>assert.fail('no unrecorded SSE events')},()=>assert.fail('no unrecorded SSE reads')),/not recorded/);
   console.log('Recorded live SSE: version-pinned 64 KiB reads, exact growth, stale/cancelled rejection and budget passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -37,7 +37,7 @@ pub async fn start(engine:Arc<Engine>,mut request:RequestDraft,half_close:bool)-
  });Ok(output)
 }
 fn initial_flow(id:String,request:RequestDraft)->Result<Flow>{
- Ok(Flow{
+ Ok(Flow{body_capture: Default::default(),
   traffic_origin:None,state:"sending".into(),websocket:None,original_request:None,original_response:None,
   client_tls:None,client_protocol:None,id,parent_id:None,
   started_at:SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,duration_ms:0,

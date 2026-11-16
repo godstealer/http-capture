@@ -2,6 +2,7 @@ import {useEffect,useMemo,useState} from 'react';
 import type {Flow,FlowRecord} from './types';
 import {schema,methodPath,decodeMessages,grpcStatus} from './grpc';
 import {decodeRecordedGrpcMessages} from './grpcRecorded';
+import {isBodyRecorded} from './bodyCapture';
 import {isFlowMetadata} from './flowRecords';
 import {invoke} from './api';
 import {t} from './i18n';
@@ -11,11 +12,12 @@ export default function GrpcResponse({flow,visible=true,connected=true}:{flow:Fl
  useEffect(()=>{const refresh=()=>setRevision(v=>v+1);window.addEventListener('grpc-schema-changed',refresh);return()=>window.removeEventListener('grpc-schema-changed',refresh)},[]);
  const method=useMemo(()=>{try{const sources=JSON.parse(localStorage.getItem('http-capture.grpc.proto.v1')||'[]');return schema(sources).methods.find(m=>methodPath(m)===new URL(flow.request.url).pathname)}catch{return undefined}},[flow.request.url,revision]);
  const response=flow.response;const active=['sending','receiving'].includes(flow.state??'');
- const source=isFlowMetadata(flow)?JSON.stringify([flow.id,flow.bodyRevision]):flow;
+ const recorded=isBodyRecorded(flow,'response');
+ const source=isFlowMetadata(flow)?JSON.stringify([flow.id,flow.bodyRevision,recorded]):flow;
  useEffect(()=>{
    let current=true;const controller=new AbortController();
    setDecoded({source:null,method:null,messages:[],error:''});
-   if(visible&&connected&&response){
+   if(visible&&connected&&response&&recorded){
      const work=isFlowMetadata(flow)
        ?decodeRecordedGrpcMessages(flow,method,response.headers,active,request=>invoke('read_flow_body',{...request}),{signal:controller.signal,isCurrent:()=>current})
        :decodeMessages((flow as Flow).response!.bodyBase64,method,response.headers,false,active);
@@ -23,8 +25,9 @@ export default function GrpcResponse({flow,visible=true,connected=true}:{flow:Fl
        .catch(error=>{if(current)setDecoded({source,method,messages:[],error:String(error)})});
    }
    return()=>{current=false;controller.abort()};
- },[source,method,active,visible,connected]);
+ },[source,method,active,visible,connected,recorded]);
  if(!visible)return null;
+ if(!recorded)return <p role="status">{t('正文未记录')}</p>;
  if(!response)return <p role="status">{active?t('gRPC 调用中…'):t('尚无响应')}</p>;
  const status=grpcStatus(response.headers,response.trailers);
  const result=connected&&decoded.source===source&&decoded.method===method?decoded:null;

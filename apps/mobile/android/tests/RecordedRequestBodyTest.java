@@ -45,6 +45,21 @@ public final class RecordedRequestBodyTest {
             RecordedRequestBody.from(new byte[maximum.length + 1]);
             throw new AssertionError("oversize captured request accepted");
         } catch (IllegalArgumentException expected) { }
+        check(!RecordedRequestBody.isRecorded(null, false, "android-lan"),
+                "legacy LAN placeholder must not be treated as an empty body");
+        check(!RecordedRequestBody.isRecorded("notRecorded", true, "explicit-proxy"),
+                "explicit unrecorded status must override normal capture ingress");
+        check(RecordedRequestBody.isRecorded("recorded", true, "android-lan"),
+                "explicit recorded status must permit future complete LAN bodies");
+        for (String invalid : new String[] {null, "", "unknown", "Recorded", "0"})
+            check(!RecordedRequestBody.isRecorded(invalid, true, "explicit-proxy"),
+                    "malformed explicit body state must fail closed");
+        check(RecordedRequestBody.isRecorded(null, false, "explicit-proxy"),
+                "legacy ordinary captures must remain usable");
+        check(RecordedRequestBody.isRecorded(null, false, null),
+                "legacy captures without provenance must remain usable");
+        check(RecordedRequestBody.from(new byte[0]).value.isEmpty(),
+                "a recorded empty body is a valid editable request");
         System.out.println("RecordedRequestBodyTest passed");
     }
 

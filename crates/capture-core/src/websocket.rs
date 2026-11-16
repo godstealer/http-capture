@@ -53,7 +53,7 @@ pub(crate) async fn run<S: AsyncRead + AsyncWrite + Unpin>(client: &mut BufReade
     request.retain_enabled_headers();
     let mut execution = engine.executions.begin(match execution_id {Some(id)=>id,None=>engine.executions.prepare()?})?;
     let started = Instant::now();
-    let mut guard = Guard { engine, done: false, flow: Flow { state: "sending".into(),
+    let mut guard = Guard { engine, done: false, flow: Flow { body_capture: Default::default(), state: "sending".into(),
         websocket: Some(Session { state: "connecting".into(), frames: vec![], messages:vec![] }), id: execution.id.clone(),
         started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64, duration_ms: 0, parent_id: None,
         source: source.into(), request, response: None, error: None, client_protocol: Some("HTTP/1.1".into()), client_tls, traffic_origin:crate::traffic_origin::current(source),

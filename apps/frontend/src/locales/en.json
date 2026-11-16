@@ -1699,5 +1699,9 @@
   "文本与文件可混合添加，支持重复字段。": "Mix text and file fields, including duplicate names.",
   "设备名称（自报）": "Device name (self-reported)",
   "设备名称（自报）：{name}": "Device name (self-reported): {name}",
-  "设备自报名称，仅作标签，不代表应用或硬件身份。": "The device reports this name as a label; it does not identify an application or hardware."
+  "设备自报名称，仅作标签，不代表应用或硬件身份。": "The device reports this name as a label; it does not identify an application or hardware.",
+  "字段操作": "Field actions",
+  "启用字段": "Enable field",
+  "正文未记录": "Body not recorded",
+  "此记录仅包含连接或头部信息，未保存正文；不能按空正文读取、下载或重放。": "This record contains only connection or header metadata. Its body was not captured and cannot be read, downloaded, or replayed as an empty body."
 }

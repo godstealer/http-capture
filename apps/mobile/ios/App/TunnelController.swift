@@ -511,8 +511,8 @@ final class TunnelController: ObservableObject {
         selectedDetail = detailRaw ? rawDetail : FlowDetailFormatter.format(flow)
     }
 
-    var hasRequestBody: Bool { (selectedFlow?["bodyReferences"] as? [String: Any])?["request"] != nil }
-    var hasResponseBody: Bool { (selectedFlow?["bodyReferences"] as? [String: Any])?["response"] != nil }
+    var hasRequestBody: Bool { selectedFlow.map { RecordedBodyCapture.hasBody($0, variant: "request") } ?? false }
+    var hasResponseBody: Bool { selectedFlow.map { RecordedBodyCapture.hasBody($0, variant: "response") } ?? false }
 
     var bodyPosition: String {
         guard bodyVariant != nil else { return "" }
@@ -525,6 +525,10 @@ final class TunnelController: ObservableObject {
               let id = flow["id"] as? String,
               let revision = flow["bodyRevision"] as? String,
               offset >= 0 else { return }
+        guard RecordedBodyCapture.isRecorded(flow, variant: variant) else {
+            selectedDetail = "正文未记录，无法读取或下载；这不代表空正文"
+            return
+        }
         detailGeneration &+= 1
         let generation = detailGeneration
         bodyLoading = true

@@ -29,6 +29,8 @@ mod body_views;
 pub use body_views::{BodyReference, FlowMetadata, FlowMetadataChange, FlowMetadataChanges};
 #[path = "store_body_export.rs"]
 mod body_export;
+#[path = "store_body_capture.rs"]
+mod body_capture;
 #[path = "store_response_rewrite.rs"]
 mod response_rewrite;
 
@@ -84,6 +86,7 @@ impl Store {
             flow.id = uuid::Uuid::new_v4().to_string(); flow.parent_id = None; flow.source = "capture".into();
             flow.request.scripts = Default::default(); flow.request.upstream_profile_id = None;
             if let Some(r) = &mut flow.original_request { r.scripts = Default::default(); r.upstream_profile_id = None; }
+            flow.normalize_body_capture();
             flow.notes.push("从文件导入；脚本和上游代理关联已清除。".into());
             tx.execute("INSERT INTO import_rows VALUES(?1,?2,?3)", params![id,offset+index,serde_json::to_string(&flow)?])?;
         }
@@ -241,7 +244,9 @@ impl Store {
         };
         let mut reader = Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let tx = reader.transaction()?;
-        output.write_all(b"{\"format\":\"http-capture-session\",\"version\":1,\"flows\":[")?;
+        let version = body_capture::session_format_version(&tx)?;
+        output.write_all(if version == 2 { b"{\"format\":\"http-capture-session\",\"version\":2,\"flows\":[" }
+            else { b"{\"format\":\"http-capture-session\",\"version\":1,\"flows\":[" })?;
         let count = {
             let mut statement = tx.prepare("SELECT data FROM flows ORDER BY rowid DESC")?;
             let mut rows = statement.query([])?;
@@ -306,9 +311,13 @@ fn write_flow_with_growth(conn:&Connection,flow:&Flow,growing_slot:Option<&str>)
  use base64::engine::general_purpose::STANDARD;
  if conn.query_row("SELECT EXISTS(SELECT 1 FROM deleted_flows WHERE id=?1)",[&flow.id],|r|r.get::<_,bool>(0))? {return Ok(());}
  let mut stored=flow.clone();
+ stored.normalize_body_capture();
+ let recorded=body_capture::recorded_slots(&stored);
  let mut retained=Vec::new();
  let mut body_refs=BTreeMap::new();
  body_slots(&mut stored,|slot,body| {
+  // Unobserved placeholders never become readable zero-byte references.
+  if !recorded[slot] {*body=Default::default();return Ok(());}
   let bytes=body.as_bytes();
   let tail=std::str::from_utf8(&bytes[bytes.len().saturating_sub(4)..])?;
   let length=Base64ReadPlan::new(bytes.len(),tail,0,1)?.body.total_bytes;
@@ -380,7 +389,10 @@ fn write_flow_with_growth(conn:&Connection,flow:&Flow,growing_slot:Option<&str>)
 fn restore_bodies(conn:&Connection,raw:&str)->Result<Flow> {
  use base64::engine::general_purpose::STANDARD;
  let mut flow:Flow=serde_json::from_str(raw)?;let id=flow.id.clone();
+ flow.normalize_body_capture();
+ let recorded=body_capture::recorded_slots(&flow);
  body_slots(&mut flow,|slot,body| {
+  if !recorded[slot] {*body=Default::default();return Ok(());}
   if body.starts_with("@body:") {
    anyhow::ensure!(body.as_str()==format!("@body:{slot}"),"Invalid stored body reference");
    let (rowid,length):(i64,i64)=conn.query_row("SELECT rowid,coalesce(logical_length,length(body)) FROM flow_bodies WHERE flow_id=?1 AND slot=?2",params![id,slot],|r|Ok((r.get(0)?,r.get(1)?)))?;

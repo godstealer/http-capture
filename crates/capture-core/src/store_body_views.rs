@@ -82,6 +82,7 @@ pub(super) enum BodyLocation {
 pub(super) fn body_location(conn: &Connection, id: &str, variant: &str) -> Result<BodyLocation> {
     valid_id(id)?;
     let path = body_slot(variant)?;
+    super::body_capture::ensure_recorded(conn, id, variant)?;
     let (kind, length, tail, marker): (Option<String>, Option<usize>, Option<Vec<u8>>, Option<String>) = conn.query_row(
         "SELECT json_type(data,?2),length(CAST(json_extract(data,?2) AS BLOB)),substr(CAST(json_extract(data,?2) AS BLOB),-4),
          CASE WHEN substr(json_extract(data,?2),1,6)='@body:' THEN json_extract(data,?2) END FROM flows WHERE id=?1",
@@ -106,14 +107,18 @@ pub(super) fn body_location(conn: &Connection, id: &str, variant: &str) -> Resul
 }
 
 fn metadata_projection(conn: &Connection, raw: String, cached_refs: Option<String>, instance: &str, version: i64) -> Result<FlowMetadata> {
-    let metadata: Value = serde_json::from_str(&raw)?;
+    let mut metadata: Value = serde_json::from_str(&raw)?;
+    crate::body_capture::annotate_metadata(&mut metadata);
     let id = metadata["id"].as_str().context("Invalid recorded flow metadata")?;
     if let Some(cached_refs) = cached_refs {
-        let body_references = serde_json::from_str(&cached_refs)?;
+        let mut body_references: BTreeMap<String, BodyReference> = serde_json::from_str(&cached_refs)?;
+        body_references.retain(|variant, _| VARIANTS.contains(&variant.as_str())
+            && crate::body_capture::state_from_metadata(&metadata, variant) == crate::body_capture::BodyCaptureState::Recorded);
         return Ok(FlowMetadata { metadata, body_revision: format!("{instance}:{version}"), body_references });
     }
     let mut body_references = BTreeMap::new();
     for variant in VARIANTS {
+        if crate::body_capture::state_from_metadata(&metadata, variant) != crate::body_capture::BodyCaptureState::Recorded { continue; }
         let path = body_slot(variant)?;
         let kind: Option<String> = conn.query_row("SELECT json_type(data,?2) FROM flows WHERE id=?1",
             params![id, path], |row| row.get(0))?;

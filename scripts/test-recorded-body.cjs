@@ -37,6 +37,11 @@ assert.equal(recordedBodyEncoded([{name:'content-encoding',value:'identity, br'}
   await assert.rejects(readCompleteRecordedBody(flow(RECORDED_BODY_COMPLETE_BYTES+1),'response',{},()=>assert.fail('over-budget processing must not read')),/8 MiB/);
   let zeroCalls=0;await assert.rejects(readCompleteRecordedBody(flow(0),'response',{},async(command,args)=>{zeroCalls++;assert.deepEqual(args,{id:'flow-a',variant:'response',expectedVersion:'instance:7',offset:0,length:SIZE});throw Error('empty reference is stale')}),/stale/);assert.equal(zeroCalls,1,'even zero-byte complete operations validate the recorded revision');
   assert.equal(await readCompleteRecordedBody(flow(0),'response',{},async()=>reply(Buffer.alloc(0))),'');
+
+  for(const unavailable of [flow(0,{bodyCapture:{response:'notRecorded'}}),flow(0,{trafficOrigin:{entry:'android-lan'}})]){
+    assert.throws(()=>recordedBodyRequest(unavailable,'response',0),/not recorded/);
+    await assert.rejects(readCompleteRecordedBody(unavailable,'response',{},()=>assert.fail('unrecorded zero bytes never authorize a read')),/not recorded/);
+  }
   let native=false,nativeCalls=[],fetches=[],response,handle;
   const {downloadFlowBody}=load('apps/frontend/src/api.ts',name=>name==='@tauri-apps/api/core'?{isTauri:()=>native,invoke:async(...args)=>{nativeCalls.push(args);return 'C:/saved/body.bin'}}:require(name));
   const args={id:'flow-a',variant:'originalResponse',expectedVersion:'instance:7'};

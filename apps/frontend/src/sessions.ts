@@ -1,8 +1,9 @@
 import { t } from './i18n';
+import {bodyVariants,isBodyRecorded,normalizeFlowBodyCapture} from './bodyCapture';
 import { serializeHar } from './har';
 import {chooseSave,downloadTextParts} from './saveFile';
 import { encodeText, type Flow, type FlowRecord, type Header } from './types';
-import { loadCompleteFlow } from './flowRecords';
+import { loadCompleteFlow, loadFlowSnapshot } from './flowRecords';
 import {isTauri,invoke} from '@tauri-apps/api/core';
 import {invoke as controlInvoke} from './api';
 
@@ -26,7 +27,7 @@ async function browserExportChunk(id:string,content:string,offset:number):Promis
 // HAR headers are arrays: keep duplicate names and their recorded order.
 export function readSession(text: string): Flow[] {
   const data = JSON.parse(text.replace(/^\uFEFF/, ""));
-  if (data.format === 'http-capture-session' && data.version === 1 && Array.isArray(data.flows)) return data.flows;
+  if (data.format === 'http-capture-session' && [1,2].includes(data.version) && Array.isArray(data.flows)) return data.flows.map((flow:Flow)=>normalizeFlowBodyCapture(flow));
   if (!data.log || !Array.isArray(data.log.entries)) throw new Error('请选择 HAR 1.2 或本工具保存的会话 JSON 文件');
   const headers = (value: unknown): Header[] => {
     if (!Array.isArray(value) || value.some(h => typeof h?.name !== 'string' || typeof h?.value !== 'string')) throw new Error('HAR 请求头格式无效');
@@ -59,6 +60,9 @@ export function readSession(text: string): Flow[] {
   });
 }
 export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 'json', progress:(message:string)=>void=()=>{}, rawHar = true): Promise<string> {
+  // v2 prevents older importers from treating metadata-only placeholders as complete empty bodies.
+  const jsonVersion=flows.some(flow=>bodyVariants.some(variant=>flow[variant]&&!isBodyRecorded(flow,variant)))?2:1;
+  const jsonPrefix=`{"format":"http-capture-session","version":${jsonVersion},"flows":[`;
   progress('选择保存位置…');
   const name=`capture-${new Date().toISOString().replace(/[:.]/g, '-')}.${format}`;
   const handle=await chooseSave(name);if(handle===null)return t('已取消保存');
@@ -67,10 +71,10 @@ export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 
     if(id===null)return t('已取消保存');
     let offset=0;
     try{
-      offset=await nativeExportChunk(id,format==='json'?'{"format":"http-capture-session","version":1,"flows":[':'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[',offset);
+      offset=await nativeExportChunk(id,format==='json'?jsonPrefix:'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[',offset);
       for(let index=0;index<flows.length;index++){
         progress('正在读取完整记录…');
-        const full=await loadCompleteFlow(flows[index]);
+        const full=await (format==='json'?loadFlowSnapshot(flows[index]):loadCompleteFlow(flows[index],undefined,['request','response']));
         const record=format==='json'?full:JSON.parse(await serializeHar([full],rawHar)).log.entries[0];
         offset=await nativeExportChunk(id,(index?',':'')+JSON.stringify(record),offset);
       }
@@ -87,10 +91,10 @@ export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 
     // as a complete session export.
     const writer=await handle.createWritable();
     try{
-      await writer.write(new Blob([format==='json'?'{"format":"http-capture-session","version":1,"flows":[':'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[']));
+      await writer.write(new Blob([format==='json'?jsonPrefix:'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[']));
       for(let index=0;index<flows.length;index++){
         progress('正在读取完整记录…');
-        const full=await loadCompleteFlow(flows[index]);
+        const full=await (format==='json'?loadFlowSnapshot(flows[index]):loadCompleteFlow(flows[index],undefined,['request','response']));
         const record=format==='json'?full:JSON.parse(await serializeHar([full],rawHar)).log.entries[0];
         await writer.write(new Blob([index?',':'',JSON.stringify(record)]));
       }
@@ -109,10 +113,10 @@ export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 
   if(browserId){
     let offset=0;
     try{
-      offset=await browserExportChunk(browserId,format==='json'?'{"format":"http-capture-session","version":1,"flows":[':'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[',offset);
+      offset=await browserExportChunk(browserId,format==='json'?jsonPrefix:'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":[',offset);
       for(let index=0;index<flows.length;index++){
         progress('正在读取完整记录…');
-        const full=await loadCompleteFlow(flows[index]);
+        const full=await (format==='json'?loadFlowSnapshot(flows[index]):loadCompleteFlow(flows[index],undefined,['request','response']));
         const record=format==='json'?full:JSON.parse(await serializeHar([full],rawHar)).log.entries[0];
         offset=await browserExportChunk(browserId,(index?',':'')+JSON.stringify(record),offset);
       }
@@ -127,10 +131,10 @@ export async function saveSession(flows: FlowRecord[], format: 'json' | 'har' = 
   // The Blob fallback cannot be constant-memory, but no longer retains every
   // complete Flow or builds a second monolithic JSON string before download.
   // A failed versioned read never submits a partial download.
-  const parts:string[]=[format==='json'?'{"format":"http-capture-session","version":1,"flows":[':'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":['];
+  const parts:string[]=[format==='json'?jsonPrefix:'{"log":{"version":"1.2","creator":{"name":"HTTP Capture","version":"0.1.0"},"entries":['];
   for(let index=0;index<flows.length;index++){
     progress('正在读取完整记录…');
-    const full=await loadCompleteFlow(flows[index]);
+    const full=await (format==='json'?loadFlowSnapshot(flows[index]):loadCompleteFlow(flows[index],undefined,['request','response']));
     const record=format==='json'?full:JSON.parse(await serializeHar([full],rawHar)).log.entries[0];
     if(index)parts.push(',');
     parts.push(JSON.stringify(record));

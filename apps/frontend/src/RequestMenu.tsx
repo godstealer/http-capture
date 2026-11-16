@@ -1,6 +1,7 @@
 import { t } from './i18n';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { isBodyRecorded } from './bodyCapture';
 import { toCurl } from './curl';
 import type { FlowRecord } from './types';
 import { loadCompleteFlow } from './flowRecords';
@@ -42,7 +43,7 @@ export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy,
   const run = (action: () => void) => { onClose(); action(); };
   async function copyComplete(format:'curl'|'json') {
     try {
-      const flow = await loadCompleteFlow(target.flow);
+      const flow = await loadCompleteFlow(target.flow,undefined,['request']);
       onCopy(format === 'curl' ? toCurl(flow.request) : JSON.stringify(flow.request, null, 2));
     } catch (error) { onError?.(String(error)); }
   }
@@ -60,16 +61,16 @@ export default function RequestMenu({ target, onClose, onEdit, onReplay, onCopy,
     <div className="context-caption">{request.method} {t("· 请求操作")}</div>
     {onSave && <button role="menuitem" onClick={() => run(() => onSave(target.flow))}>{t("保存选中（")}{selectionCount}）</button>}
     {onDelete && <button role="menuitem" onClick={() => run(() => onDelete(target.flow))}>{t("删除选中（")}{selectionCount}）</button>}
-    <button role="menuitem" onClick={() => run(() => onEdit(target.flow))}>{t("编辑")}<span>Ctrl+Shift+Enter</span></button>
-    <button role="menuitem" disabled={replayDisabled} onClick={() => run(() => onReplay(target.flow))}>{t("直接 Replay")}<span>{t("立即发送")}</span></button>
+    <button role="menuitem" disabled={!isBodyRecorded(target.flow,'request')} title={!isBodyRecorded(target.flow,'request')?t('正文未记录'):undefined} onClick={() => run(() => onEdit(target.flow))}>{t("编辑")}<span>Ctrl+Shift+Enter</span></button>
+    <button role="menuitem" disabled={replayDisabled || !isBodyRecorded(target.flow,'request')} onClick={() => run(() => onReplay(target.flow))}>{t("直接 Replay")}<span>{t("立即发送")}</span></button>
     {onRewriteResponse && <><button role="menuitem" disabled={!!target.flow.websocket || request.method === 'CONNECT'} onClick={() => run(() => onRewriteResponse(target.flow,'replace'))}>{t('自动替换响应')}<span>{t('创建重写规则')}</span></button><button role="menuitem" disabled={!!target.flow.websocket || request.method === 'CONNECT'} onClick={() => run(() => onRewriteResponse(target.flow,'modify'))}>{t('自动修改响应')}<span>{t('文本 / 正则')}</span></button></>}
     {onInterceptResponse && <button role="menuitem" disabled={!!target.flow.websocket} onClick={() => run(() => onInterceptResponse(target.flow))}>{t('手动响应断点')}<span>{t('命中后暂停')}</span></button>}
     {onBlock && <><button role="menuitem" disabled={request.method === 'CONNECT'} title={request.method === 'CONNECT' ? t('HTTPS 直通请求请使用域名阻止') : undefined} onClick={() => run(() => onBlock(target.flow, 'url'))}>{t('阻止此 URL')}<span>{t('下次请求生效')}</span></button><button role="menuitem" onClick={() => run(() => onBlock(target.flow, 'host'))}>{t('阻止此域名')}<span>{t('下次请求生效')}</span></button></>}
     <div role="separator" />
-    <button role="menuitem" title="Bash / Git Bash" onClick={() => run(() => { void copyComplete('curl'); })}>{t("复制 cURL")}<span>Ctrl+Shift+C</span></button>
+    <button role="menuitem" disabled={!isBodyRecorded(target.flow,'request')} title={!isBodyRecorded(target.flow,'request')?t('正文未记录'):'Bash / Git Bash'} onClick={() => run(() => { void copyComplete('curl'); })}>{t("复制 cURL")}<span>Ctrl+Shift+C</span></button>
     <button role="menuitem" onClick={() => run(() => onCopy(request.url))}>{t("复制 URL")}<span>Ctrl+C</span></button>
     <button role="menuitem" onClick={() => run(() => onCopy(headerLines(request.headers)))}>{t("复制请求头")}</button>
     <button role="menuitem" disabled={!target.flow.rawRequestHeadBase64} onClick={() => run(() => onCopy(atob(target.flow.rawRequestHeadBase64!)))}>{t("复制原始请求头")}</button>
-    <button role="menuitem" onClick={() => run(() => { void copyComplete('json'); })}>{t("复制请求 JSON")}</button>
+    <button role="menuitem" disabled={!isBodyRecorded(target.flow,'request')} title={!isBodyRecorded(target.flow,'request')?t('正文未记录'):undefined} onClick={() => run(() => { void copyComplete('json'); })}>{t("复制请求 JSON")}</button>
   </div>, document.body);
 }

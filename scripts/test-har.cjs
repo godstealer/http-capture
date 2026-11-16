@@ -11,5 +11,13 @@ const text=await createHar([{...flow,request:{...flow.request,bodyBase64:Buffer.
 const raw=await createHar([flow],async()=>{throw new Error('raw export must never decode')},true);
 assert.equal(raw.log.entries[0].response.content._rawBodyBase64,flow.response.bodyBase64);
 const restored=readSession(JSON.stringify(raw))[0];assert.equal(restored.response.bodyBase64,flow.response.bodyBase64);
+
+for(const candidate of [
+ {...flow,bodyCapture:{request:'notRecorded'}},
+ {...flow,bodyCapture:{response:'notRecorded'}},
+ {...flow,trafficOrigin:{entry:'android-lan'}},
+])await assert.rejects(()=>createHar([candidate],()=>assert.fail('unrecorded bytes must not reach the HAR decoder')),/not recorded/);
+const actuallyEmpty={...flow,trafficOrigin:{entry:'android-lan'},bodyCapture:{request:'recorded',response:'recorded'},request:{...flow.request,bodyBase64:''},response:{...flow.response,headers:[],bodyBase64:''}};
+const emptyRecorded=await createHar([actuallyEmpty],()=>assert.fail('real empty bytes do not decode'));assert.equal(emptyRecorded.log.entries[0].request.bodySize,0);assert.equal(emptyRecorded.log.entries[0].response.content.size,0);
 console.log('HAR export: duplicate headers/query, binary and BOM request round-trip, decoded response, decode failure recovery and missing response passed');
 })().catch(e=>{console.error(e);process.exitCode=1});

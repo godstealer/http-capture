@@ -1,4 +1,5 @@
 import { invoke } from './api';
+import {assertBodyRecorded} from './bodyCapture';
 import type { FlowMetadata } from './types';
 import { RECORDED_BODY_COMPLETE_BYTES, RECORDED_BODY_PAGE_BYTES, recordedBodyRequest, validateRecordedBodyPage } from './recordedBodyModel';
 
@@ -11,6 +12,7 @@ export async function readRecordedSseGrowth(
   options: { isCurrent: () => boolean; onChunk: (chunk: Uint8Array, nextOffset: number) => void },
   call: typeof invoke = invoke,
 ): Promise<number> {
+  assertBodyRecorded(flow,'response');
   const total = flow.bodyReferences.response?.byteLength;
   if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0 || total > RECORDED_BODY_COMPLETE_BYTES || !Number.isSafeInteger(from) || from < 0 || from > total) {
     throw new Error('SSE 正文范围不可用');

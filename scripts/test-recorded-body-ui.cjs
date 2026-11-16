@@ -95,5 +95,16 @@ const page=(bytes,total=bytes.length,offset=0)=>({offset,totalBytes:total,bodyBa
   const failedProcessing=harness(Component,fullProps);await failedProcessing.tick();let fullRead=0;respond=async args=>{if(++fullRead===2)throw Error('version conflict midway');return readFull(args)};failedProcessing.click('加载完整正文用于格式化或预览');await failedProcessing.tick();assert.equal(fullRead,2);assert.equal(failedProcessing.all(n=>typeof n.type==='function'&&n.type.name!=='CodeView').length,0,'failed complete reads never format their successful prefix');assert(text(failedProcessing.tree).includes('完整正文读取失败，未使用部分内容。'));failedProcessing.click('复制当前片段');assert.equal(copied.at(-1).length,SIZE);failedProcessing.dispose();
   respond=async args=>readFull(args);const processingRace=harness(Component,fullProps);await processingRace.tick();const fullPending=deferred();respond=()=>fullPending.promise;processingRace.click('加载完整正文用于格式化或预览');respond=async args=>readFull(args);processingRace.props={...fullProps,flow:flow('explicit-full',fullBytes.length,'instance:9')};processingRace.render();await processingRace.tick();fullPending.resolve(readFull({offset:0}));await processingRace.tick();assert.equal(processingRace.all(n=>typeof n.type==='function'&&n.type.name!=='CodeView').length,0,'late complete reads cannot mount a worker for a newer revision');assert(!processingRace.slots.some(slot=>slot?.state==='ready'&&slot.body));processingRace.dispose();
   assert(calls.every(([command,args])=>command==='read_flow_body'&&args.length===SIZE),'body views issue only bounded range commands, never complete get_flow');
+
+  const missingBefore=calls.length,downloadsBefore=downloads.length;
+  const metadataOnly={...props,flow:{...flow('unrecorded',0),bodyCapture:{response:'notRecorded'}}};
+  const absentBytes=harness(Component,metadataOnly);await absentBytes.tick();
+  assert.equal(calls.length,missingBefore,'unrecorded zero-byte references never trigger a read');
+assert(text(absentBytes.tree).includes('正文未记录'));assert(!text(absentBytes.tree).includes('（空正文）'));assert(!text(absentBytes.tree).includes('完整正文 0 字节'));
+  assert.equal(downloads.length,downloadsBefore);assert(!absentBytes.button('下载完整原始实体'));assert(!absentBytes.button('复制当前片段'));absentBytes.dispose();
+  const legacyBytes=harness(Component,{...props,flow:{...flow('old-lan',0),trafficOrigin:{entry:'android-lan'}}});await legacyBytes.tick();assert.equal(calls.length,missingBefore);assert(text(legacyBytes.tree).includes('正文未记录'));legacyBytes.dispose();
+  const savedRead=deferred();respond=()=>savedRead.promise;const unavailableRace=harness(Component,{...props,flow:flow('availability-race',3)});
+  unavailableRace.props={...props,flow:{...flow('availability-race',3),bodyCapture:{response:'notRecorded'}}};unavailableRace.render();savedRead.resolve(page(Buffer.from('abc')));await unavailableRace.tick();
+  assert(text(unavailableRace.tree).includes('正文未记录'));assert(!unavailableRace.button('复制当前片段'));assert(!text(unavailableRace.tree).includes('abc'));unavailableRace.dispose();
   console.log('Recorded body UI: activation gates, single-page replacement, numeric page jumps/draft resets, explicit complete-only processing, empty-body worker gate, binary/raw views, stale/unmount guards and pinned downloads passed');
 })().catch(error=>{console.error(error);process.exit(1)});

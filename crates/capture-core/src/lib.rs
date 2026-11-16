@@ -4,6 +4,7 @@ pub mod config_migration;
 pub use runtime::CaptureRuntime;
 pub mod body_export;
 pub mod body_read;
+pub mod body_capture;
 pub mod audit;
 pub mod fault_rules;
 pub mod response_rewrite;
@@ -137,7 +138,7 @@ impl Engine {
         let start = Instant::now();
         let original_request = request.has_disabled_headers().then(|| request.clone());
         request.retain_enabled_headers();
-        let mut flow = Flow { state: "sending".into(), websocket: None, original_request, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
+        let mut flow = Flow { body_capture: Default::default(), state: "sending".into(), websocket: None, original_request, original_response: None, client_tls, id: execution.as_ref().map(|e|e.id.clone()).unwrap_or_else(||uuid::Uuid::new_v4().to_string()), parent_id, started_at, duration_ms: 0,
             source: source.into(), request, response: None, error: None, raw_request_head_base64, notes: vec![], client_protocol, traffic_origin: crate::traffic_origin::current(source) };
         self.store.insert(&flow)?;
         if self.events.receiver_count()>0 { let _ = self.events.send(flow.clone()); }
@@ -258,7 +259,7 @@ impl Engine {
         flow.notes.push(format!("{stage}脚本执行完成")); Ok(())
     }
     pub fn record_failure(&self, request: RequestDraft, raw_head: String, error: String) -> Result<()> {
-        let flow = Flow { state: "failed".into(), websocket: None, original_request: None, original_response: None, client_tls: None, id: uuid::Uuid::new_v4().to_string(), parent_id: None,
+        let flow = Flow { body_capture: Default::default(), state: "failed".into(), websocket: None, original_request: None, original_response: None, client_tls: None, id: uuid::Uuid::new_v4().to_string(), parent_id: None,
             started_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
             duration_ms: 0, source: "capture".into(), request, response: None, error: Some(error),
             raw_request_head_base64: Some(raw_head), notes: vec!["请求未转发；正文可能未完整接收。".into()], client_protocol: None, traffic_origin: crate::traffic_origin::current("capture") };

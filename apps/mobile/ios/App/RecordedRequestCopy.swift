@@ -42,6 +42,9 @@ struct RecordedRequestCopy {
     private(set) var bytes = Data()
 
     init(flow: [String: Any]) throws {
+        guard RecordedBodyCapture.isRecorded(flow, variant: "request") else {
+            throw CopyError.invalid("请求正文未记录，不能完整复制后重发；可手动新建请求")
+        }
         guard let id = flow["id"] as? String,
               let revision = flow["bodyRevision"] as? String,
               let request = flow["request"] as? [String: Any],

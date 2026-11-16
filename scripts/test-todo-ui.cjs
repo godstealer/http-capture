@@ -49,6 +49,8 @@ async function updater() {
   new Function('module','exports','require',output.outputFiles[0].text)(module,module.exports,name=>name==='react'?react:name==='react/jsx-runtime'?{jsx,jsxs:jsx}:name==='react-dom'?{createPortal:n=>n}:name==='lucide-react'?new Proxy({},{get:()=>icon}):name==='@tauri-apps/api/core'?{isTauri:()=>false}:name==='@tauri-apps/api/event'?{listen:()=>assert.fail('native listener not expected')}:require(name));
   return module.exports.default;
 }
+const captureModule={exports:{}};new Function('module','exports',transformSync(fs.readFileSync('apps/frontend/src/bodyCapture.ts','utf8'),{loader:'ts',format:'cjs'}).code)(captureModule,captureModule.exports);
+const {isBodyRecorded}=captureModule.exports;
 // Isolate existing JSX without mounting the rest of App or the traffic table.
 function shippedJsx(file,className,bindings) {
   const source=fs.readFileSync(file,'utf8');const ast=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let selected;
@@ -111,7 +113,7 @@ function cssFor(selector,width) {
   const flow={request:{method:'GET',url:'https://example.invalid/'},notes:[]},intercepted=[],replayed=[],rewritten=[];
   for(const [connected,websocket] of [[true,false],[false,false],[true,true]]){
     const item={...flow,...(websocket?{websocket:{}}:{})};
-    const heading=shippedJsx('apps/frontend/src/CaptureView.tsx','inspector-heading',{t,flow:item,desktop:connected,Replace:icon,Send:icon,X:icon,onInterceptResponse:f=>intercepted.push(f),onRewriteResponse:(f,action)=>rewritten.push({flow:f,action}),rewrite:(f,action)=>rewritten.push({flow:f,action}),complete:(f,action)=>action(f),onReplay:f=>replayed.push(f),direction:'row',setDirection(){},setSelected(){}});
+    const heading=shippedJsx('apps/frontend/src/CaptureView.tsx','inspector-heading',{t,isBodyRecorded,flow:item,desktop:connected,Replace:icon,Send:icon,X:icon,onInterceptResponse:f=>intercepted.push(f),onRewriteResponse:(f,action)=>rewritten.push({flow:f,action}),rewrite:(f,action)=>rewritten.push({flow:f,action}),complete:(f,action)=>action(f),onReplay:f=>replayed.push(f),direction:'row',setDirection(){},setSelected(){}});
     const button=nodes(heading).find(n=>n.type==='button'&&text(n)==='手动响应断点');assert.equal(button.props.disabled,!connected||websocket);
     for(const [label,action] of [['自动替换响应','replace'],['自动修改响应','modify']]) {
       const rewrite=nodes(heading).find(n=>n.type==='button'&&text(n)===label);

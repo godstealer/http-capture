@@ -853,7 +853,9 @@ public final class MainActivity extends Activity {
         LinearLayout contentLayout = new LinearLayout(this);
         contentLayout.setOrientation(LinearLayout.VERTICAL);
         Button edit = new Button(this);
-        edit.setText("复制到新请求");
+        boolean requestRecorded = isBodyRecorded(flow, "request");
+        edit.setText(requestRecorded ? "复制到新请求" : "正文未记录，无法复制");
+        edit.setEnabled(requestRecorded);
         contentLayout.addView(edit);
         Button raw = new Button(this);
         raw.setText("查看原始详情");
@@ -872,10 +874,10 @@ public final class MainActivity extends Activity {
             .setView(scroll)
             .setNegativeButton("关闭", null);
         JSONObject bodies = flow.optJSONObject("bodyReferences");
-        if (bodies != null && bodies.has("request")) {
+        if (bodies != null && bodies.has("request") && isBodyRecorded(flow, "request")) {
             dialog.setPositiveButton("请求正文", (ignored, which) -> showBodyPreview(flow, "request"));
         }
-        if (bodies != null && bodies.has("response")) {
+        if (bodies != null && bodies.has("response") && isBodyRecorded(flow, "response")) {
             dialog.setNeutralButton("响应正文", (ignored, which) -> showBodyPreview(flow, "response"));
         }
         AlertDialog shown = dialog.show();
@@ -927,13 +929,17 @@ public final class MainActivity extends Activity {
         appendFlowHeaders(text, "请求头", request);
         appendFlowHeaders(text, "响应头", response);
         JSONObject bodies = flow.optJSONObject("bodyReferences");
-        if (bodies != null) {
-            text.append("\n\n正文大小");
-            for (String kind : new String[] {"request", "response"}) {
-                JSONObject body = bodies.optJSONObject(kind);
-                if (body != null) text.append("\n")
-                    .append("request".equals(kind) ? "请求" : "响应")
-                    .append("：").append(body.optLong("byteLength")).append(" 字节");
+        text.append("\n\n正文");
+        for (String kind : new String[] {"request", "response"}) {
+            if (flow.optJSONObject(kind) == null) continue;
+            String label = "request".equals(kind) ? "请求" : "响应";
+            if (!isBodyRecorded(flow, kind)) {
+                text.append("\n").append(label).append("：正文未记录");
+            } else {
+                JSONObject body = bodies == null ? null : bodies.optJSONObject(kind);
+                if (body != null && body.has("byteLength"))
+                    text.append("\n").append(label).append("：")
+                        .append(body.optLong("byteLength")).append(" 字节");
             }
         }
         JSONArray notes = flow.optJSONArray("notes");
@@ -942,6 +948,17 @@ public final class MainActivity extends Activity {
             for (int i = 0; i < notes.length(); i++) text.append("\n").append(notes.optString(i));
         }
         return text.toString();
+    }
+
+    private static boolean isBodyRecorded(JSONObject flow, String variant) {
+        if (!java.util.Arrays.asList("request", "response", "originalRequest", "originalResponse").contains(variant))
+            return false;
+        JSONObject capture = flow.optJSONObject("bodyCapture");
+        boolean hasState = capture == null ? flow.has("bodyCapture") : capture.has(variant);
+        String state = capture == null ? null : capture.optString(variant, null);
+        JSONObject origin = flow.optJSONObject("trafficOrigin");
+        return RecordedRequestBody.isRecorded(state, hasState,
+            origin == null ? null : origin.optString("entry", null));
     }
 
     private static void appendFlowHeaders(StringBuilder text, String title, JSONObject side) {
@@ -967,6 +984,10 @@ public final class MainActivity extends Activity {
 
     private void showBodyPreview(JSONObject flow, String variant, long offset,
                                  ArrayList<Long> previousOffsets) {
+        if (!isBodyRecorded(flow, variant)) {
+            status.setText("正文未记录，无法读取或下载；这不代表空正文");
+            return;
+        }
         String id = flow.optString("id");
         String bodyRevision = flow.optString("bodyRevision");
         worker.execute(() -> {
@@ -1019,6 +1040,10 @@ public final class MainActivity extends Activity {
     }
 
     private void editRecordedRequest(JSONObject flow) {
+        if (!isBodyRecorded(flow, "request")) {
+            showReplayError("请求正文未记录，不能完整复制后重发；可手动新建请求");
+            return;
+        }
         JSONObject request = flow.optJSONObject("request");
         JSONObject references = flow.optJSONObject("bodyReferences");
         JSONObject bodyReference = references == null ? null : references.optJSONObject("request");

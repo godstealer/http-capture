@@ -346,6 +346,7 @@ fn observed_request(bytes: &[u8], host: &str, port: u16) -> (String, String) {
 
 fn mobile_flow(peer: SocketAddr, method: String, url: String, device_name: Option<String>) -> Result<Flow> {
     Ok(Flow {
+        body_capture: crate::body_capture::VARIANTS.into_iter().map(|variant| (variant.into(), crate::body_capture::BodyCaptureState::NotRecorded)).collect(),
         state: "receiving".into(), websocket: None, original_request: None,
         original_response: None, client_tls: None, client_protocol: Some("TCP".into()),
         traffic_origin: Some(TrafficOrigin { entry: "android-lan".into(),
@@ -654,6 +655,11 @@ mod tests {
             assert!(origin.application.is_none());
             let restored: Flow = serde_json::from_value(serde_json::to_value(flow).unwrap()).unwrap();
             assert_eq!(restored.traffic_origin, flow.traffic_origin);
+            assert_eq!(restored.body_capture, flow.body_capture);
+            assert!(flow.ensure_body_recorded("request").is_err());
+            let metadata = engine.store.metadata(&flow.id, None).unwrap().unwrap();
+            assert!(!metadata.body_references.contains_key("request"));
+            assert_eq!(metadata.metadata["bodyCapture"]["request"], "notRecorded");
         }
         gateway.disconnect();
         assert!(gateway.device_name().is_none());

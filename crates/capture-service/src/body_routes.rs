@@ -242,6 +242,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unrecorded_metadata_stays_visible_but_cannot_download_an_empty_entity() {
+        let fixture = fixture().await;
+        let mut remote = sample("metadata-only", "");
+        remote.body_capture.insert("request".into(), capture_core::body_capture::BodyCaptureState::NotRecorded);
+        fixture.state.engine.store.insert(&remote).unwrap();
+        let (status, metadata) = call(fixture.address, "/flows/metadata", json!({"id":"metadata-only"})).await;
+        assert_eq!(status, 200);
+        assert_eq!(metadata["bodyCapture"]["request"], "notRecorded");
+        assert!(metadata["bodyReferences"].get("request").is_none());
+        let revision = metadata["bodyRevision"].as_str().unwrap();
+        let (status, snapshot) = call(fixture.address, "/flows/get", json!({"id":"metadata-only","expectedVersion":revision})).await;
+        assert_eq!(status,200);assert_eq!(snapshot["bodyCapture"]["request"], "notRecorded");
+        for path in ["/flows/body/read", "/flows/body/download", "/flows/body/prepare"] {
+            let mut request = json!({"id":"metadata-only","variant":"request","expectedVersion":revision});
+            if path.ends_with("read") {request["offset"]=json!(0);request["length"]=json!(64);}
+            let (status, _, body) = raw(fixture.address, path, &request.to_string(), true).await;
+            assert_eq!(status,400,"{path}");
+            assert!(String::from_utf8(body).unwrap().contains("not recorded"));
+        }
+        fixture.state.engine.store.insert(&sample("real-empty", "")).unwrap();
+        let metadata = fixture.state.engine.store.metadata("real-empty", None).unwrap().unwrap();
+        let (status, body) = call(fixture.address, "/flows/body/read", json!({"id":"real-empty","variant":"request","expectedVersion":metadata.body_revision,"offset":0,"length":64})).await;
+        assert_eq!(status,200);assert_eq!(body["totalBytes"],0);assert_eq!(body["bodyBase64"],"");
+    }
+
+    #[tokio::test]
     async fn staged_download_has_bounded_chunks_and_releases_database_before_streaming_or_cancel() {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         use futures_util::StreamExt;

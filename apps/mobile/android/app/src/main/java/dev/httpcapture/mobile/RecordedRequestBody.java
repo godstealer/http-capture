@@ -16,6 +16,12 @@ final class RecordedRequestBody {
         this.mode = mode;
     }
 
+    /** Explicit flags win; legacy LAN metadata never implies an empty wire body. */
+    static boolean isRecorded(String captureState, boolean hasCaptureState, String entry) {
+        if (hasCaptureState) return "recorded".equals(captureState);
+        return !"android-lan".equals(entry);
+    }
+
     static RecordedRequestBody from(byte[] bytes) {
         if (bytes.length > MAX_COPY_BYTES)
             throw new IllegalArgumentException("请求正文超过 1 MiB，当前移动编辑器不能复制后重发");

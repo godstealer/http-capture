@@ -18,6 +18,7 @@ export interface TlsDetailsData { version?: string | null; cipherSuite?: string 
 export interface TrafficOriginProcess { pid: number; name: string; path?: string | null }
 export interface TrafficOriginData { entry: string; clientAddress?: string | null; deviceName?: string | null; process?: TrafficOriginProcess | null; processStatus: string }
 export interface Flow {
+  bodyCapture?: Partial<Record<BodyVariant, BodyCaptureState>>;
   trafficOrigin?: TrafficOriginData | null;
   state?: string;
   websocket?: { messages?: {direction:string;atMs:number;opcode:number;payloadBase64:string;frameCount:number;error?:string|null}[]; state: string; frames: { direction: string; atMs: number; opcode: number; fin: boolean; compressed: boolean; payloadBase64: string }[] } | null;
@@ -30,6 +31,7 @@ export interface Flow {
   response: { trailers?: Header[]; status: number; version: string; tlsVersion?: string | null; upstreamTls?: TlsDetailsData | null; sentRequestHeaders?: Header[] | null; headers: Header[]; bodyBase64: string; rawHeadBase64?: string | null } | null;
   error: string | null; rawRequestHeadBase64?: string | null; notes: string[];
 }
+export type BodyCaptureState = 'recorded' | 'notRecorded';
 export type BodyVariant = 'request' | 'response' | 'originalRequest' | 'originalResponse';
 export type RequestMetadata = Omit<RequestDraft, 'bodyBase64'>;
 export type ResponseMetadata = Omit<NonNullable<Flow['response']>, 'bodyBase64'>;

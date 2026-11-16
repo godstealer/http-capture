@@ -43,69 +43,53 @@
 .request-body-form-status.pending { color:var(--field-focus); }
 @media (max-width:520px) { .request-body-form-status { flex-basis:100%; order:-1; } }
 
-/* One aligned field grid, with a quiet add-row action and a separate apply footer. */
-.request-body-form-card {
-  --body-field-columns: 26px minmax(0, 1fr) minmax(0, 1.6fr) 30px;
-  container: request-body-form / inline-size;
-  padding: 0;
-  overflow: hidden;
-  border-color: var(--ui-border, var(--field-border));
-  border-radius: 9px;
-}
-.request-body-form-card[data-form-mode='multipart'] { --body-field-columns: 26px minmax(0, 1fr) 92px minmax(0, 1.5fr) 30px; }
-.request-body-form-card > .request-body-card-heading { padding: 12px 14px 0; flex-wrap: wrap; gap: 8px; }
-.request-body-form-card .request-body-form-title { gap: 7px; }
-.request-body-form-card .request-body-form-title > span { padding: 1px 6px; border-radius: 4px; background: var(--field-disabled); font-size: 11px; font-variant-numeric: tabular-nums; }
-.request-body-panel .request-body-reload { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 6px; border-color: transparent; background: transparent; color: var(--field-placeholder); font-size: 11px; }
-.request-body-panel .request-body-reload:hover:not(:disabled) { background: var(--field-disabled); border-color: transparent; color: var(--field-text); }
-.request-body-form-help { margin: 5px 14px 12px; color: var(--field-placeholder); font-size: 11px; line-height: 1.6; }
-.request-body-form-card .request-body-notice { margin: 0 14px 14px; }
-.request-body-form-card .request-body-form-fields > .request-body-hint { margin: 0; padding: 10px 14px; }
-.request-body-table-head, .request-body-form-card .request-body-row { display: grid; grid-template-columns: var(--body-field-columns); gap: 10px; align-items: start; padding: 8px 12px; }
-.request-body-table-head { padding-top: 7px; padding-bottom: 7px; border-block: 1px solid var(--ui-border, var(--field-border)); background: var(--field-disabled); color: var(--field-placeholder); font-size: 11px; }
-.request-body-table-head > :first-child { text-align: center; }
-.request-body-form-card .request-body-row-list { display: block; }
-.request-body-form-card .request-body-row { border: 0; border-bottom: 1px solid var(--ui-border, var(--field-border)); border-radius: 0; background: transparent; transition: background-color .12s; }
+/* Flat cells keep body fields aligned with the request editor. */
+.request-body-toolbar { align-items: center; gap: 8px; padding: 8px 0; }
+.request-body-panel .request-body-toolbar > label { flex-direction: row; align-items: center; gap: 7px; color: var(--field-placeholder); white-space: nowrap; }
+:root .app-shell .request-body-panel .request-body-toolbar .request-body-type select[aria-label]:not([multiple]) { width: auto; min-width: 0; max-width: 240px; min-height: 30px; height: 30px; padding: 3px 24px 3px 6px; border-color: transparent; border-radius: 3px; background-color: transparent; font-size: 13px; }
+:root .app-shell .request-body-panel .request-body-toolbar .request-body-type select[aria-label]:not([multiple]):hover { background-color: var(--ui-surface-alt, var(--field-disabled)); }
+.request-body-toolbar .request-body-size { padding: 0; font-size: 11px; }
+.request-body-table-tools { display: flex; gap: 2px; align-items: center; }
+.request-body-panel .request-body-tool { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; min-height: 30px; padding: 0; border-color: transparent; background: transparent; color: var(--field-placeholder); }
+.request-body-panel .request-body-tool:hover:not(:disabled) { background: var(--ui-surface-alt, var(--field-disabled)); border-color: transparent; color: var(--field-focus); }
+.request-body-form-card { min-width: 0; padding: 0; border: 0; background: transparent; }
+.request-body-form-card .request-body-notice { margin-bottom: 12px; }
+.request-body-row-list { width: 100%; border-top: 1px solid var(--ui-border, var(--field-border)); }
+.request-body-form-card .request-body-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr) 36px; align-items: stretch; gap: 0; min-height: 44px; padding: 0; border: 1px solid var(--ui-border, var(--field-border)); border-top: 0; border-radius: 0; background: transparent; }
 .request-body-form-card .request-body-row:hover { background: var(--ui-surface-alt, var(--field-disabled)); }
-.request-body-form-card .request-body-row:focus-within { background: var(--ui-accent-soft, var(--field-disabled)); box-shadow: inset 2px 0 var(--field-focus); }
-.request-body-form-card .request-body-row-index { display: block; padding: 10px 0 0; text-align: center; font: 11px/1.4 Consolas, monospace; }
 .request-body-row-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.request-body-form-card .request-body-row > label { display: flex; gap: 4px; min-width: 0; }
-:root .app-shell .request-body-form-card .request-body-row :is(input, select) { width: 100%; min-width: 0; height: 34px; min-height: 34px; padding: 6px 9px; border-radius: 5px; font-size: 12px; }
-:root .app-shell .request-body-form-card .request-body-row input[type='file'] { height: auto; padding: 5px; font-size: 11px; line-height: 1.5; font-family: inherit; }
-.request-body-form-card .request-body-value small { font-size: 10px; }
-.request-body-panel .request-body-form-card .request-body-remove { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 34px; min-height: 34px; margin: 0; padding: 0; border-color: transparent; background: transparent; color: var(--field-placeholder); }
-.request-body-panel .request-body-form-card .request-body-remove:hover:not(:disabled) { border-color: transparent; background: var(--field-disabled); color: var(--ui-danger, #c65252); }
-.request-body-panel .request-body-add-field { display: flex; align-items: center; justify-content: flex-start; gap: 7px; width: 100%; min-height: 38px; padding: 9px 16px; border: 0; border-radius: 0; background: transparent; color: var(--field-focus); font-size: 12px; font-weight: 500; text-align: left; }
-.request-body-panel .request-body-add-field:hover:not(:disabled) { border-color: transparent; background: var(--ui-accent-soft, var(--field-disabled)); }
-.request-body-form-card .request-body-form-footer { align-items: center; justify-content: space-between; gap: 10px; margin: 0; padding: 10px 14px; border-top: 1px solid var(--ui-border, var(--field-border)); background: var(--ui-surface-alt, var(--field-disabled)); }
+.request-body-form-card .request-body-row > label { display: flex; min-width: 0; gap: 0; border-right: 1px solid var(--ui-border, var(--field-border)); }
+.request-body-form-card .request-body-enabled { align-items: center; justify-content: center; }
+.request-body-form-card .request-body-enabled input { width: 14px; height: 14px; margin: 0; cursor: pointer; }
+.request-body-row[data-placeholder='true'] .request-body-enabled input { visibility: hidden; }
+:root .app-shell .request-body-panel .request-body-form-card .request-body-form-fields .request-body-row :is(input:not([type='checkbox']), select) { box-sizing: border-box; width: 100%; min-width: 0; min-height: 43px; height: 100%; padding: 10px 12px; border: 0; border-radius: 0; background: transparent; color: var(--field-text); font-size: 13px; line-height: 22px; box-shadow: none; }
+:root .app-shell .request-body-panel .request-body-form-card .request-body-form-fields .request-body-row input:not([type='checkbox']):focus { position: relative; outline: 1px solid var(--field-focus); outline-offset: -1px; box-shadow: none; }
+:root .app-shell .request-body-row[data-disabled='true'] :is(.request-body-name, .request-body-value) { opacity: .5; }
+.request-body-form-card .request-body-file-cell { display: flex; flex-direction: column; justify-content: center; min-height: 43px; }
+:root .app-shell .request-body-panel .request-body-form-card .request-body-form-fields .request-body-row input[type='file'] { height: auto; padding: 7px 10px; font-family: inherit; font-size: 11px; line-height: 1.5; }
+.request-body-file-cell input::file-selector-button { margin-right: 8px; padding: 3px 7px; border: 1px solid var(--field-border); border-radius: 3px; background: var(--field-bg); color: var(--field-text); cursor: pointer; }
+.request-body-form-card .request-body-value small { display: block; padding: 0 10px 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.request-body-field-menu { position: relative; min-width: 0; }
+.request-body-field-menu > summary { display: flex; align-items: center; justify-content: center; min-height: 43px; height: 100%; list-style: none; cursor: pointer; color: var(--field-placeholder); }
+.request-body-field-menu > summary::-webkit-details-marker { display: none; }
+.request-body-field-menu > summary:hover, .request-body-field-menu[open] > summary { background: var(--ui-accent-soft, var(--field-disabled)); color: var(--field-focus); }
+.request-body-field-options { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; width: 156px; padding: 4px; border: 1px solid var(--ui-border, var(--field-border)); border-radius: 6px; background: var(--ui-surface, var(--field-bg)); box-shadow: 0 6px 22px #0002; }
+.request-body-panel .request-body-field-options button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 3px; background: transparent; text-align: left; font-size: 12px; }
+.request-body-panel .request-body-field-options button:hover:not(:disabled) { background: var(--ui-accent-soft, var(--field-disabled)); }
+.request-body-field-options button > svg:last-child:not(:first-child) { margin-left: auto; }
+.request-body-panel .request-body-field-options .request-body-remove { color: var(--ui-danger, #c65252); }
+.request-body-field-options [role='menuitemradio'] + .request-body-remove { margin-top: 3px; border-top: 1px solid var(--ui-border, var(--field-border)); border-radius: 0 0 3px 3px; }
+.request-body-form-card .request-body-form-footer { align-items: center; justify-content: space-between; gap: 10px; margin: 0; padding: 9px 0; border: 0; background: transparent; }
+.request-body-form-footer.is-pristine { display: none; }
 .request-body-form-footer .request-body-form-status { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 11px; }
 .request-body-form-footer .request-body-form-status::before { content: ''; width: 5px; height: 5px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
-.request-body-panel .request-body-form-footer .request-body-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; margin-left: auto; padding: 6px 11px; font-size: 12px; }
-.request-body-panel :is(.request-body-add-field, .request-body-remove, .request-body-reload, .request-body-primary):focus-visible { outline: 2px solid var(--field-focus); outline-offset: -2px; }
-@container request-body-form (max-width: 520px) {
-  .request-body-table-head { display: none; }
-  .request-body-form-card .request-body-row { grid-template-columns: minmax(0, 1fr) 30px; gap: 8px; padding: 10px 12px; }
-  .request-body-form-card .request-body-row-index { display: none; }
-  .request-body-form-card .request-body-name { grid-column: 1; grid-row: 1; }
-  .request-body-form-card .request-body-kind { grid-column: 1; grid-row: 2; }
-  .request-body-form-card .request-body-value { grid-column: 1; grid-row: 2; }
-  .request-body-form-card[data-form-mode='multipart'] .request-body-value { grid-row: 3; }
-  .request-body-form-card .request-body-remove { grid-column: 2; grid-row: 1; align-self: end; }
-  .request-body-form-card .request-body-row-label { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; white-space: normal; color: var(--field-placeholder); font-size: 11px; }
-  .request-body-form-card .request-body-form-status { flex: 1 1 140px; order: 0; }
-}
-
-/* Older WebViews use the same readable stacked cells without container queries. */
-@supports not (container-type: inline-size) {
-  .request-body-table-head { display: none; }
-  .request-body-form-card .request-body-row { grid-template-columns: minmax(0, 1fr) 30px; gap: 8px; padding: 10px 12px; }
-  .request-body-form-card .request-body-row-index { display: none; }
-  .request-body-form-card .request-body-name { grid-column: 1; grid-row: 1; }
-  .request-body-form-card .request-body-kind { grid-column: 1; grid-row: 2; }
-  .request-body-form-card .request-body-value { grid-column: 1; grid-row: 2; }
-  .request-body-form-card[data-form-mode='multipart'] .request-body-value { grid-row: 3; }
-  .request-body-form-card .request-body-remove { grid-column: 2; grid-row: 1; align-self: end; }
-  .request-body-form-card .request-body-row-label { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; white-space: normal; color: var(--field-placeholder); font-size: 11px; }
-  .request-body-form-card .request-body-form-status { flex: 1 1 140px; order: 0; }
+.request-body-panel .request-body-form-footer .request-body-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; margin-left: auto; padding: 5px 9px; font-size: 11px; }
+.request-body-panel :is(.request-body-tool, .request-body-field-menu > summary, .request-body-field-options button, .request-body-primary):focus-visible { outline: 2px solid var(--field-focus); outline-offset: -2px; }
+@media (max-width: 420px) {
+  .request-body-toolbar { gap: 4px; }
+  .request-body-panel:is([data-mode='form'], [data-mode='multipart']) .request-body-size { display: none; }
+  .request-body-table-tools { margin-left: auto; }
+  :root .app-shell .request-body-panel .request-body-toolbar .request-body-type select[aria-label]:not([multiple]) { max-width: 140px; }
+  .request-body-form-card .request-body-row { grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1fr) 30px; }
+  :root .app-shell .request-body-panel .request-body-form-card .request-body-form-fields .request-body-row input:not([type='checkbox']) { padding-inline: 8px; }
 }

@@ -133,6 +133,7 @@ impl Store {
         ensure!(!id.is_empty()&&id.len()<=128,"Invalid captured request ID");
         let mut conn=self.0.lock().map_err(|_|anyhow::anyhow!("Database lock poisoned"))?;
         let tx=conn.transaction()?;
+        super::body_capture::ensure_recorded(&tx,id,"request")?;
         let lengths: Option<(usize,usize,usize)> = tx.query_row("SELECT length(CAST(json_extract(data,'$.request.url') AS BLOB)),length(CAST(json_extract(data,'$.request.headers') AS BLOB)),length(CAST(json_extract(data,'$.request.method') AS BLOB)) FROM flows WHERE id=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
         let (url,headers,method)=lengths.context("Captured request not found")?;
         ensure!(url<=8192&&headers<=128*1024&&method<=32,"Captured request exceeds MCP editor limits");

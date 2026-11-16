@@ -37,6 +37,9 @@ pub struct TrafficOrigin {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Flow {
+    /// Missing means legacy semantics; tunnel metadata is conservatively unavailable.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub body_capture: std::collections::BTreeMap<String, crate::body_capture::BodyCaptureState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traffic_origin: Option<TrafficOrigin>,
     /// Explicit lifecycle; old files deserialize to unknown rather than appearing pending.

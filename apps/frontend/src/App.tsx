@@ -19,6 +19,7 @@ import WebSocketFrames from './WebSocketFrames';
 import DecryptionSettings from './DecryptionSettings';
 import { readClipboard, writeClipboard } from './clipboard';
 import RequestBodyEditor from './RequestBodyEditor';
+import {isBodyRecorded} from './bodyCapture';
 import {createHistoryRefresh, flowBodyLength, isFlowMetadata, loadCompleteFlow, loadFlowRecord} from './flowRecords';
 import RequestLibrary from './RequestLibrary';
 import SaveRequestDialog from './SaveRequestDialog';
@@ -192,7 +193,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
     return id;
   }
   async function openRecordedEditor(record: FlowRecord, mode: 'draft' | 'result' = 'draft') {
-    try { openEditor(await loadCompleteFlow(record), mode); }
+    try { openEditor(await loadCompleteFlow(record,undefined,['request']), mode); }
     catch (error) { notify(String(error)); }
   }
   function closeEditors(ids: string[]) {
@@ -530,7 +531,7 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
   async function copyResponse() {
     if(!flow?.response)return;
     try{
-      const full=await loadCompleteFlow(flow);
+      const full=await loadCompleteFlow(flow,undefined,['response']);
       if(full.response)await copy(decodeText(full.response.bodyBase64));
     }catch(error){notify(String(error))}
   }
@@ -614,8 +615,8 @@ export default function App({initialImportStatus}:{initialImportStatus?:Configur
           </div>
 
           </div><div className="replay-response"><div className="response-heading"><button className="response-collapse" aria-expanded={!responseCollapsed} aria-label={responseCollapsed ? t("展开响应面板") : t("收起响应面板")} onClick={() => setResponseCollapsed(value => !value)}><ChevronDown size={15} style={{ transform: responseCollapsed ? 'rotate(-90deg)' : undefined }} />{t("响应 ·")}{responseCollapsed ? t("展开") : t("收起")}</button>{flow?.response && <div className="response-meta"><span className="response-protocol" title={t("代理到上游服务器的实际 TLS 版本")}>{flow.state === 'blocked' ? '—' : flow.response.tlsVersion ?? (flow.request.url.startsWith('https:') ? t("TLS 未记录") : t("明文"))}</span><span className="response-protocol" aria-label={t("响应协议")} title={t("本次上游响应实际使用的协议")}>{flow.state === 'blocked' ? t('本地阻止') : flow.response.version}</span><span className={(flow.response.status >= 400 ? 'bad' : 'success')}>{flow.response.status} {flow.response.status === 200 ? 'OK' : ''}</span><span>{flow.durationMs} ms</span><span>{responseBodyLength===undefined?'—':`${(responseBodyLength/1024).toFixed(2)} KB`}</span></div>}</div>
-          <div className="tabs response-tabs">{[['body', t("响应体")], ['headers', t("响应头")], ['notes', t("发送说明")]].map(([key, label]) => <button className={responseTab === key ? 'tab active' : 'tab'} key={key} onClick={() => setResponseTab(key)}>{label}</button>)}<div className="tabs-right"><FileJson size={13} />{responseTab === 'body' ? 'RESPONSE' : 'DETAILS'}<button hidden={responseTab === 'body'} className="icon-button" title={t("复制响应")} disabled={!flow?.response||(isFlowMetadata(flow)&&!connected)} onClick={() => void copyResponse()}><Copy size={13} /></button></div></div>
-          <div className="response-content">{flow?.state === 'blocked' && <div className="blocked-banner" role="status">{t('请求已被 Block 规则阻止')} · {flow.notes.join(' · ')}</div>}{flow?.error && <div className="error-box">{flow.error}</div>}{view==='replay'&&!responseCollapsed&&(responseTab === 'body' ? flow?.websocket ? <WebSocketFrames key={flow.id} flow={flow} messageDraft={wsDrafts[editor?.id??'']} onMessageDraftChange={patch=>{const id=editor?.id;if(id)setWsDrafts(v=>({...v,[id]:{...(v[id]??{body:'',opcode:'1'}),...patch}}));}} onCopy={value=>void copy(value)} /> : flow?.response ? flow.response.headers.some(h=>!h.disabled&&h.name.toLowerCase()==='content-type'&&isGrpcContentType(h.value)) ? <GrpcResponse flow={flow} visible={view==='replay'&&!responseCollapsed&&responseTab==='body'} connected={connected}/> : isFlowMetadata(flow) ? <RecordedBody key={flow.id} flow={flow} variant="response" headers={flow.response.headers} connected={connected} onCopy={value=>void copy(value)} /> : <ResponseBody key={flow.id} body={flow.response.bodyBase64} headers={flow.response.headers} complete={flow.state === "completed" || flow.state === "imported"} onCopy={value => void copy(value)} /> : <div className="empty"><Code2 size={27} /><p>{(busy||["sending","receiving"].includes(flow?.state??"")) ? t("正在发送；可以切换标签或继续编辑，改动将在下次发送时生效。") : t("发送请求后在这里查看响应")}</p></div> : responseTab === 'headers' ? <div className="response-header-list">{flow?.response?.headers.map((h, i) => <div key={i}><span>{h.name}</span><code>{h.value}</code></div>)}</div> : <div className="notes">{(flow?.notes ?? [t("尚未发送。")]).map((note, i) => <p key={i}><CircleHelp size={14} />{note}</p>)}</div>)}</div>
+          <div className="tabs response-tabs">{[['body', t("响应体")], ['headers', t("响应头")], ['notes', t("发送说明")]].map(([key, label]) => <button className={responseTab === key ? 'tab active' : 'tab'} key={key} onClick={() => setResponseTab(key)}>{label}</button>)}<div className="tabs-right"><FileJson size={13} />{responseTab === 'body' ? 'RESPONSE' : 'DETAILS'}<button hidden={responseTab === 'body'} className="icon-button" title={t("复制响应")} disabled={!flow?.response||!isBodyRecorded(flow,'response')||(isFlowMetadata(flow)&&!connected)} onClick={() => void copyResponse()}><Copy size={13} /></button></div></div>
+          <div className="response-content">{flow?.state === 'blocked' && <div className="blocked-banner" role="status">{t('请求已被 Block 规则阻止')} · {flow.notes.join(' · ')}</div>}{flow?.error && <div className="error-box">{flow.error}</div>}{view==='replay'&&!responseCollapsed&&(responseTab === 'body' ? flow?.websocket ? <WebSocketFrames key={flow.id} flow={flow} messageDraft={wsDrafts[editor?.id??'']} onMessageDraftChange={patch=>{const id=editor?.id;if(id)setWsDrafts(v=>({...v,[id]:{...(v[id]??{body:'',opcode:'1'}),...patch}}));}} onCopy={value=>void copy(value)} /> : flow?.response ? !isBodyRecorded(flow,'response') ? <p role="status">{t('正文未记录')}</p> : flow.response.headers.some(h=>!h.disabled&&h.name.toLowerCase()==='content-type'&&isGrpcContentType(h.value)) ? <GrpcResponse flow={flow} visible={view==='replay'&&!responseCollapsed&&responseTab==='body'} connected={connected}/> : isFlowMetadata(flow) ? <RecordedBody key={flow.id} flow={flow} variant="response" headers={flow.response.headers} connected={connected} onCopy={value=>void copy(value)} /> : <ResponseBody key={flow.id} body={flow.response.bodyBase64} headers={flow.response.headers} complete={flow.state === "completed" || flow.state === "imported"} onCopy={value => void copy(value)} /> : <div className="empty"><Code2 size={27} /><p>{(busy||["sending","receiving"].includes(flow?.state??"")) ? t("正在发送；可以切换标签或继续编辑，改动将在下次发送时生效。") : t("发送请求后在这里查看响应")}</p></div> : responseTab === 'headers' ? <div className="response-header-list">{flow?.response?.headers.map((h, i) => <div key={i}><span>{h.name}</span><code>{h.value}</code></div>)}</div> : <div className="notes">{(flow?.notes ?? [t("尚未发送。")]).map((note, i) => <p key={i}><CircleHelp size={14} />{note}</p>)}</div>)}</div>
           </div></SplitPane>
         </section>
       </div>
