@@ -171,6 +171,20 @@ impl Store {
         write_flow(&tx,flow)?;
         tx.commit()?; Ok(())
     }
+    /// A single observer may create once, then update only a still-live row.
+    /// Deletion, clear and tombstones never become successful stale broadcasts.
+    pub(crate) fn insert_observation(&self, flow: &Flow, initial: bool) -> Result<bool> {
+        let mut conn = self.0.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
+        let tx = conn.transaction()?;
+        let (exists, deleted): (bool, bool) = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM flows WHERE id=?1),EXISTS(SELECT 1 FROM deleted_flows WHERE id=?1)",
+            [&flow.id], |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if deleted || (initial && exists) || (!initial && !exists) { return Ok(false); }
+        write_flow(&tx, flow)?;
+        tx.commit()?;
+        Ok(true)
+    }
     /// Save a live stream snapshot. The named body may grow within reserved
     /// SQLite BLOB capacity; all other slots keep exact storage semantics.
     pub fn insert_streaming(&self, flow:&Flow, growing_slot:&str) -> Result<()> {

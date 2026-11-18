@@ -2,6 +2,8 @@
 
 局域网协同抓包（PC 二维码、Android VPN 扫码配对与远程转发）正在分阶段开发，协议和当前边界见 [局域网协同抓包](mobile-lan-capture.md)。开发分支已加入独立认证接收端、二维码、Android 扫码及 TCP/UDP 加密转发，并通过桌面与移动构建；设备端到端验收仍未完成，不作为正式移动版交付。
 
+2026-11-18 开发增量：PC 的认证远程 TCP 转发可旁路观察首份 HTTP/1 请求头和最终响应头，保留原始字节与字段顺序；正文继续明确未记录。HTTPS/TLS、HTTP/2 和无法识别的数据保持透明转发，仅保留连接元数据，不作解密或第二份请求解析。观察存储失败不会中断网络；撤销、空闲到期、清空/删除与半关闭已有隔离回归。完整 framing/FIFO、PC/Android 扫码 VPN 端到端和长期切网仍需后续开发与设备验收；此增量尚未进入正式包，也未替换用户运行中的内核。详见[首份 HTTP 头观察](mobile-lan-capture.md#首份-http-头观察2026-11-18-开发增量)。
+
 2026-11-16 本地开发增量：Android/iOS 历史详情、正文查看与复制重发采用 `bodyCapture` 契约，未记录正文显示独立状态，不把旧 LAN 的 0 B 缓存当作完整空体；显式已记录的真实空正文继续可用。共享会话导出对含未记录实体的快照使用 version 2，完整抓包仍为 version 1，新桌面读取器兼容两者。Android Java 回归与 API36 离线编译通过；来源 `e8930ee9f7537e5109d825e7d9e2720ad139dd07` 的[Check #83](https://github.com/godstealer/http-capture/actions/runs/43793782841)、[Android 构建与模拟器](https://github.com/godstealer/http-capture/actions/runs/43793782823)及[iOS Mac 工作流](https://github.com/godstealer/http-capture/actions/runs/43793782877)均已成功，公开运行状态与提交身份已核对。移动端设备签名、扫码/VPN 远程端到端及真机验收仍未完成，未发布正式移动安装包。详见[正文可用性契约](mobile-lan-capture.md#正文可用性契约2026-11-16-开发增量)。
 
 2026-11-15：PC 自报设备名称显示已随桌面 0.1.82 交付；Android 对应上报仍属于测试客户端，不是正式移动发行。制造商/型号经认证会话传给 PC，独立于应用/硬件身份；旧 PC 降级前仍须额外验证会话。[Android API36 双架构构建与模拟器烟测](https://github.com/godstealer/http-capture/actions/runs/43674526716) 已在 `94c1e4d` 上通过（`smokeStatus=ok`、`INSTRUMENTATION_CODE: -1`），原严格 TUN 来源断言保留。[iOS Mac 验证](https://github.com/godstealer/http-capture/actions/runs/43671382438) 在相关源码 `23e0687` 上通过模拟器启动及无签名 iPhone 编译，此后 iOS/Rust 源码未变；不将其记为新的同源 iOS 或真机验收。完整扫码配对到 VPN 远程流量的设备验收、签名和正式移动安装包仍未完成，详见[局域网协同抓包](mobile-lan-capture.md)。

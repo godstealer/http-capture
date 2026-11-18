@@ -8,9 +8,13 @@ use anyhow::{ensure, Context, Result};
 use rcgen::{CertificateParams, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
-use std::{collections::{HashMap, HashSet}, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::{HashMap, HashSet}, net::{Ipv4Addr, SocketAddr}, sync::{Arc, Mutex}, time::{SystemTime, UNIX_EPOCH}};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, UdpSocket}, sync::{broadcast, mpsc, watch, Semaphore}, task::JoinHandle, time::{timeout, Duration}};
 use tokio_rustls::TlsAcceptor;
+
+#[path = "mobile_gateway_capture.rs"]
+mod capture;
+use capture::copy_observed_tunnel;
 
 const SESSION_LIFETIME_SECONDS: u64 = 3600;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -199,75 +203,62 @@ async fn serve(socket: TcpStream, peer: SocketAddr, acceptor: TlsAcceptor,
         2 => {
             let session_info = {
                 let locked = state.lock().unwrap_or_else(|error| error.into_inner());
+                // Pair/revoke changes hold this lock too: validate and mark the
+                // watched epoch atomically, including changes during TLS setup.
+                let epoch = *generation.borrow_and_update();
                 locked.session_info(&token, unix_seconds().unwrap_or(u64::MAX))
+                    .map(|(expiry, name)| (expiry, name, epoch))
             };
-            let Some((session_expiry, device_name)) = session_info else {
+            let Some((session_expiry, device_name, generation_at_start)) = session_info else {
                 tls.write_all(&[1]).await?;
                 anyhow::bail!("Mobile session is not authorized");
             };
-            let generation_at_start = *generation.borrow();
-            let host_len = timeout(HANDSHAKE_TIMEOUT, tls.read_u16()).await?? as usize;
-            ensure!(host_len > 0 && host_len <= MAX_HOST_BYTES, "Invalid destination host length");
-            let mut host_bytes = vec![0; host_len];
-            timeout(HANDSHAKE_TIMEOUT, tls.read_exact(&mut host_bytes)).await??;
-            let host = String::from_utf8(host_bytes)?;
-            ensure!(host.bytes().all(|byte| byte.is_ascii_alphanumeric() || b".-:".contains(&byte)),
-                "Invalid destination host");
-            let port = timeout(HANDSHAKE_TIMEOUT, tls.read_u16()).await??;
-            ensure!(port != 0, "Invalid destination port");
-            let destinations = timeout(HANDSHAKE_TIMEOUT, tokio::net::lookup_host((host.as_str(), port))).await??;
-            let mut upstream = None;
-            for destination in destinations {
-                if !allowed_destination(destination, tls.get_ref().0.local_addr()?, allow_loopback_destination) {
-                    continue;
+            let remaining = Duration::from_secs(session_expiry).saturating_sub(
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::MAX));
+            let expires = tokio::time::Instant::now() + remaining;
+            let open_destination = async {
+                let host_len = timeout(HANDSHAKE_TIMEOUT, tls.read_u16()).await?? as usize;
+                ensure!(host_len > 0 && host_len <= MAX_HOST_BYTES, "Invalid destination host length");
+                let mut host_bytes = vec![0; host_len];
+                timeout(HANDSHAKE_TIMEOUT, tls.read_exact(&mut host_bytes)).await??;
+                let host = String::from_utf8(host_bytes)?;
+                ensure!(host.bytes().all(|byte| byte.is_ascii_alphanumeric() || b".-:".contains(&byte)), "Invalid destination host");
+                let port = timeout(HANDSHAKE_TIMEOUT, tls.read_u16()).await??;
+                ensure!(port != 0, "Invalid destination port");
+                let destinations = timeout(HANDSHAKE_TIMEOUT, tokio::net::lookup_host((host.as_str(), port))).await??;
+                for destination in destinations {
+                    if !allowed_destination(destination, tls.get_ref().0.local_addr()?, allow_loopback_destination) { continue; }
+                    if let Ok(Ok(stream)) = timeout(Duration::from_secs(10), TcpStream::connect(destination)).await {
+                        return Ok::<_, anyhow::Error>((host.clone(), port, stream));
+                    }
                 }
-                if let Ok(Ok(stream)) = timeout(Duration::from_secs(10), TcpStream::connect(destination)).await {
-                    upstream = Some(stream);
-                    break;
-                }
-            }
-            let Some(mut upstream) = upstream else {
-                tls.write_all(&[2]).await?;
+                timeout(HANDSHAKE_TIMEOUT, tls.write_all(&[2])).await??;
                 anyhow::bail!("Destination is unavailable or disallowed");
             };
-            tls.write_all(&[0]).await?;
-            let _ = events.send(GatewayEvent::Connected { peer, host: host.clone(), port });
-            let started = Instant::now();
-            let mut first_bytes = [0u8; 8192];
-            let initial = match timeout(Duration::from_millis(200), tls.read(&mut first_bytes)).await {
-                Ok(result) => result?, Err(_) => 0,
-            };
-            if initial > 0 { upstream.write_all(&first_bytes[..initial]).await?; }
-            let mut flow = engine.as_ref().map(|engine| {
-                let (method, url) = observed_request(&first_bytes[..initial], &host, port);
-                let flow = mobile_flow(peer, method, url, device_name.clone())?;
-                engine.store.insert(&flow)?;
-                let _ = engine.events.send(flow.clone());
-                Ok::<_, anyhow::Error>(flow)
-            }).transpose()?;
-            let transferred = tokio::select! {
-                result = tokio::io::copy_bidirectional(&mut tls, &mut upstream) => result.map_err(anyhow::Error::from),
-                _ = tokio::time::sleep(Duration::from_secs(session_expiry.saturating_sub(unix_seconds()?))) => {
-                    Err(anyhow::anyhow!("Mobile session expired"))
-                }
-                _ = generation.changed() => {
-                    Err(anyhow::anyhow!(if *generation.borrow() != generation_at_start
-                        { "Mobile session was revoked" } else { "Mobile gateway stopped" }))
-                }
-            };
-            if let (Some(engine), Some(flow)) = (engine.as_ref(), flow.as_mut()) {
-                flow.duration_ms = started.elapsed().as_millis() as u64;
-                match &transferred {
-                    Ok((sent, received)) => {
-                        flow.state = "completed".into();
-                        flow.notes.push(format!("Tunnel bytes: client={}, server={received}", *sent + initial as u64));
-                    }
-                    Err(error) => { flow.state = "failed".into(); flow.error = Some(error.to_string()); }
-                }
-                engine.store.insert(flow)?;
-                let _ = engine.events.send(flow.clone());
+            let (host, port, upstream) = tokio::select! {
+                biased;
+                _ = generation.changed() => Err(anyhow::anyhow!("Mobile session was revoked during connection setup")),
+                _ = tokio::time::sleep_until(expires) => Err(anyhow::anyhow!("Mobile session expired during connection setup")),
+                result = open_destination => result,
+            }?;
+            {
+                let locked = state.lock().unwrap_or_else(|error| error.into_inner());
+                ensure!(locked.session_info(&token, unix_seconds().unwrap_or(u64::MAX)).is_some()
+                    && *generation.borrow() == generation_at_start, "Mobile session was revoked before connection acknowledgement");
             }
-            transferred?;
+            tokio::select! {
+                biased;
+                _ = generation.changed() => anyhow::bail!("Mobile session was revoked before connection acknowledgement"),
+                _ = tokio::time::sleep_until(expires) => anyhow::bail!("Mobile session expired before connection acknowledgement"),
+                result = timeout(HANDSHAKE_TIMEOUT, tls.write_all(&[0])) => { result??; }
+            }
+            let _ = events.send(GatewayEvent::Connected { peer, host: host.clone(), port });
+            let authority = if host.contains(':') { format!("[{host}]") } else { host };
+            let recording = engine.and_then(|engine| match mobile_flow(peer, "CONNECT".into(), format!("tcp://{authority}:{port}"), device_name) {
+                Ok(flow) => Some((engine, flow)),
+                Err(error) => { tracing::debug!(%error,"Mobile tunnel metadata initialization stopped"); None }
+            });
+            copy_observed_tunnel(tls, upstream, recording, &mut generation, generation_at_start, expires).await?;
         }
         3 => {
             let authorized = {
@@ -328,22 +319,6 @@ fn allowed_destination(target: SocketAddr, gateway: SocketAddr, allow_loopback: 
     }
 }
 
-fn observed_request(bytes: &[u8], host: &str, port: u16) -> (String, String) {
-    let authority = if host.contains(':') { format!("[{host}]") } else { host.to_string() };
-    let fallback = ("CONNECT".into(), format!("tcp://{authority}:{port}"));
-    let Some(end) = bytes.windows(2).position(|pair| pair == b"\r\n") else { return fallback; };
-    let Ok(line) = std::str::from_utf8(&bytes[..end]) else { return fallback; };
-    let mut fields = line.split_ascii_whitespace();
-    let (Some(method), Some(path), Some(version)) = (fields.next(), fields.next(), fields.next()) else { return fallback; };
-    if fields.next().is_some() || !version.starts_with("HTTP/1.")
-        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
-        || method.len() > 16 || path.len() > 4096 { return fallback; }
-    let url = if path.starts_with("http://") || path.starts_with("https://") { path.to_string() }
-        else if path.starts_with('/') { format!("http://{authority}:{port}{path}") }
-        else { return fallback };
-    (method.into(), url)
-}
-
 fn mobile_flow(peer: SocketAddr, method: String, url: String, device_name: Option<String>) -> Result<Flow> {
     Ok(Flow {
         body_capture: crate::body_capture::VARIANTS.into_iter().map(|variant| (variant.into(), crate::body_capture::BodyCaptureState::NotRecorded)).collect(),
@@ -359,7 +334,7 @@ fn mobile_flow(peer: SocketAddr, method: String, url: String, device_name: Optio
             pseudo_headers: vec![], engine: "native".into(), method, url, headers: vec![],
             body_base64: Default::default(), tls: Default::default() },
         response: None, error: None, raw_request_head_base64: None,
-        notes: vec!["Android VPN 加密转发：只记录可见连接和首个 HTTP 请求元数据；HTTPS 正文未解密。".into()],
+        notes: vec!["Android VPN 加密转发：记录连接与首份可见 HTTP 请求/响应头；不保存正文，HTTPS 未解密。".into()],
     })
 }
 
@@ -761,9 +736,15 @@ mod tests {
 
     #[test]
     fn visible_http_request_uses_method_and_path_without_claiming_tls_body() {
-        assert_eq!(observed_request(b"GET /search?q=1 HTTP/1.1\r\nHost: example.test\r\n\r\n",
-            "example.test", 80), ("GET".into(), "http://example.test:80/search?q=1".into()));
-        assert_eq!(observed_request(&[0x16, 0x03, 0x01, 0, 42], "example.test", 443),
-            ("CONNECT".into(), "tcp://example.test:443".into()));
+        let mut observer = crate::mobile_http_observer::HeadObserver::default();
+        let head = observer.observe_request(b"GET /search?q=1 HTTP/1.1\r\nHost: example.test\r\n\r\n").unwrap();
+        assert_eq!(head.method,"GET");assert_eq!(head.target,"/search?q=1");
+        let mut tls = crate::mobile_http_observer::HeadObserver::default();
+        assert!(tls.observe_request(&[0x16,0x03,0x01,0,42]).is_none());
+        assert!(tls.request_finished());
     }
 }
+
+#[cfg(test)]
+#[path = "mobile_gateway_observer_tests.rs"]
+mod observer_tests;
