@@ -1,19 +1,21 @@
-//! Best-effort observation never changes forwarding bytes or IO outcomes.
+//! Best-effort HTTP metadata observation never changes forwarding bytes or IO outcomes.
 use crate::{
-    mobile_http_observer::{HeadObserver, RequestHead, ResponseHead},
+    mobile_http_observer::RequestHead,
+    mobile_http_session::{SessionEvent, SessionObserver, MAX_PENDING as MAX_ACTIVE_FLOWS},
     model::{CapturedResponse, Flow},
     Engine,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::{
+    collections::BTreeMap,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
     task::{Context, Poll},
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{mpsc, oneshot, watch, Semaphore},
+    sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore},
     time::Instant as Deadline,
 };
 
@@ -21,26 +23,111 @@ use tokio::{
 // When this budget is busy, the authenticated tunnel continues without observation.
 static WRITERS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 const MAX_WRITERS: usize = 64;
+const MAX_EVENTS: usize = 64;
+const MAX_QUEUED_HEAD_BYTES: usize = 256 * 1024;
+const IO_ERROR_REASON: &str = "Observation ended after IO error";
+type StopReason = Arc<Mutex<Option<(&'static str, Instant)>>>;
 
 #[derive(Clone, Copy)]
 enum Direction {
     Request,
     Response,
 }
-enum Head {
-    Request(RequestHead),
-    Response(ResponseHead),
+struct QueuedEvent {
+    event: SessionEvent,
+    at: Instant,
+    at_ms: u64,
+    _budget: Option<OwnedSemaphorePermit>,
 }
 struct Observation {
-    parser: Option<HeadObserver>,
-    events: mpsc::Sender<Head>,
+    parser: Option<SessionObserver>,
+    // There is exactly one sender. Dropping it closes the queue immediately,
+    // even when the other direction never polls again after observation stops.
+    events: Option<mpsc::Sender<QueuedEvent>>,
+    budget: Arc<Semaphore>,
+    stopped: StopReason,
+}
+impl Observation {
+    fn disable(&mut self, reason: &'static str) {
+        *self.stopped.lock().unwrap_or_else(|e| e.into_inner()) = Some((reason, Instant::now()));
+        self.parser = None;
+        self.events.take();
+    }
+    fn observe(&mut self, direction: Direction, bytes: &[u8], eof: bool) {
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if events.is_closed() {
+            self.disable("Observation writer stopped");
+            return;
+        }
+        let Some(parser) = self.parser.as_mut() else {
+            return;
+        };
+        let mut refused = false;
+        let stopped = self.stopped.clone();
+        let budget = self.budget.clone();
+        let mut emit = |event: SessionEvent| {
+            if let SessionEvent::Stopped { reason } = &event {
+                *stopped.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((*reason, Instant::now()));
+            }
+            let bytes = match &event {
+                SessionEvent::Request { head, .. } => head.raw.len(),
+                SessionEvent::Response { head, .. } => head.raw.len(),
+                _ => 0,
+            };
+            let permit = if bytes == 0 {
+                None
+            } else {
+                match budget.clone().try_acquire_many_owned(bytes as u32) {
+                    Ok(permit) => Some(permit),
+                    Err(_) => {
+                        refused = true;
+                        return false;
+                    }
+                }
+            };
+            let queued = QueuedEvent {
+                event,
+                at: Instant::now(),
+                at_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                _budget: permit,
+            };
+            if events.try_send(queued).is_err() {
+                refused = true;
+                return false;
+            }
+            true
+        };
+        match (direction, eof) {
+            (Direction::Request, false) => parser.observe_request(bytes, &mut emit),
+            (Direction::Response, false) => parser.observe_response(bytes, &mut emit),
+            (Direction::Request, true) => parser.eof_request(&mut emit),
+            (Direction::Response, true) => parser.eof_response(&mut emit),
+        }
+        if refused {
+            self.disable("Observation event or byte budget exhausted");
+        } else if parser.request_finished() && parser.response_finished() {
+            self.parser = None;
+            self.events.take();
+        }
+    }
+    fn direction_finished(&self, direction: Direction) -> bool {
+        self.parser.as_ref().is_none_or(|parser| match direction {
+            Direction::Request => parser.request_finished(),
+            Direction::Response => parser.response_finished(),
+        })
+    }
 }
 struct ObservedIo<T> {
     inner: T,
     direction: Direction,
     capture: Option<Arc<Mutex<Observation>>>,
 }
-
 impl<T: AsyncRead + Unpin> AsyncRead for ObservedIo<T> {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -53,49 +140,32 @@ impl<T: AsyncRead + Unpin> AsyncRead for ObservedIo<T> {
         let result = Pin::new(&mut this.inner).poll_read(cx, buf);
         match &result {
             Poll::Ready(Ok(())) if buf.filled().len() > before => {
-                let mut finished = false;
-                if let Some(capture) = &this.capture {
+                let finished = this.capture.as_ref().is_some_and(|capture| {
                     if let Ok(mut state) = capture.lock() {
-                        if state.events.is_closed() {
-                            state.parser = None;
-                        }
-                        let event = state
-                            .parser
-                            .as_mut()
-                            .and_then(|parser| match this.direction {
-                                Direction::Request => parser
-                                    .observe_request(&buf.filled()[before..])
-                                    .map(Head::Request),
-                                Direction::Response => parser
-                                    .observe_response(&buf.filled()[before..])
-                                    .map(Head::Response),
-                            });
-                        if let Some(event) = event {
-                            if state.events.try_send(event).is_err() {
-                                state.parser = None;
-                            }
-                        }
-                        finished =
-                            state
-                                .parser
-                                .as_ref()
-                                .is_none_or(|parser| match this.direction {
-                                    Direction::Request => parser.request_finished(),
-                                    Direction::Response => parser.response_finished(),
-                                });
+                        state.observe(this.direction, &buf.filled()[before..], false);
+                        state.direction_finished(this.direction)
                     } else {
-                        finished = true;
+                        true
                     }
-                }
+                });
                 if finished {
                     this.capture = None;
                 }
             }
-            // A zero-capacity successful read is not an EOF observation.
             Poll::Ready(Ok(())) if space > 0 => {
+                if let Some(capture) = &this.capture {
+                    if let Ok(mut state) = capture.lock() {
+                        state.observe(this.direction, &[], true);
+                    }
+                }
                 this.capture = None;
             }
             Poll::Ready(Err(_)) => {
+                if let Some(capture) = &this.capture {
+                    if let Ok(mut state) = capture.lock() {
+                        state.disable(IO_ERROR_REASON);
+                    }
+                }
                 this.capture = None;
             }
             _ => {}
@@ -130,11 +200,14 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for ObservedIo<T> {
 }
 
 struct Finished {
+    at: Instant,
     duration_ms: u64,
     outcome: Result<(u64, u64), String>,
 }
 
-async fn save(engine: &Arc<Engine>, flow: &Flow, initial: bool) -> bool {
+// Some(false) is a user deletion/clear, not a storage failure. It suppresses
+// that sequence without retrying creation or aborting unrelated future flows.
+async fn save(engine: &Arc<Engine>, flow: &Flow, initial: bool) -> Option<bool> {
     let owner = engine.clone();
     let snapshot = flow.clone();
     match tokio::task::spawn_blocking(move || owner.store.insert_observation(&snapshot, initial))
@@ -142,12 +215,12 @@ async fn save(engine: &Arc<Engine>, flow: &Flow, initial: bool) -> bool {
     {
         Ok(Ok(true)) => {
             let _ = engine.events.send(flow.clone());
-            true
+            Some(true)
         }
-        Ok(Ok(false)) => false,
+        Ok(Ok(false)) => Some(false),
         result => {
             tracing::debug!(?result, "Mobile tunnel observation persistence stopped");
-            false
+            None
         }
     }
 }
@@ -172,61 +245,219 @@ fn apply_request(flow: &mut Flow, request: RequestHead) {
     flow.raw_request_head_base64 = Some(STANDARD.encode(request.raw));
 }
 
+struct ActiveFlow {
+    flow: Flow,
+    started: Instant,
+    request_ended: bool,
+    response_ended: bool,
+}
+async fn update_active(
+    engine: &Arc<Engine>,
+    active: &mut BTreeMap<u64, ActiveFlow>,
+    sequence: u64,
+    at: Instant,
+) -> bool {
+    let Some(entry) = active.get_mut(&sequence) else {
+        return true;
+    };
+    if entry.request_ended && entry.response_ended {
+        let mut entry = active.remove(&sequence).unwrap();
+        entry.flow.state = "completed".into();
+        entry.flow.duration_ms = at.saturating_duration_since(entry.started).as_millis() as u64;
+        return save(engine, &entry.flow, false).await.is_some();
+    }
+    true
+}
 async fn record(
     engine: Arc<Engine>,
-    mut flow: Flow,
-    mut heads: mpsc::Receiver<Head>,
+    flow: Flow,
+    mut heads: mpsc::Receiver<QueuedEvent>,
     finished: oneshot::Receiver<Finished>,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    stopped: StopReason,
+    _permit: OwnedSemaphorePermit,
 ) {
-    if !save(&engine, &flow, true).await {
+    if save(&engine, &flow, true).await != Some(true) {
         return;
     }
-    // There are at most two head events. Drain them before the final lifecycle;
-    // a separately selected finish message must never discard already read heads.
-    while let Some(head) = heads.recv().await {
-        match head {
-            Head::Request(request) => apply_request(&mut flow, request),
-            Head::Response(response) => {
-                flow.response = Some(CapturedResponse {
-                    status: response.status,
-                    version: response.version,
-                    headers: response.headers,
-                    raw_head_base64: Some(STANDARD.encode(response.raw)),
-                    body_base64: Default::default(),
-                    trailers: vec![],
-                    upstream_tls: None,
-                    tls_version: None,
-                    sent_request_headers: None,
-                });
+    let seed = flow.clone();
+    let mut connection = Some(flow);
+    let mut active = BTreeMap::<u64, ActiveFlow>::new();
+    // Only incomplete sequences are retained. Completion is saved immediately,
+    // removed from this map and never rewritten at the eventual tunnel finish.
+    while let Some(queued) = heads.recv().await {
+        let at = queued.at;
+        match queued.event {
+            SessionEvent::Request { sequence, head } => {
+                if active.len() >= MAX_ACTIVE_FLOWS {
+                    *stopped.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(("HTTP active-flow budget exhausted", at));
+                    heads.close();
+                    break;
+                }
+                let initial = sequence != 0;
+                let mut flow = if !initial {
+                    let Some(flow) = connection.take() else {
+                        return;
+                    };
+                    flow
+                } else {
+                    let mut next = seed.clone();
+                    next.id = uuid::Uuid::new_v4().to_string();
+                    next
+                };
+                flow.started_at = queued.at_ms;
+                apply_request(&mut flow, head);
+                match save(&engine, &flow, initial).await {
+                    Some(true) => {
+                        active.insert(
+                            sequence,
+                            ActiveFlow {
+                                flow,
+                                started: at,
+                                request_ended: false,
+                                response_ended: false,
+                            },
+                        );
+                    }
+                    Some(false) => {} // Removed rows cannot be recreated by later response events.
+                    None => return,
+                }
+            }
+            SessionEvent::RequestEnd { sequence } => {
+                if let Some(entry) = active.get_mut(&sequence) {
+                    entry.request_ended = true;
+                }
+                if !update_active(&engine, &mut active, sequence, at).await {
+                    return;
+                }
+            }
+            SessionEvent::Response {
+                sequence,
+                head: response,
+            } => {
+                if let Some(entry) = active.get_mut(&sequence) {
+                    entry.flow.response = Some(CapturedResponse {
+                        status: response.status,
+                        version: response.version,
+                        headers: response.headers,
+                        raw_head_base64: Some(STANDARD.encode(response.raw)),
+                        body_base64: Default::default(),
+                        trailers: vec![],
+                        upstream_tls: None,
+                        tls_version: None,
+                        sent_request_headers: None,
+                    });
+                    match save(&engine, &entry.flow, false).await {
+                        Some(true) => {}
+                        Some(false) => {
+                            active.remove(&sequence);
+                        }
+                        None => return,
+                    }
+                }
+            }
+            SessionEvent::ResponseEnd { sequence } => {
+                if let Some(entry) = active.get_mut(&sequence) {
+                    entry.response_ended = true;
+                }
+                if !update_active(&engine, &mut active, sequence, at).await {
+                    return;
+                }
+            }
+            SessionEvent::Stopped { .. } => {}
+        }
+        // The queued raw-head byte permit is held through its persistence await.
+    }
+    let reason = *stopped.lock().unwrap_or_else(|e| e.into_inner());
+    // A real read error is immediately followed by the copy result. Preserve
+    // that concrete failure; parser/budget stops must not wait for idle IO.
+    if let Some((reason, stopped_at)) = reason.filter(|(reason, _)| *reason != IO_ERROR_REASON) {
+        // A queue overflow has no room for a Stopped event. The separate reason
+        // plus closed single sender still finalizes open metadata without waiting
+        // for an idle peer or the one-hour forwarding deadline.
+        for (_, mut entry) in std::mem::take(&mut active) {
+            entry.flow.state = "interrupted".into();
+            entry.flow.duration_ms = stopped_at
+                .saturating_duration_since(entry.started)
+                .as_millis() as u64;
+            entry.flow.notes.push(format!(
+                "HTTP metadata observation stopped: {reason}. Body bytes were not recorded."
+            ));
+            if save(&engine, &entry.flow, false).await.is_none() {
+                return;
             }
         }
-        if !save(&engine, &flow, false).await {
+        if connection.is_none() {
             return;
         }
     }
     match finished.await {
         Ok(finished) => {
-            flow.duration_ms = finished.duration_ms;
-            match finished.outcome {
-                Ok((sent, received)) => {
-                    flow.state = "completed".into();
-                    flow.notes
-                        .push(format!("Tunnel bytes: client={sent}, server={received}"));
+            // The seed is only a TCP connection placeholder until a request head
+            // is recognized. Tunnel-wide counts never overwrite completed HTTPs.
+            if let Some(mut flow) = connection {
+                flow.duration_ms = finished.duration_ms;
+                match &finished.outcome {
+                    Ok((sent, received)) => {
+                        flow.state = "completed".into();
+                        flow.notes
+                            .push(format!("Tunnel bytes: client={sent}, server={received}"));
+                    }
+                    Err(error) => {
+                        flow.state = "failed".into();
+                        flow.error = Some(error.clone());
+                    }
                 }
-                Err(error) => {
-                    flow.state = "failed".into();
-                    flow.error = Some(error);
+                if let Some((reason, _)) = reason {
+                    flow.notes
+                        .push(format!("HTTP observation unavailable: {reason}"));
+                }
+                let _ = save(&engine, &flow, false).await;
+            }
+            for (_, mut entry) in active {
+                entry.flow.state = if finished.outcome.is_err() {
+                    "failed"
+                } else {
+                    "interrupted"
+                }
+                .into();
+                entry.flow.duration_ms = finished
+                    .at
+                    .saturating_duration_since(entry.started)
+                    .as_millis() as u64;
+                entry.flow.notes.push("HTTP framing did not finish before the TCP tunnel ended; body bytes were not recorded.".into());
+                if let Err(error) = &finished.outcome {
+                    entry.flow.error = Some(error.clone());
+                }
+                if save(&engine, &entry.flow, false).await.is_none() {
+                    return;
                 }
             }
         }
         Err(_) => {
-            flow.state = "interrupted".into();
-            flow.notes
-                .push("Tunnel task ended before its final IO result was recorded.".into());
+            if let Some(flow) = connection {
+                active.insert(
+                    0,
+                    ActiveFlow {
+                        flow,
+                        started: Instant::now(),
+                        request_ended: false,
+                        response_ended: false,
+                    },
+                );
+            }
+            for (_, mut entry) in active {
+                entry.flow.state = "interrupted".into();
+                entry
+                    .flow
+                    .notes
+                    .push("Tunnel task ended before its final IO result was recorded.".into());
+                if save(&engine, &entry.flow, false).await.is_none() {
+                    return;
+                }
+            }
         }
     }
-    let _ = save(&engine, &flow, false).await;
 }
 
 pub(super) async fn copy_observed_tunnel<C, U>(
@@ -249,13 +480,16 @@ where
                 .clone()
                 .try_acquire_owned()
                 .ok()?;
-            let (events, heads) = mpsc::channel(2);
+            let (events, heads) = mpsc::channel(MAX_EVENTS);
             let (finish, finished) = oneshot::channel();
+            let stopped = Arc::new(Mutex::new(None));
             let capture = Arc::new(Mutex::new(Observation {
-                parser: Some(HeadObserver::default()),
-                events,
+                parser: Some(SessionObserver::default()),
+                events: Some(events),
+                budget: Arc::new(Semaphore::new(MAX_QUEUED_HEAD_BYTES)),
+                stopped: stopped.clone(),
             }));
-            let writer = tokio::spawn(record(engine, flow, heads, finished, permit));
+            let writer = tokio::spawn(record(engine, flow, heads, finished, stopped, permit));
             Some((Some(capture), Some(finish), Some(writer)))
         })
         .unwrap_or((None, None, None));
@@ -275,7 +509,6 @@ where
         _ = tokio::time::sleep_until(expires) => Err(anyhow::anyhow!("Mobile session expired")),
         result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => result.map_err(anyhow::Error::from),
     };
-    // Close revoked/completed sockets before waiting for observation persistence.
     drop(client);
     drop(upstream);
     if let Some(finish) = finish {
@@ -284,6 +517,7 @@ where
             .map(|counts| *counts)
             .map_err(ToString::to_string);
         let _ = finish.send(Finished {
+            at: Instant::now(),
             duration_ms: started.elapsed().as_millis() as u64,
             outcome,
         });
@@ -299,6 +533,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mobile_http_observer::HeadObserver;
     use std::future::poll_fn;
 
     #[tokio::test]
@@ -306,8 +541,10 @@ mod tests {
         let request = b"GET / HTTP/1.1\r\nHost: example.test\r\n\r\n";
         let (events, mut heads) = mpsc::channel(2);
         let state = Arc::new(Mutex::new(Observation {
-            parser: Some(HeadObserver::default()),
-            events,
+            parser: Some(SessionObserver::default()),
+            events: Some(events),
+            budget: Arc::new(Semaphore::new(MAX_QUEUED_HEAD_BYTES)),
+            stopped: Arc::new(Mutex::new(None)),
         }));
         let mut tap = ObservedIo {
             inner: request.as_slice(),
@@ -325,7 +562,11 @@ mod tests {
         poll_fn(|cx| Pin::new(&mut tap).poll_read(cx, &mut buffer))
             .await
             .unwrap();
-        let Some(Head::Request(head)) = heads.recv().await else {
+        let Some(QueuedEvent {
+            event: SessionEvent::Request { head, .. },
+            ..
+        }) = heads.recv().await
+        else {
             panic!("request head missing")
         };
         assert_eq!(head.raw, request);
@@ -475,6 +716,60 @@ mod tests {
         .unwrap();
     }
 
+    #[tokio::test]
+    async fn exhausted_event_queue_closes_without_polling_the_idle_peer() {
+        let (events, mut heads) = mpsc::channel(1);
+        let stopped = Arc::new(Mutex::new(None));
+        let shared = Arc::new(Mutex::new(Observation {
+            parser: Some(SessionObserver::default()),
+            events: Some(events),
+            budget: Arc::new(Semaphore::new(MAX_QUEUED_HEAD_BYTES)),
+            stopped: stopped.clone(),
+        }));
+        // This idle peer retains the shared observation. Queue termination must
+        // not depend on it performing another poll or releasing its Arc.
+        let _idle_peer = shared.clone();
+        shared.lock().unwrap().observe(
+            Direction::Request,
+            b"GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+            false,
+        );
+        assert!(stopped.lock().unwrap().is_some());
+        assert!(heads.recv().await.is_some());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), heads.recv())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(shared.lock().unwrap().events.is_none());
+    }
+
+    #[tokio::test]
+    async fn head_byte_budget_stops_recording_without_changing_successful_read() {
+        use tokio::io::AsyncReadExt;
+        let request = b"GET / HTTP/1.1\r\nHost: test\r\n\r\n";
+        let (events, mut heads) = mpsc::channel(64);
+        let budget = Arc::new(Semaphore::new(request.len() - 1));
+        let stopped = Arc::new(Mutex::new(None));
+        let mut tap = ObservedIo {
+            inner: request.as_slice(),
+            direction: Direction::Request,
+            capture: Some(Arc::new(Mutex::new(Observation {
+                parser: Some(SessionObserver::default()),
+                events: Some(events),
+                budget: budget.clone(),
+                stopped: stopped.clone(),
+            }))),
+        };
+        let mut result = Vec::new();
+        assert_eq!(tap.read_to_end(&mut result).await.unwrap(), request.len());
+        assert_eq!(result, request);
+        assert!(heads.recv().await.is_none());
+        assert!(stopped.lock().unwrap().is_some());
+        assert_eq!(budget.available_permits(), request.len() - 1);
+    }
+
     #[test]
     fn tap_preserves_pending_and_error_without_observing_failed_bytes() {
         struct PendingThenError(bool);
@@ -500,8 +795,10 @@ mod tests {
             inner: PendingThenError(false),
             direction: Direction::Request,
             capture: Some(Arc::new(Mutex::new(Observation {
-                parser: Some(HeadObserver::default()),
-                events,
+                parser: Some(SessionObserver::default()),
+                events: Some(events),
+                budget: Arc::new(Semaphore::new(MAX_QUEUED_HEAD_BYTES)),
+                stopped: Arc::new(Mutex::new(None)),
             }))),
         };
         let waker = std::task::Waker::noop();

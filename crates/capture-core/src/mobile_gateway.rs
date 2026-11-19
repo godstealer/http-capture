@@ -334,7 +334,7 @@ fn mobile_flow(peer: SocketAddr, method: String, url: String, device_name: Optio
             pseudo_headers: vec![], engine: "native".into(), method, url, headers: vec![],
             body_base64: Default::default(), tls: Default::default() },
         response: None, error: None, raw_request_head_base64: None,
-        notes: vec!["Android VPN 加密转发：记录连接与首份可见 HTTP 请求/响应头；不保存正文，HTTPS 未解密。".into()],
+        notes: vec!["Android VPN 加密转发：记录连接及可见 HTTP/1 请求/响应头，按请求关联；不保存正文，HTTPS 未解密。".into()],
     })
 }
 
@@ -748,3 +748,7 @@ mod tests {
 #[cfg(test)]
 #[path = "mobile_gateway_observer_tests.rs"]
 mod observer_tests;
+
+#[cfg(test)]
+#[path = "mobile_gateway_session_tests.rs"]
+mod session_tests;

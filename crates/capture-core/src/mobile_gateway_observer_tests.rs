@@ -369,9 +369,10 @@ async fn server_first_banners_remain_transparent_and_cannot_become_paired_respon
             flow.response.is_none(),
             "server-first bytes must not be paired with a later request"
         );
-        if request.starts_with(b"GET ") {
-            assert_eq!(flow.request.method, "GET");
-        }
+        // A server-first stream is now opaque for the session observer.
+        // It must not manufacture an HTTP exchange from later client bytes.
+        assert_eq!(flow.request.method, "CONNECT");
+        assert!(flow.raw_request_head_base64.is_none());
         assert_unrecorded(&fixture.engine, &flow);
         previous.insert(flow.id);
     }

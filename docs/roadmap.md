@@ -1,12 +1,14 @@
 # 功能状态与开发路线图
 
-更新时间：2026-11-18。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
+更新时间：2026-11-19。本文件是后续开发的工作清单；状态基于当前代码及已完成验证，不表示所有平台和边界均通过验证。
 
 当前顺序（2026-10-25 用户调整）：优先完成 PC 二维码与 Android VPN 局域网协同抓包；Android 本机版和 iOS 测试版保留现有实现，随后补齐目标机器验证。iOS App Store 上架暂不处理。安装、跨版本更新、系统集成等手工验收待用户方便时再做。**P0 大正文全链路低内存暂停主动开发**，遇到具体问题或用户明确要求时再恢复。本次桌面批次已集中推送并完成同源 Check 与四平台发布；用户于 2026-11-12 明确允许夜间发版，后续发布仍以检查和构建通过为前提。
 
-## 当前未完成与待验证（2026-11-18）
+## 当前未完成与待验证（2026-11-19）
 
-**开发增量（2026-11-18，未发布）：局域网首份 HTTP 头观察**：认证 TCP 转发新增有界旁路观察，记录首份 HTTP/1.0 或 HTTP/1.1 请求头及最终响应头，保留字段顺序、重复项、大小写、Latin-1 值与原始头字节。每方向累计最多 64 KiB、256 个字段，响应最多跳过 8 个非 101 的 1xx；不读取或缓存正文，不解析后续请求，四实体继续 `notRecorded`。移除原先 200 ms 首读采样，慢请求和分片不会因采样窗口丢失。观察、队列或 SQLite 失败只停止记录，原始字节、背压和半关闭由原转发路径保持；撤销和到期覆盖连接建立与空闲转发。单一写入者串行保存请求头、响应头和终态，清空/删除后不恢复旧记录。本机核心库 252 项通过（原有系统凭据测试 1 项跳过），MCP 43 项通过；其中新增观察覆盖 25 项。控制 HTTP API 19 项、桌面 browser-replay 含测试源码检查均通过；来源 `92bb0ed3b39f018a765979c0deb4f423155ee046` 的[Check #84](https://github.com/godstealer/http-capture/actions/runs/44222514649)、[Android 构建与模拟器 #33](https://github.com/godstealer/http-capture/actions/runs/44222514601)和[iOS Mac 工作流 #19](https://github.com/godstealer/http-capture/actions/runs/44222514875)均已成功，公开状态与提交身份已核对。仅推送开发分支，未推进 main、Release 或更新频道；运行中的界面/内核未替换。完整 HTTP framing/FIFO、扫码/VPN 远程设备端到端及 HTTPS 可选解密仍未完成。详见[首份 HTTP 头观察](mobile-lan-capture.md#首份-http-头观察2026-11-18-开发增量)。
+**开发增量（2026-11-19，本机验证通过、未发布）：HTTP/1 正文定界跳过与 FIFO 关联**：在首份头观察之上增加按 Content-Length 或 chunked 跳过正文，同一持久连接按请求顺序生成独立元数据记录。HEAD、1xx、204/304、205、CONNECT/101、关闭定界与不完整 EOF 分开处理；正文仍未保存，四实体继续 `notRecorded`。已完成记录立即保存并释放，不因后续隧道关闭/重置回写；解析/不支持边界或观察预算耗尽只停止记录。本机完整 core 282 项通过（1 项原有系统凭据测试仍跳过）、MCP 43 项、控制 HTTP API 19 项及桌面 browser-replay 含测试源码检查均通过，新增定界/FIFO/预算回归 30 项，独立审查无阻断。未替换用户前端/内核；本批跨平台 CI 尚待集中推送后核对，不能把上一批成功当作本批通过。
+
+**开发增量（2026-11-18，未发布）：局域网首份 HTTP 头观察**：认证 TCP 转发新增有界旁路观察，记录首份 HTTP/1.0 或 HTTP/1.1 请求头及最终响应头，保留字段顺序、重复项、大小写、Latin-1 值与原始头字节。每方向累计最多 64 KiB、256 个字段，响应最多跳过 8 个非 101 的 1xx；不读取或缓存正文，不解析后续请求，四实体继续 `notRecorded`。移除原先 200 ms 首读采样，慢请求和分片不会因采样窗口丢失。观察、队列或 SQLite 失败只停止记录，原始字节、背压和半关闭由原转发路径保持；撤销和到期覆盖连接建立与空闲转发。单一写入者串行保存请求头、响应头和终态，清空/删除后不恢复旧记录。本机核心库 252 项通过（原有系统凭据测试 1 项跳过），MCP 43 项通过；其中新增观察覆盖 25 项。控制 HTTP API 19 项、桌面 browser-replay 含测试源码检查均通过；来源 `92bb0ed3b39f018a765979c0deb4f423155ee046` 的[Check #84](https://github.com/godstealer/http-capture/actions/runs/44222514649)、[Android 构建与模拟器 #33](https://github.com/godstealer/http-capture/actions/runs/44222514601)和[iOS Mac 工作流 #19](https://github.com/godstealer/http-capture/actions/runs/44222514875)均已成功，公开状态与提交身份已核对。仅推送开发分支，未推进 main、Release 或更新频道；运行中的界面/内核未替换。该阶段尚无完整 HTTP framing/FIFO，本批本地进展见上文；扫码/VPN 远程设备端到端及 HTTPS 可选解密仍未完成。详见[首份 HTTP 头观察](mobile-lan-capture.md#首份-http-头观察2026-11-18-开发增量)。
 
 **上一批开发验证完成（2026-11-16，尚未发版）**：来源 `e8930ee9f7537e5109d825e7d9e2720ad139dd07` 的[Check #83](https://github.com/godstealer/http-capture/actions/runs/43793782841)、[Android 构建与模拟器](https://github.com/godstealer/http-capture/actions/runs/43793782823)及[iOS Mac 工作流](https://github.com/godstealer/http-capture/actions/runs/43793782877)均已成功，公开运行状态与提交身份已核对。请求体平铺表格与正文可用性契约已集中推送开发分支，未推进 main、Release 或更新频道。正式版仍为 0.1.82；PC/手机扫码、VPN 远程端到端、iPhone 签名设备及真实安装仍待验收。
 

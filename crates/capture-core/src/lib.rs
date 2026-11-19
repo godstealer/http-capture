@@ -21,6 +21,7 @@ pub mod network;
 pub mod mobile_pairing;
 pub mod mobile_gateway;
 pub(crate) mod mobile_http_observer;
+pub(crate) mod mobile_http_session;
 pub mod decryption;
 pub mod executions;
 pub mod script_tools;

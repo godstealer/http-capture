@@ -5,6 +5,7 @@ use crate::model::Header;
 
 pub(crate) const MAX_HEAD_BYTES: usize = 64 * 1024;
 const MAX_HEADERS: usize = 256;
+#[cfg(test)]
 const MAX_INTERIM_RESPONSES: usize = 8;
 const HTTP2_PREFACE_LINE: &[u8] = b"PRI * HTTP/2.0";
 
@@ -25,6 +26,7 @@ pub(crate) struct ResponseHead {
     pub raw: Vec<u8>,
 }
 
+#[cfg(test)]
 pub(crate) struct HeadObserver {
     request: HeadCollector,
     response: HeadCollector,
@@ -32,6 +34,7 @@ pub(crate) struct HeadObserver {
     interim_responses: usize,
 }
 
+#[cfg(test)]
 impl Default for HeadObserver {
     fn default() -> Self {
         Self {
@@ -43,6 +46,7 @@ impl Default for HeadObserver {
     }
 }
 
+#[cfg(test)]
 impl HeadObserver {
     pub(crate) fn observe_request(&mut self, bytes: &[u8]) -> Option<RequestHead> {
         if self.request.done {
@@ -111,12 +115,12 @@ impl HeadObserver {
 }
 
 #[derive(Clone, Copy)]
-enum Direction {
+pub(crate) enum Direction {
     Request,
     Response,
 }
 
-struct HeadCollector {
+pub(crate) struct HeadCollector {
     direction: Direction,
     buffer: Vec<u8>,
     total_bytes: usize,
@@ -124,14 +128,14 @@ struct HeadCollector {
     done: bool,
 }
 
-enum Collected {
+pub(crate) enum Collected {
     Partial,
     Disabled,
     Head { consumed: usize, raw: Vec<u8> },
 }
 
 impl HeadCollector {
-    fn new(direction: Direction) -> Self {
+    pub(crate) fn new(direction: Direction) -> Self {
         Self {
             direction,
             buffer: Vec::new(),
@@ -146,7 +150,9 @@ impl HeadCollector {
         self.buffer = Vec::new();
     }
 
-    fn push(&mut self, input: &[u8]) -> Collected {
+    pub(crate) fn is_empty(&self) -> bool { self.buffer.is_empty() }
+
+    pub(crate) fn push(&mut self, input: &[u8]) -> Collected {
         if self.done {
             return Collected::Disabled;
         }
@@ -272,7 +278,7 @@ fn valid_header_lines(raw: &[u8]) -> bool {
     false
 }
 
-fn parse_request(raw: Vec<u8>) -> Option<RequestHead> {
+pub(crate) fn parse_request(raw: Vec<u8>) -> Option<RequestHead> {
     if !valid_header_lines(&raw) {
         return None;
     }
@@ -304,7 +310,7 @@ fn parse_request(raw: Vec<u8>) -> Option<RequestHead> {
     Some(RequestHead { raw, ..head })
 }
 
-fn parse_response(raw: Vec<u8>) -> Option<ResponseHead> {
+pub(crate) fn parse_response(raw: Vec<u8>) -> Option<ResponseHead> {
     if !valid_header_lines(&raw) {
         return None;
     }
