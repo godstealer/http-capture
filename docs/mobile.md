@@ -2,7 +2,7 @@
 
 局域网协同抓包（PC 二维码、Android VPN 扫码配对与远程转发）正在分阶段开发，协议和当前边界见 [局域网协同抓包](mobile-lan-capture.md)。开发分支已加入独立认证接收端、二维码、Android 扫码及 TCP/UDP 加密转发，并通过桌面与移动构建；设备端到端验收仍未完成，不作为正式移动版交付。
 
-2026-11-19 开发增量（本机验证通过、未发布）：PC 端增加 HTTP/1 正文定界计数跳过和持久连接逐请求 FIFO 元数据关联，正文仍明确未记录；完成的请求独立保存，不被后续 TCP 结束覆盖。本机 core 282 项、MCP 43 项、控制 API 19 项及桌面含测试源码检查通过；本批跨平台 CI 待集中推送后核对，运行内核未替换。完整 PC/Android 扫码 VPN 端到端仍需单列设备验收，正式版仍为 0.1.82。
+2026-11-19 开发增量（验证通过、未发布）：PC 端增加 HTTP/1 正文定界计数跳过和持久连接逐请求 FIFO 元数据关联，正文仍明确未记录；完成的请求独立保存，不被后续 TCP 结束覆盖。本机 core 282 项、MCP 43 项、控制 API 19 项及桌面含测试源码检查通过；来源 `f6a637f22fae93d192000f529ee578f543cfe960` 的[Check #85](https://github.com/godstealer/http-capture/actions/runs/44444363001)、[Android 构建与模拟器 #34](https://github.com/godstealer/http-capture/actions/runs/44444363004)和[iOS Mac 工作流 #20](https://github.com/godstealer/http-capture/actions/runs/44444363048)均已成功，公开状态与提交身份已核对。运行内核未替换。完整 PC/Android 扫码 VPN 端到端仍需单列设备验收，正式版仍为 0.1.82。
 
 2026-11-18 开发增量：PC 的认证远程 TCP 转发可旁路观察首份 HTTP/1 请求头和最终响应头，保留原始字节与字段顺序；正文继续明确未记录。HTTPS/TLS、HTTP/2 和无法识别的数据保持透明转发，仅保留连接元数据，不作解密或第二份请求解析。观察存储失败不会中断网络；撤销、空闲到期、清空/删除与半关闭已有隔离回归。完整 framing/FIFO、PC/Android 扫码 VPN 端到端和长期切网仍需后续开发与设备验收；来源 `92bb0ed3b39f018a765979c0deb4f423155ee046` 的[Check #84](https://github.com/godstealer/http-capture/actions/runs/44222514649)、[Android 构建与模拟器 #33](https://github.com/godstealer/http-capture/actions/runs/44222514601)和[iOS Mac 工作流 #19](https://github.com/godstealer/http-capture/actions/runs/44222514875)均已成功，公开状态与提交身份已核对。此增量尚未进入正式包，也未替换用户运行中的内核。详见[首份 HTTP 头观察](mobile-lan-capture.md#首份-http-头观察2026-11-18-开发增量)。
 
