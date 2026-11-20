@@ -39,7 +39,9 @@ public final class ProbeReceiver extends BroadcastReceiver {
         PendingResult pending = goAsync();
         new Thread(() -> {
             try {
-                if ("dev.httpcapture.probe.RUN_TLS".equals(intent.getAction())) {
+                if (LanProbe.ACTION.equals(intent.getAction())) {
+                    LanProbe.run(context, intent);
+                } else if ("dev.httpcapture.probe.RUN_TLS".equals(intent.getAction())) {
                     runTls(intent.getStringExtra("caPem"));
                 } else if ("dev.httpcapture.probe.RUN_UDP".equals(intent.getAction())) {
                     runUdp();

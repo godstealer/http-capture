@@ -310,8 +310,12 @@ fn constant_time_eq(left: &[u8; PAIRING_TOKEN_BYTES], right: &[u8; PAIRING_TOKEN
 }
 
 fn allowed_destination(target: SocketAddr, gateway: SocketAddr, allow_loopback: bool) -> bool {
-    if target == gateway { return false; }
-    match target.ip() {
+    // IPv4-mapped IPv6 addresses reach the same endpoints as IPv4 addresses.
+    // Canonicalize both sides before self-connection and address-class checks.
+    let target_ip = target.ip().to_canonical();
+    let gateway_ip = gateway.ip().to_canonical();
+    if target_ip == gateway_ip && target.port() == gateway.port() { return false; }
+    match target_ip {
         std::net::IpAddr::V4(ip) => !ip.is_unspecified() && !ip.is_multicast()
             && (allow_loopback || !ip.is_loopback()),
         std::net::IpAddr::V6(ip) => !ip.is_unspecified() && !ip.is_multicast()
@@ -732,6 +736,45 @@ mod tests {
         assert!(!allowed_destination("[::1]:80".parse().unwrap(), gateway, false));
         assert!(!allowed_destination(gateway, gateway, false));
         assert!(allowed_destination("8.8.8.8:443".parse().unwrap(), gateway, false));
+    }
+
+    #[test]
+    fn mapped_ipv4_destinations_cannot_bypass_production_address_restrictions() {
+        let gateway: SocketAddr = "192.168.1.5:8899".parse().unwrap();
+        for target in [
+            "[::ffff:127.0.0.1]:80",
+            "[::ffff:127.23.45.67]:80",
+            "[::ffff:192.168.1.5]:8899",
+            "[::ffff:0.0.0.0]:80",
+            "[::ffff:224.0.0.1]:53",
+        ] {
+            assert!(!allowed_destination(target.parse().unwrap(), gateway, false), "{target}");
+        }
+        for target in ["[::ffff:192.168.1.5]:8898", "[::ffff:8.8.8.8]:443"] {
+            assert!(allowed_destination(target.parse().unwrap(), gateway, false), "{target}");
+        }
+        // The test-only loopback allowance must not relax other address classes
+        // or self-connection checks, and canonicalization must preserve real ::1.
+        assert!(allowed_destination("[::1]:80".parse().unwrap(), gateway, true));
+        assert!(allowed_destination("[::ffff:127.0.0.1]:80".parse().unwrap(), gateway, true));
+        for target in [
+            "[::ffff:192.168.1.5]:8899",
+            "[::ffff:0.0.0.0]:80",
+            "[::ffff:224.0.0.1]:53",
+        ] {
+            assert!(!allowed_destination(target.parse().unwrap(), gateway, true), "{target}");
+        }
+    }
+
+    #[test]
+    fn mapped_gateway_identity_matches_plain_ipv4_without_blocking_other_ports() {
+        let gateway: SocketAddr = "[::ffff:192.168.1.5]:8899".parse().unwrap();
+        for target in ["192.168.1.5:8899", "[::ffff:192.168.1.5]:8899"] {
+            assert!(!allowed_destination(target.parse().unwrap(), gateway, false), "{target}");
+        }
+        for target in ["192.168.1.5:8898", "[::ffff:192.168.1.5]:8898"] {
+            assert!(allowed_destination(target.parse().unwrap(), gateway, false), "{target}");
+        }
     }
 
     #[test]

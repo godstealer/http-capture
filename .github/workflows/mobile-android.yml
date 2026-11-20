@@ -7,6 +7,8 @@ on:
     paths:
       - 'apps/mobile/android/**'
       - 'scripts/build-android.*'
+      - 'scripts/smoke-android*'
+      - 'scripts/test-android-lan-smoke.py'
       - 'crates/capture-core/**'
       - 'vendor/tun2proxy/**'
       - 'Cargo.lock'
@@ -51,10 +53,14 @@ jobs:
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.RecordedRequestBodyTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.mobile.DeviceNameCodecTest
           java -cp "$RUNNER_TEMP/http-capture-body-tests" dev.httpcapture.probe.ProxyReadinessTest
+      - name: Verify LAN smoke orchestration and session lifecycle
+        run: |
+          python3 scripts/test-android-lan-smoke.py
+          python3 apps/mobile/android/tests/test_lan_pairing_session.py
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libdbus-1-dev libssl-dev perl make pkg-config
+          sudo apt-get install -y clang libclang-dev libdbus-1-dev libssl-dev perl make pkg-config cmake ninja-build nasm
           sdkmanager --install 'platforms;android-36' 'build-tools;35.0.0' 'ndk;27.2.12479018'
       - name: Build Android arm64 and x86_64 APK
         run: |
@@ -78,6 +84,10 @@ jobs:
           if-no-files-found: error
       - name: Build emulator smoke test APK
         run: gradle -p apps/mobile/android :app:assembleDebugAndroidTest :vpn-probe:assembleDebug --no-daemon
+      - name: Test and build isolated PC LAN gateway fixture
+        run: |
+          cargo test --locked -p capture-core --example android_lan_fixture
+          cargo build --locked -p capture-core --example android_lan_fixture
       - name: Enable KVM for Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -89,4 +99,11 @@ jobs:
           api-level: 36
           target: google_apis
           arch: x86_64
-          script: bash scripts/smoke-android.sh
+          script: bash scripts/smoke-android-all.sh
+      - name: Upload sanitized remote LAN E2E summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lan-e2e-summary
+          path: ${{ runner.temp }}/android-lan-e2e-summary.json
+          if-no-files-found: warn

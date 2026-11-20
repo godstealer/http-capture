@@ -45,12 +45,15 @@ import java.security.cert.CertificateFactory;
 
 /** Exercises the packaged JNI library, loopback proxy and persistent capture on an emulator. */
 public final class CaptureSmokeInstrumentation extends Instrumentation {
+    private Bundle lanArguments;
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        if (arguments != null && arguments.containsKey("lanConfigPath")) lanArguments = new Bundle(arguments);
         start();
     }
 
     @Override public void onStart() {
+        if (lanArguments != null) { new LanSmokeRunner(this, lanArguments).run(); return; }
         Bundle result = new Bundle();
         try {
             runSmoke();
@@ -729,7 +732,7 @@ public final class CaptureSmokeInstrumentation extends Instrumentation {
         }
     }
 
-    private static AccessibilityNodeInfo findConsentButton(AccessibilityNodeInfo node) {
+    static AccessibilityNodeInfo findConsentButton(AccessibilityNodeInfo node) {
         if (node == null) return null;
         CharSequence id = node.getViewIdResourceName();
         String resource = id == null ? "" : id.toString();

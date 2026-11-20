@@ -31,8 +31,10 @@ final class ProtectedRelay implements AutoCloseable {
     private final Consumer<String> onFatal;
 
     ProtectedRelay(LanPairingClient.Session session, Consumer<String> onFatal) throws IOException {
-        if (session == null || session.expiresAt <= System.currentTimeMillis())
+        if (session == null || session.expiresAt <= System.currentTimeMillis()) {
+            if (session != null) LanPairingClient.clearActiveSession(session);
             throw new IllegalStateException("PC 配对已过期，请重新扫码");
+        }
         this.session = session;
         this.onFatal = onFatal;
         this.listener = new ServerSocket(0, 64, InetAddress.getByName("127.0.0.1"));
@@ -85,7 +87,10 @@ final class ProtectedRelay implements AutoCloseable {
             if (hostname.length == 0 || hostname.length > 253 || port < 1 || port > 65535
                 || !host.matches("[A-Za-z0-9.:-]+")) throw new IOException("目标地址无效");
             boolean udpGateway = host.equals("127.0.0.1") && port == UDP_GATEWAY_PORT;
-            if (session.expiresAt <= System.currentTimeMillis()) throw new IOException("PC 会话已过期");
+            if (session.expiresAt <= System.currentTimeMillis()) {
+                LanPairingClient.clearActiveSession(session);
+                throw new IOException("PC 会话已过期");
+            }
 
             upstreamAttempted = true;
             tls = LanPairingClient.connect(session.code, true);
@@ -100,7 +105,10 @@ final class ProtectedRelay implements AutoCloseable {
             }
             upstream.flush();
             int result = new DataInputStream(tls.getInputStream()).readUnsignedByte();
-            if (result == 1) throw new IllegalStateException("PC 已撤销或拒绝会话");
+            if (result == 1) {
+                LanPairingClient.clearActiveSession(session);
+                throw new IllegalStateException("PC 已撤销或拒绝会话");
+            }
             if (result != 0) {
                 client.getOutputStream().write("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
                     .getBytes(StandardCharsets.US_ASCII));

@@ -27,8 +27,12 @@ import javax.net.ssl.X509TrustManager;
 final class LanPairingClient {
     private static volatile Session activeSession;
 
-    static void setActiveSession(Session session) { activeSession = session; }
+    static synchronized void setActiveSession(Session session) { activeSession = session; }
     static Session activeSession() { return activeSession; }
+    static synchronized void clearActiveSession(Session expected) {
+        // A delayed heartbeat for an old pairing must not clear a newer session.
+        if (activeSession == expected) activeSession = null;
+    }
     static final class Code {
         final String host;
         final int port;
@@ -114,8 +118,10 @@ final class LanPairingClient {
     }
 
     static void reportDeviceName(Session session, String manufacturer, String model) throws Exception {
-        if (session.expiresAt <= System.currentTimeMillis())
+        if (session.expiresAt <= System.currentTimeMillis()) {
+            clearActiveSession(session);
             throw new IllegalStateException("PC session has expired");
+        }
         // Connection, identity and VPN-protection failures must not enter the optional IO fallback.
         SSLSocket connected = connect(session.code, false);
         boolean accepted;
@@ -138,15 +144,19 @@ final class LanPairingClient {
     }
 
     private static void verifySession(Session session, boolean vpnMustBeActive) throws Exception {
-        if (session.expiresAt <= System.currentTimeMillis())
+        if (session.expiresAt <= System.currentTimeMillis()) {
+            clearActiveSession(session);
             throw new IllegalStateException("PC 会话已过期");
+        }
         try (SSLSocket tls = connect(session.code, vpnMustBeActive)) {
             OutputStream output = tls.getOutputStream();
             output.write(3);
             output.write(session.token);
             output.flush();
-            if (new DataInputStream(tls.getInputStream()).readUnsignedByte() != 0)
+            if (new DataInputStream(tls.getInputStream()).readUnsignedByte() != 0) {
+                clearActiveSession(session);
                 throw new IllegalStateException("PC 已撤销会话");
+            }
         }
     }
 
