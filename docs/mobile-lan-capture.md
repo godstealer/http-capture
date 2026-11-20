@@ -18,7 +18,7 @@
 
 当前状态：安全配对与 TCP/UDP 转发代码已通过构建和回环测试，但尚无 Android 模拟器或真机端到端证据，不能宣称局域网协同抓包完成，也不发布移动安装包。
 
-## Android 远程 VPN 验证门禁（2026-11-20 本批验证中）
+## Android 远程 VPN 验证门禁（2026-11-20 首轮 CI 待修复）
 
 新增独立的 `android_lan_fixture` 测试工具，只接受真实网卡上的私有 IPv4 和新建的空临时目录；使用生产 `MobileGateway::start`、同一地址的 IP SAN 与固定 SPKI 身份，以及原 v1 一次性配对/一小时会话。受控 HTTP、UDP 和 DNS-wire 源各用独立高端口，不替换普通代理或放宽 loopback 过滤。控制仅走宿主 stdin，不新增未认证网络控制接口；最长七分钟撤销并释放自身任务。现有桌面 1420/1421 及其数据库、代理、系统证书不改动。
 
@@ -32,7 +32,7 @@ PC 在 origin 与网关仍运行时执行撤销；Android 必须由生产心跳/
 
 同时修复两项真实生产边界：TCP/UDP 目的地先规范化 IPv4-mapped IPv6，再执行回环、unspecified、multicast 和自网关检查；明确 op2/op3/op4 会话拒绝及本地过期只比较清理该会话，迟到的旧失败不会清新配对。普通网络失败或手动停 VPN 保留可重试的有效配对，避免 PC 仍配对但 Android 丢失凭据。
 
-当前本机结果：完整 core 284 项通过、0 失败（原有真实系统凭据测试 1 项跳过）；编排边界 12 项、实际 Java 会话方法级 mock 460 检查和 API36/JDK17 静态编译通过。新增 fixture 测试已编译，但 Windows 返回拒绝访问（OS error 5，never executed），随后该测试 EXE 不存在；没有匹配可读安全事件确认原因，未将其计为通过，不关闭防护/加白名单/换名绕过。它与旧更新器测试限制分别记录。Linux fixture、原本机烟测、新远程 API36 模拟器及同源 Check/iOS 工作流尚待集中推送后核对；当前不能宣称远程端到端已通过。
+当前本机结果：完整 core 284 项通过、0 失败（原有真实系统凭据测试 1 项跳过）；编排边界 12 项、实际 Java 会话方法级 mock 460 检查和 API36/JDK17 静态编译通过。新增 fixture 测试已编译，但 Windows 返回拒绝访问（OS error 5，never executed），随后该测试 EXE 不存在；没有匹配可读安全事件确认原因，未将其计为通过，不关闭防护/加白名单/换名绕过。它与旧更新器测试限制分别记录。来源 `db3b9fbcac3662d004eb117a1b3de5e3bf05e323` 的[Check #86](https://github.com/godstealer/http-capture/actions/runs/44662072646)已成功；[Android 首轮 #35](https://github.com/godstealer/http-capture/actions/runs/44662072653)的 Linux fixture 测试/构建和 Java/编排门禁通过，但模拟器组合烟测失败，新摘要已生成，尚未确认失败阶段。iOS #21 仍在运行。需要核对完整日志定位后再修复验证，不将本批端到端记为通过。当前不能宣称远程端到端已通过。
 
 相机扫码、真机权限/安装、网络切换、长期会话、HTTPS 可选解密与签名 iPhone 仍须分别验收；不发布正式移动安装包。此门禁不会推进暂停的 P0 大正文或 iOS App Store 工作。
 
