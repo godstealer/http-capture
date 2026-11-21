@@ -32,7 +32,7 @@ PC 在 origin 与网关仍运行时执行撤销；Android 必须由生产心跳/
 
 同时修复两项真实生产边界：TCP/UDP 目的地先规范化 IPv4-mapped IPv6，再执行回环、unspecified、multicast 和自网关检查；明确 op2/op3/op4 会话拒绝及本地过期只比较清理该会话，迟到的旧失败不会清新配对。普通网络失败或手动停 VPN 保留可重试的有效配对，避免 PC 仍配对但 Android 丢失凭据。
 
-当前本机结果：完整 core 284 项通过、0 失败（原有真实系统凭据测试 1 项跳过）；编排边界 12 项、实际 Java 会话方法级 mock 460 检查和 API36/JDK17 静态编译通过。新增 fixture 测试已编译，但 Windows 返回拒绝访问（OS error 5，never executed），随后该测试 EXE 不存在；没有匹配可读安全事件确认原因，未将其计为通过，不关闭防护/加白名单/换名绕过。它与旧更新器测试限制分别记录。来源 `db3b9fbcac3662d004eb117a1b3de5e3bf05e323` 的[Check #86](https://github.com/godstealer/http-capture/actions/runs/44662072646)已成功；[Android 首轮 #35](https://github.com/godstealer/http-capture/actions/runs/44662072653)的 Linux fixture 测试/构建和 Java/编排门禁通过，但模拟器组合烟测失败，新摘要已生成，尚未确认失败阶段。iOS #21 仍在运行。需要核对完整日志定位后再修复验证，不将本批端到端记为通过。当前不能宣称远程端到端已通过。
+当前本机结果：完整 core 284 项通过、0 失败（原有真实系统凭据测试 1 项跳过）；编排边界 12 项、实际 Java 会话方法级 mock 460 检查和 API36/JDK17 静态编译通过。新增 fixture 测试已编译，但 Windows 返回拒绝访问（OS error 5，never executed），随后该测试 EXE 不存在；没有匹配可读安全事件确认原因，未将其计为通过，不关闭防护/加白名单/换名绕过。它与旧更新器测试限制分别记录。来源 `db3b9fbcac3662d004eb117a1b3de5e3bf05e323` 的[Check #86](https://github.com/godstealer/http-capture/actions/runs/44662072646)已成功；[Android 首轮 #35](https://github.com/godstealer/http-capture/actions/runs/44662072653)的 Linux fixture 测试/构建和 Java/编排门禁通过，但模拟器组合烟测失败，新摘要已生成，尚未确认失败阶段。[iOS #21](https://github.com/godstealer/http-capture/actions/runs/44662072661)的模拟器启动及无签名 iPhone/Packet Tunnel 验证亦已成功；Android 失败仍待定位。需要核对完整日志定位后再修复验证，不将本批端到端记为通过。当前不能宣称远程端到端已通过。
 
 相机扫码、真机权限/安装、网络切换、长期会话、HTTPS 可选解密与签名 iPhone 仍须分别验收；不发布正式移动安装包。此门禁不会推进暂停的 P0 大正文或 iOS App Store 工作。
 
