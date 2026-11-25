@@ -24,6 +24,26 @@ Windows：运行 `scripts/build-httpcloak.ps1`（Go 1.26+，优先使用项目�
 
 重启服务后，在请求 TLS 页选择 httpcloak、Chrome、浏览器 TLS 版本。默认跟随 UA，无对应 UA 时选择当前引擎可用最大版本；明确指定 150 不会修改 UA 155。当前清单 Chrome 143–155，Firefox 133、148，使用 Windows 平台预设，未按本机操作系统自动切换预设。UA 是不支持的版本时会明确报错，不自动冒用其他版本。
 
+## xhttp 独立发送引擎
+
+`xhttp` 是受 FlowLens 请求编辑器启发的可选手动发送引擎。它复用 [本地 JSON 进程接口](custom-send-engine.md)，使用固定版本的 `github.com/josexy/xhttp`，以标准 Go TLS 协商 HTTP/2 或 HTTP/1.1。两个协议的有序请求头在同一次请求中分别准备，再由实际 ALPN 结果选择。H2 以 `:authority` 表示目标域名，Cookie 可以逐条发送。切到 H1 时，拆开的 Cookie 合并到首条 Cookie 的位置。响应头、尾部字段及发送说明里的请求头来自实际读写回调。
+
+当前支持 TLS 自动、1.2 或 1.3，系统根证书、自定义信任 CA、客户端证书、直连、HTTP 和 SOCKS5 代理。HTTP Capture 仍负责是否跟随重定向。此版本使用原生 TLS 配置，浏览器 ClientHello、HTTP/3、明文 h2c 与 SSE 正文实时推送暂未接入。单份请求及响应正文上限为 32 MiB；返回值保留收到的内容编码。
+
+桌面安装包会载入内置辅助程序。开发内核可用 Go 1.27.3 或更新版本，在仓库根目录运行：
+
+```powershell
+Set-Location helpers/xhttp
+go build -mod=readonly -trimpath -o http-capture-xhttp.exe .
+$env:HTTP_CAPTURE_XHTTP_ENGINE = (Resolve-Path ./http-capture-xhttp.exe).Path
+Set-Location ../..
+npm run capture
+```
+
+macOS/Linux 把输出文件名换成 `http-capture-xhttp`，用 `export HTTP_CAPTURE_XHTTP_ENGINE="$PWD/http-capture-xhttp"` 设置路径。将可执行文件与同名 `http-capture-xhttp.json` 一起保留。启动桌面应用或开发内核时继承这个变量，然后在手动请求的「TLS → 发送引擎」选择 `xhttp`。本地测试可在 `helpers/xhttp` 运行 `go test -mod=readonly .`。
+
+实现参考 [FlowLens 手动发送](https://github.com/josexy/flowlens/blob/main/internal/services/proxy_service/synthetic_transport.go) 和 [xhttp 有序头块](https://github.com/josexy/xhttp/blob/6087dd9bc960/header_blocks.go)。随二进制分发时需附 [xhttp 许可证](https://github.com/josexy/xhttp/blob/6087dd9bc960/LICENSE) 与依赖许可。开发版可通过 `HTTP_CAPTURE_XHTTP_ENGINE` 显式启用。
+
 ## 更新 httpcloak
 
 普通用户通过更新 HTTP Capture 安装包获得新版 helper，无需单独安装 Go 库。当前项目锁定 `httpcloak v1.7.3`，没有独立自动更新库的功能。[上游固定版本更新记录](https://github.com/sardanioss/httpcloak/blob/v1.7.3/CHANGELOG.md) 包含 Chrome 153–155 预设；本轮同时更新 `sardanioss/net` 至 v1.2.12、`sardanioss/quic-go` 至 v1.2.30，保留 Go 1.26.0 最低版本。升级不改变应用中由用户提供的 UA、Accept 等请求头。

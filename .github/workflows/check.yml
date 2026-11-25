@@ -17,15 +17,23 @@ jobs:
           node-version: 22
       - name: Verify MCP fixture runtime
         run: node --version
+      - name: Verify desktop install script fixtures
+        if: runner.os != 'Windows'
+        run: node --test scripts/test-install.mjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-go@v5
         with:
-          go-version-file: helpers/httpcloak/go.mod
-          cache-dependency-path: helpers/httpcloak/go.sum
+          go-version: '1.27.4'
+          cache-dependency-path: |
+            helpers/httpcloak/go.sum
+            helpers/xhttp/go.sum
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config dbus-daemon dconf-cli dconf-service gsettings-desktop-schemas cmake ninja-build nasm libclang-dev
+      - name: Verify xhttp helper
+        working-directory: helpers/xhttp
+        run: go test -mod=readonly ./...
       - name: Build custom send engine protocol fixture
         run: node scripts/prepare-custom-engine-fixture.mjs
       - run: cargo test --locked -p transport-api -p transport-httpcloak -p capture-core -p capture-mcp --no-default-features

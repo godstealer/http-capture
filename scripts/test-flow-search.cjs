@@ -1,0 +1,45 @@
+const assert=require('node:assert/strict');
+const {build}=require('esbuild');
+const {gzipSync,gunzipSync}=require('node:zlib');
+(async()=>{
+const output=await build({entryPoints:['apps/frontend/src/flowSearch.ts'],bundle:true,platform:'node',format:'cjs',write:false,logLevel:'silent',define:{'import.meta.url':JSON.stringify('file:///search-test.mjs')},plugins:[{name:'search-api',setup(builder){
+  builder.onLoad({filter:/[/\\]api\.ts$/},()=>({contents:'export const invoke=()=>{throw Error("Unexpected body read")};'}));
+  builder.onLoad({filter:/[/\\]i18n\.ts$/},()=>({contents:'export const t=k=>k;'}));
+}}]});
+const mod={exports:{}};new Function('require','module','exports',output.outputFiles[0].text)(require,mod,mod.exports);
+const {flowSearchText,flowSearchIdentity,searchFlowResponse,searchEncodedResponse}=mod.exports;
+const SIZE=65536,encode=v=>Buffer.from(v).toString('base64');
+const full=body=>({id:'one',source:'capture',startedAt:1,durationMs:1,notes:[],request:{method:'GET',url:'https://example.invalid/',headers:[{name:'X-Request',value:'RequestValue'}],bodyBase64:'',tls:{preset:'native'}},response:{status:200,version:'HTTP/2',headers:[{name:'Content-Type',value:'application/json; charset=utf-8'},{name:'X-Response',value:'ResponseValue'}],bodyBase64:encode(body)}});
+const meta=body=>{const flow=full(body);delete flow.request.bodyBase64;delete flow.response.bodyBase64;return {...flow,bodyRevision:'store:1',bodyReferences:{request:{byteLength:0},response:{byteLength:Buffer.from(body).length}}}};
+function ranges(bytes,calls=[]){return async(command,args)=>{calls.push([command,args]);assert.equal(command,'read_flow_body');assert.equal(args.variant,'response');assert.equal(args.expectedVersion,'store:1');const value=bytes.subarray(args.offset,args.offset+SIZE);return {offset:args.offset,totalBytes:bytes.length,bodyBase64:encode(value),nextOffset:args.offset+value.length<bytes.length?args.offset+value.length:null,text:null}}}
+  const record=full('正文');
+  for(const word of ['get','example.invalid','200','x-request: requestvalue','x-response: responsevalue'])assert(flowSearchText(record).includes(word));
+  assert(!flowSearchText(record).includes('正文'),'metadata search does not embed body payloads');
+  assert.notEqual(flowSearchIdentity(meta('a')),flowSearchIdentity({...meta('a'),bodyRevision:'store:2'}));
+  const changed=meta('a');changed.response.headers.push({name:'content-encoding',value:'gzip'});assert.notEqual(flowSearchIdentity(meta('a')),flowSearchIdentity(changed),'decoding headers participate in cache identity');
+  const split=Buffer.from('x'.repeat(SIZE-1)+'汉字NEEDLE正文'+'.'.repeat(SIZE));
+  const calls=[];assert.equal(await searchFlowResponse(meta(split),'汉字needle',{},ranges(split,calls)),'match');assert.equal(calls.length,2,'UTF-8 and query tails cross page boundaries');
+  assert.equal(await searchFlowResponse(meta(split),'not present',{},ranges(split)),'miss');
+  const big=Buffer.from('x'.repeat(8*1024*1024+1)+'last page marker');let count=0;
+  assert.equal(await searchFlowResponse(meta(big),'last page marker',{},async(...args)=>{count++;return ranges(big)(...args)}),'match');assert(count>128,'uncompressed response search is not truncated to the decode budget');
+  assert.equal(await searchFlowResponse(full('x'.repeat(49151)+'边界Marker'),'边界marker'),'match','legacy full bodies use the same cross-chunk text semantics');
+  const unavailable={...meta(''),bodyCapture:{response:'notRecorded'}};assert.equal(await searchFlowResponse(unavailable,'anything',{},()=>assert.fail('unrecorded entities cannot be read')),'unavailable');
+  assert.equal(await searchFlowResponse({...meta(''),response:null},'anything'),'miss');
+  assert.equal(await searchFlowResponse(meta(''),'anything',{},()=>assert.fail('known empty response does not need body scanning')),'miss');
+  const bytes=Buffer.from('body');assert.equal(await searchFlowResponse(meta(bytes),'absent',{},async()=>{throw Error('Recorded flow changed')}),'unavailable','a stale read is never a clean no-match');
+  assert.equal(await searchFlowResponse(meta(bytes),'absent',{},async()=>({...await ranges(bytes)('read_flow_body',{variant:'response',expectedVersion:'store:1',offset:0}),totalBytes:5})),'unavailable','invalid length is not searched');
+  const abort=new AbortController();let reads=0;await assert.rejects(searchFlowResponse(meta(split),'not present',{signal:abort.signal},async(...args)=>{reads++;abort.abort();return ranges(split)(...args)}),{name:'AbortError'});assert.equal(reads,1);
+  const stopped=new AbortController();stopped.abort();await assert.rejects(searchFlowResponse(record,'anything',{signal:stopped.signal}),{name:'AbortError'});
+  const gzip=gzipSync(Buffer.from('压缩 ResponseMarker')),compressed=meta(gzip);compressed.response.headers.push({name:'Content-Encoding',value:'gzip'});
+  assert.equal(await searchFlowResponse(compressed,'responsemarker',{},ranges(gzip),async(body,headers,q)=>{assert.equal(headers.at(-1).value,'gzip');return gunzipSync(Buffer.from(body,'base64')).toString().toLowerCase().includes(q)}),'match');
+  const oversize={...compressed,bodyReferences:{...compressed.bodyReferences,response:{byteLength:8*1024*1024+1}}};assert.equal(await searchFlowResponse(oversize,'anything',{},()=>assert.fail('over-budget compressed body not loaded')),'unavailable');
+  assert.equal(await searchFlowResponse(compressed,'anything',{},ranges(gzip),async()=>{throw Error('codec failed')}),'unavailable');
+  const invalid=full('body');invalid.response.headers=[{name:'Content-Type',value:'text/plain; charset=not-a-real-charset'}];assert.equal(await searchFlowResponse(invalid,'anything'),'unavailable');
+  const malformed=full(Uint8Array.of(0xff,0xfe,0xfd));assert.equal(await searchFlowResponse(malformed,'anything'),'unavailable');
+  let worker,terminated=0;
+  global.Worker=class{constructor(){worker=this}terminate(){terminated++}postMessage(message){this.message=message}};
+  const decoded=searchEncodedResponse(encode(gzip),compressed.response.headers,'marker');assert.equal(worker.message.parser,'text');assert.equal(worker.message.encoding,'gzip');worker.onmessage({data:{raw:'Decoded MARKER'}});assert.equal(await decoded,true);assert.equal(terminated,1);
+  const controller=new AbortController();const pending=searchEncodedResponse('AA==',[], 'x',controller.signal);controller.abort();await assert.rejects(pending,{name:'AbortError'});assert.equal(terminated,2,'cancelled queries terminate decoding workers');
+  const failed=searchEncodedResponse('AA==',[],'x');worker.onmessage({data:{raw:'',binary:true,error:'bad encoding'}});await assert.rejects(failed,/cannot be decoded/);assert.equal(terminated,3);
+  console.log('Response search metadata, streaming ranges, charset, compression, cancellation and decoder lifecycle checks passed');
+})().catch(error=>{console.error(error);process.exitCode=1});

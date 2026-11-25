@@ -140,3 +140,13 @@ Linux 的 GBM/DRM 渲染兼容由程序负责，不再要求用户配置环境�
 - 尚未在用户 Ubuntu 图形桌面执行 AppRun；产物完整性与桌面兼容性分别验收。
 
 - 四个平台构建和 publish 全部成功，新预发布版已公开：[build-c74877404b14](https://github.com/godstealer/http-capture/releases/tag/build-c74877404b14)，包含 6 个安装/便携包及 4 份平台校验文件。
+
+## install.sh 安装入口
+
+仓库根目录 `install.sh` 复用现有不可变 `build-<sha12>` 附件，不新增发布平台、修改签名或更新频道。默认跟随 GitHub Latest，再固定到解析出的 build 标签，从该标签下载平台 SHA256 清单与安装包；也支持 `--tag` 和 `--prefix`。
+
+Linux x64 选择完整 `portable.tar.gz`，保留 AppRun、共享库和 helper；macOS 两种架构选择 `.app.tar.gz`，校验 bundle 签名后安装到用户应用目录。脚本不绕过系统安全限制，也不执行新安装应用。使用说明见 [README](../README.md#安装桌面应用)。
+
+本地验证使用隔离 HOME、伪造网络响应和小型归档，实际运行安装脚本，覆盖架构选择、校验失败不覆盖旧版、归档布局与路径检查、带空格目录和 macOS 签名失败。模拟 macOS 命令只验证安装流程，真实 Linux/macOS 安装和运行仍需相应设备验收。线上脚本入口见 README。
+
+本批次另修复 HAR 的标准响应正文缺失，并补充捕获列表的请求头、响应头和响应正文搜索；详情见 [会话与工作区](sessions-workspaces.md)。2026-11-25 本地验证：前端全套回归、TypeScript 和生产构建通过；安装器离线测试共 27 项，22 通过、0 失败、5 项因 Windows MSYS 无法真实保留 Unix 权限/符号链接而明确跳过，原生 Linux/macOS 测试门禁已加入 Check。真实设备安装/运行和移动端验收继续保留。

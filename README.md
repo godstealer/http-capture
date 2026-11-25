@@ -21,6 +21,33 @@
 
 原 0.1.32 候选来源 `d2d1ed7` 的 [Check #32 attempt 3](https://github.com/godstealer/http-capture/actions/runs/39441172083/attempts/3) 因 macOS runner 未分配而最终失败，对应 Release #29 已跳过；其未发布功能现随 0.1.33 一并交付，旧候选本身没有发布。当前本地 **44 个前端回归脚本、国际化、TypeScript 和生产构建通过**，production-dist 合成记录的内置浏览器隔离验收已完成。完整会话导出、脚本/helper、内部模型、SSE/gRPC/WS 与并发峰值等边界仍待处理，**P0 全链路低内存未完成**；安装、升级及跨设备等人工验收继续保留。
 
+## 安装桌面应用
+
+Linux x64 和 macOS（Apple Silicon / Intel）可以使用仓库根目录的 `install.sh` 安装已发布的桌面包，无须编译源码：
+
+```sh
+bash install.sh
+# 安装指定正式版本：使用 Release 页的 build 标签，而不是版本号
+bash install.sh --tag build-94c1e4df961f
+# Linux 自定义安装前缀
+bash install.sh --prefix "$HOME/opt/http-capture"
+```
+
+也可以先下载脚本再执行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/godstealer/http-capture/main/install.sh -o install.sh
+bash install.sh
+```
+
+默认获取 GitHub Latest 正式版，识别系统与 CPU 架构，下载对应平台的 SHA256 清单并核对安装包。只需 Bash、curl、tar、awk，以及 `sha256sum` 或 `shasum`；无需 GitHub 登录、Node.js、Rust、sudo 或 FUSE。Windows 请使用 [Release 页](https://github.com/godstealer/http-capture/releases/latest)的 `windows-x64-*-setup.exe`，当前没有 Linux ARM64 正式包。
+
+- **Linux**：完整 portable 包安装到 `~/.local/lib/http-capture/releases/`，启动命令为 `~/.local/bin/http-capture`，同时写入用户应用菜单。自定义 `--prefix` 会使用该目录下的 `bin/`、`lib/` 和 `share/`。系统需满足 Ubuntu 22.04 或兼容的更新 glibc 桌面环境。
+- **macOS**：安装到 `~/Applications/HTTP Capture.app`，也可用 `--prefix` 指定应用目录；在 Rosetta 终端中仍选择 Apple Silicon 包。覆盖前使用 `codesign --verify --deep --strict` 检查应用签名，已有应用保留在同目录的 `.http-capture-previous.*` 文件夹中，安装失败时恢复原应用。签名检查不代表 Apple 公证。
+- **更新**：先退出应用，再重新运行脚本；可用 `--tag` 固定版本。Linux portable 仍采用重新安装方式更新，不会把 AppImage 更新包套到 portable 目录。旧 Linux 版本目录保留，确认新版本可用后可自行清理。
+
+安装不会启动应用、接管系统代理、安装抓包 CA 或调整系统安全设置。SHA256 用于核对下载完整性，不等同于独立签名认证；安装后 HTTPS 抓包仍需按下方步骤配置客户端证书信任。
+
 ## MCP 从哪里开始
 
 想让 AI 查看或操作抓包，打开 **MCP → AI 接入**并启动服务。0.1.28 提供 **AI 客户端接入向导**，可生成 Codex、Cursor、VS Code 的 HTTP/stdio 配置；stdio 通过本机桥接连接正在运行的应用，不会启动第二个抓包内核。0.1.23 安装包可手动填写复制出的 URL 和 Authorization。想手动调用其他 MCP 工具，打开 **MCP → 外部服务**。

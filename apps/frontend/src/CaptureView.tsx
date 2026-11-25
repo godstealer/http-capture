@@ -23,7 +23,9 @@ import RequestMenu, { type MenuTarget } from './RequestMenu';
 import { toCurl } from './curl';
 import { cssZoomFactor, layoutDelta } from './uiZoom';
 import { rawHeaderText } from './messageText';
-import { describeTrafficOrigin, trafficOriginSearchText, trafficOriginTooltip } from './trafficOrigin';
+import { describeTrafficOrigin, trafficOriginTooltip } from './trafficOrigin';
+import {flowSearchIdentity,flowSearchText} from './flowSearch';
+import {useFlowSearch} from './useFlowSearch';
 import { MAX_REWRITE_BODY_BYTES } from './responseRewriteModel';
 import './traffic-origin.css';
 
@@ -213,13 +215,14 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
     catch { return 'row'; }
   });
   const captured = useMemo(() => flows.filter(f => f.source === 'capture'), [flows]);
+  const responseSearch = useFlowSearch(captured,query,active);
   const filtered = useMemo(() => {
     const search = query.toLowerCase();
     const items = captured.filter(f =>
-    (!search || `${f.request.method} ${f.request.url} ${f.response?.status ?? ''} ${trafficOriginSearchText(f)}`.toLowerCase().includes(search)) &&
+    (!search || flowSearchText(f).includes(search) || responseSearch.matches.has(flowSearchIdentity(f))) &&
     matchesFilter(f, filter));
     return idSort === 'asc' ? items.reverse() : items;
-  }, [captured, query, filter, idSort, language]);
+  }, [captured, query, filter, idSort, language, responseSearch.matches]);
   const tableWrap = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 600 });
   useEffect(() => {
@@ -273,7 +276,7 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
       <button disabled={!desktop || fileBusy} onClick={() => fileInput.current?.click()}>{t("导入 HAR / 会话")}</button>
       <input ref={fileInput} hidden type="file"  onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void importFile(file); }} />
       <details ref={exportMenu} onToggle={event => { if (event.currentTarget.open && storageMenu.current) storageMenu.current.open = false; }} onClick={event => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.open = false; }}><summary>{t('导出与保存')}<ChevronDown size={13}/></summary><div className="capture-action-menu">
-      <label>{t('HAR 正文模式')}<select aria-label={t("HAR 正文模式")} value={rawHar ? 'raw' : 'decoded'} onChange={e=>setRawHar(e.target.value==='raw')} disabled={fileBusy}><option value="raw">{t("原始正文（快速）")}</option><option value="decoded">{t("解压正文（兼容）")}</option></select></label>
+      <label>{t('HAR 正文模式')}<select aria-label={t("HAR 正文模式")} value={rawHar ? 'raw' : 'decoded'} onChange={e=>setRawHar(e.target.value==='raw')} disabled={fileBusy}><option value="raw">{t("完整正文（含原始数据）")}</option><option value="decoded">{t("解压正文（兼容）")}</option></select></label>
       <button disabled={!filtered.length} onClick={() => void save(filtered)}>{t("保存当前列表（")}{filtered.length}）</button>
       <button disabled={fileBusy || !filtered.length} onClick={() => void save(filtered, 'har')}>{t("导出列表 HAR")}</button>
       <button disabled={fileBusy || !picked.length} onClick={() => void save(picked, 'har')}>{t("导出选中 HAR")}</button>
@@ -291,9 +294,13 @@ export default function CaptureView({ flows, desktop, running, address, onReplay
       <div className="column-settings-heading"><strong>{t("显示列")}</strong><button onClick={() => updateColumns(captureColumns.filter(c => c.default).map(c => c.id))}>{t("恢复默认")}</button><button aria-label={t("关闭")} onClick={() => { setColumnsOpen(false); columnButton.current?.focus(); }}><X size={16} /></button></div>
       <div className="column-settings-options">{captureColumns.map(c => <label key={c.id}><input type="checkbox" checked={columns.includes(c.id)} disabled={columns.length === 1 && columns.includes(c.id)} onChange={e => updateColumns(e.target.checked ? [...columns, c.id] : columns.filter(id => id !== c.id))} />{t(c.label)}</label>)}</div>
     </div>}
-    <div className="capture-filter"><div className="search-box"><Search size={15} /><input ref={searchInput} aria-label={t("过滤捕获请求")} aria-keyshortcuts="Control+f Meta+f" placeholder={t("过滤 URL、方法、状态码、来源应用…")} value={query} onChange={e => setQuery(e.target.value)} />{query && <button aria-label={t("清除筛选")} onClick={() => setQuery('')}><X size={13} /></button>}</div>
+    <div className="capture-filter"><div className="search-box"><Search size={15} /><input ref={searchInput} aria-label={t("过滤捕获请求")} aria-keyshortcuts="Control+f Meta+f" placeholder={t("搜索 URL、请求头、响应头和响应正文…")} maxLength={4096} value={query} onChange={e => setQuery(e.target.value)} />{query && <button aria-label={t("清除筛选")} onClick={() => setQuery('')}><X size={13} /></button>}</div>
       <div className="filter-options">{ filters.map(([key, label]) => <button key={key} className={`filter ${filter === key ? 'selected' : ''} ${['json','2','errors'].includes(key) ? 'filter-group-start' : ''}`} aria-pressed={filter === key} onClick={() => setFilter(key)}>{t(label)}</button>)}</div><span className="capture-total">{filtered.length} / {captured.length} {t("个请求")}</span>
     </div>
+    {query && (responseSearch.searching || responseSearch.unavailable>0) && <div className="capture-filter" role="status">
+      {responseSearch.searching && <span>{t('正在搜索响应正文… {v0}/{v1}',{v0:responseSearch.scanned,v1:responseSearch.total})}</span>}
+      {responseSearch.unavailable>0 && <span>{t('{v0} 条响应未能搜索：正文未记录、超出解码限制或读取失败。',{v0:responseSearch.unavailable})}</span>}
+    </div>}
     <SplitPane storageKey="capture-list" label={t("调整请求列表与详情高度")} direction="column" initial={55} min={15} max={80}>
     <div ref={tableWrap} onScroll={e => setViewport({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })} className="session-table-wrap" tabIndex={0} aria-label={t("请求列表，Ctrl+A 全选")} onKeyDown={e => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {

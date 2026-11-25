@@ -10,7 +10,7 @@ export default function RequestProxySelector({ draft, onChange, onManage }: {
  const [error,setError]=useState('');
  const [loading,setLoading]=useState(true);
  const selected=draft.upstreamProfileId??'';
- const supported=['auto','native','h2','h3','httpcloak','wreq'].includes(draft.engine??'auto');
+ const supported=['auto','native','h2','h3','httpcloak','wreq','xhttp'].includes(draft.engine??'auto');
  const supportsProfile=(p:UpstreamProfile)=>supported&&(draft.engine!=='h3'||p.url.startsWith('socks5://'));
  async function refresh(){setLoading(true);try{setProfiles(await invoke<UpstreamProfile[]>('upstream_profiles'));setError('');}catch(e){setError(String(e));}finally{setLoading(false);}}
  useEffect(()=>{void refresh();const focus=()=>void refresh();window.addEventListener('focus',focus);return()=>window.removeEventListener('focus',focus);},[]);

@@ -1,5 +1,6 @@
 import type { Flow, Header } from './types';
 import {assertRecordedBodies} from './bodyCapture';
+import {t} from './i18n';
 
 const header = (headers: Header[], name: string) => headers.filter(h => h.name.toLowerCase() === name).map(h => h.value).join(', ');
 const byteLength = (value: string) => value.length * 3 / 4 - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
@@ -26,19 +27,23 @@ export async function createHar(flows: Flow[], decode: (body: string, encoding: 
     let content: {size: number; mimeType: string; text?: string; encoding?: string; comment?: string; _rawBodyBase64?: string; _contentEncoding?: string} = { size: 0, mimeType: header(response?.headers ?? [], 'content-type') || 'application/octet-stream' };
     if (response) {
       const encoding = header(response.headers, 'content-encoding');
-      try {
-        if (raw && encoding && encoding.trim().toLowerCase() !== 'identity') {
-          content = { ...content, size: -1, _rawBodyBase64: response.bodyBase64, _contentEncoding: encoding, comment: 'Original encoded body preserved without decompression.' };
-        } else if (!encoding || encoding.trim().toLowerCase() === 'identity') {
-          content = { ...content, size: byteLength(response.bodyBase64), text: response.bodyBase64, encoding: 'base64' };
-        } else {
-          const decoded = await decode(response.bodyBase64, encoding);
-          content = { ...content, size: decoded.length, text: base64(decoded), encoding: 'base64' };
+      const encoded = !!encoding && encoding.trim().toLowerCase() !== 'identity';
+      // Standard HAR readers only display content.text. Preserve the original
+      // encoded entity as an extra field when requested, but always include
+      // the decoded entity in the standard field in both export modes.
+      if (raw && encoded) content = { ...content, _rawBodyBase64: response.bodyBase64, _contentEncoding: encoding };
+      let body = response.bodyBase64, size = byteLength(body);
+      if (encoded && size) {
+        try {
+          const decoded = await decode(body, encoding);
+          body = base64(decoded); size = decoded.length;
+        } catch (error) {
+          // A successful HAR must not silently omit a captured response or put
+          // compressed bytes into the standard decoded-content field.
+          throw new Error(t('HAR 响应正文解压失败；请保存会话 JSON 以保留原始数据。') + ' ' + String(error));
         }
-      } catch (error) {
-        // Never present compressed data as decoded HAR content. Preserve it in an explicit extension.
-        content = { ...content, size: -1, _rawBodyBase64: response.bodyBase64, _contentEncoding: encoding, comment: `Body could not be decoded: ${String(error)}` };
       }
+      content = { ...content, size, text: body, encoding: 'base64' };
     }
     entries.push({ startedDateTime: new Date(flow.startedAt).toISOString(), time: flow.durationMs,
       request: { method: request.method, url: request.url, httpVersion: flow.clientProtocol ?? '', headers: request.headers, cookies: [], queryString, bodySize: requestBytes.length, headersSize: -1, ...(postData ? { postData } : {}) },

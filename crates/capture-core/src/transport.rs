@@ -120,6 +120,10 @@ impl SendEngines {
             Ok(engine)=>engines.register(Arc::new(engine)).expect("unique custom engine"),
             Err(error)=>engines.unavailable("custom", &["native", "chrome", "firefox"], &error.to_string()),
         }
+        match crate::custom_engine::CustomEngine::discover_xhttp() {
+            Ok(engine) => engines.register(Arc::new(engine)).expect("unique xhttp engine"),
+            Err(error) => engines.unavailable("xhttp", &["native"], &error.to_string()),
+        }
         engines
     }
     fn unavailable(&mut self, id: &str, profiles: &[&str], reason: &str) {

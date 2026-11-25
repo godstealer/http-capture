@@ -47,7 +47,9 @@ const httpcloakProxy=renderToStaticMarkup(React.createElement(ui.RequestProxySel
 assert.ok(!httpcloakProxy.includes('This engine does not support upstream proxies'), 'httpcloak proxy selection must be supported');
 const wreqProxy=renderToStaticMarkup(React.createElement(ui.RequestProxySelector,{draft:{...request,engine:'wreq'},onChange(){},onManage(){}}));
 assert.ok(!wreqProxy.includes('This engine does not support upstream proxies'), 'wreq proxy selection must be supported');
-console.log('Request proxy UI: httpcloak and wreq supported passed');
+const xhttpProxy=renderToStaticMarkup(React.createElement(ui.RequestProxySelector,{draft:{...request,engine:'xhttp'},onChange(){},onManage(){}}));
+assert.ok(!xhttpProxy.includes('This engine does not support upstream proxies'), 'xhttp proxy selection must be supported');
+console.log('Request proxy UI: httpcloak, wreq, and xhttp supported');
 const h3Proxy=renderToStaticMarkup(React.createElement(ui.RequestProxySelector,{draft:{...request,engine:'h3'},onChange(){},onManage(){}}));
 assert.ok(h3Proxy.includes('UDP ASSOCIATE'), 'H3 must describe the SOCKS5 UDP requirement');
 assert.ok(!h3Proxy.includes('This engine does not support upstream proxies'), 'H3 supports SOCKS5 proxies');

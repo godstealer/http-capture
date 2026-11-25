@@ -10,7 +10,7 @@ for (const script of [
   'test-sessions.cjs', 'test-session-native.cjs', 'test-save-file.cjs', 'test-import-batches.cjs', 'test-header-order-source.cjs',
   'test-header-text.cjs', 'test-cookie-headers.cjs', 'test-cookie-header-ui.cjs', 'test-body-format.cjs', 'test-interception-editor.cjs', 'test-request-body.cjs', 'test-request-body-ui.cjs',
   'test-listener-preferences.cjs', 'test-ui-zoom.cjs', 'test-theme.cjs', 'test-har.cjs', 'test-grpc.cjs', 'test-library.cjs', 'test-external-import.cjs', 'test-external-import-postman-hoppscotch.cjs', 'test-external-import-other.cjs',
-  'test-request-tabs.cjs', 'test-request-runs.mjs', 'test-flow-refresh.cjs', 'test-flow-records.cjs', 'test-flow-history-ui.cjs', 'test-history-actions-ui.cjs', 'test-recorded-body.cjs', 'test-recorded-body-ui.cjs', 'test-grpc-recorded-ranges.cjs', 'test-grpc-recorded-ui.cjs', 'test-traffic-origin.cjs', 'test-mobile-lan-pairing.cjs', 'test-code-export.cjs', 'test-code-export-web.cjs', 'test-i18n.cjs',
+  'test-request-tabs.cjs', 'test-request-runs.mjs', 'test-flow-refresh.cjs', 'test-flow-records.cjs', 'test-flow-search.cjs', 'test-flow-search-ui.cjs', 'test-flow-history-ui.cjs', 'test-history-actions-ui.cjs', 'test-recorded-body.cjs', 'test-recorded-body-ui.cjs', 'test-grpc-recorded-ranges.cjs', 'test-grpc-recorded-ui.cjs', 'test-traffic-origin.cjs', 'test-mobile-lan-pairing.cjs', 'test-code-export.cjs', 'test-code-export-web.cjs', 'test-i18n.cjs',
 ]) {
   const result = spawnSync(process.execPath, [fileURLToPath(new URL(script, import.meta.url))], { stdio: 'inherit' });
   if (result.error) throw result.error;

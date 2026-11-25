@@ -353,9 +353,18 @@ fn main() {
         .setup(|app| {
             // Resources have different locations in .app, Debian and Windows bundles.
             // Resolve before constructing the engine so helper discovery works off-repo.
-            let helper = app.path().resource_dir()?.join("helpers").join(if cfg!(windows) { "http-capture-httpcloak.exe" } else { "http-capture-httpcloak" });
+            let helpers = app.path().resource_dir()?.join("helpers");
+            let helper = helpers.join(if cfg!(windows) { "http-capture-httpcloak.exe" } else { "http-capture-httpcloak" });
             if std::env::var_os("HTTP_CAPTURE_HTTPCLOAK").is_none() && helper.is_file() {
                 std::env::set_var("HTTP_CAPTURE_HTTPCLOAK", helper);
+            }
+            let xhttp = helpers.join(if cfg!(windows) { "http-capture-xhttp.exe" } else { "http-capture-xhttp" });
+            if std::env::var_os("HTTP_CAPTURE_XHTTP_ENGINE").is_none()
+                && xhttp.is_absolute()
+                && xhttp.is_file()
+                && xhttp.with_extension("json").is_file()
+            {
+                std::env::set_var("HTTP_CAPTURE_XHTTP_ENGINE", xhttp);
             }
             let engine = Engine::open(&app.path().app_data_dir()?)?;
             if let Err(error)=engine.system_proxy.restore(){eprintln!("System proxy recovery: {error}");}

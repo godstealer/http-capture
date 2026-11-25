@@ -1651,6 +1651,10 @@
   "自动跟随重定向（仅手动发送，最多 10 次）": "Follow redirects automatically (manual requests only, up to 10)",
   "wreq · BoringSSL 浏览器预设 · 仅用于手动发送": "wreq · BoringSSL browser presets · manual requests only",
   "自定义引擎 · 按本地程序声明的请求/响应接口发送": "Custom engine · send via a locally configured request/response program",
+  "xhttp · Auto（HTTP/2 / HTTP/1.1）· 按字段顺序发送": "xhttp · Auto (HTTP/2 / HTTP/1.1) · ordered headers",
+  "xhttp 使用 Go TLS，按 ALPN 协商 HTTP/2 / HTTP/1.1。": "xhttp uses Go TLS and negotiates HTTP/2 or HTTP/1.1 via ALPN.",
+  "此请求包含 xhttp 不支持的 TLS 参数。": "This request contains TLS settings that xhttp does not support.",
+  "清除不支持的 TLS 参数": "Clear unsupported TLS settings",
   "导入本应用备份": "Import app backup",
   "从其他工具导入": "Import from another tool",
   "选择来源，导入请求到集合": "Choose a source and import requests into collections",
@@ -1703,5 +1707,10 @@
   "字段操作": "Field actions",
   "启用字段": "Enable field",
   "正文未记录": "Body not recorded",
-  "此记录仅包含连接或头部信息，未保存正文；不能按空正文读取、下载或重放。": "This record contains only connection or header metadata. Its body was not captured and cannot be read, downloaded, or replayed as an empty body."
+  "此记录仅包含连接或头部信息，未保存正文；不能按空正文读取、下载或重放。": "This record contains only connection or header metadata. Its body was not captured and cannot be read, downloaded, or replayed as an empty body.",
+  "搜索 URL、请求头、响应头和响应正文…": "Search URL, request headers, response headers and response body…",
+  "正在搜索响应正文… {v0}/{v1}": "Searching response bodies… {v0}/{v1}",
+  "{v0} 条响应未能搜索：正文未记录、超出解码限制或读取失败。": "{v0} responses could not be searched: body not recorded, decoding limit exceeded, or read failed.",
+  "完整正文（含原始数据）": "Complete bodies (including original bytes)",
+  "HAR 响应正文解压失败；请保存会话 JSON 以保留原始数据。": "Failed to decompress the HAR response body; save session JSON to preserve the original bytes."
 }
