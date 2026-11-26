@@ -134,6 +134,47 @@ class LanSmokeBoundaries(unittest.TestCase):
         with mock.patch.object(smoke.time, "sleep"):
             self.assertEqual(smoke.wait_file(path, process, 1), {"status": "ok"})
 
+    def test_known_android_phases_report_only_the_last_milestone_and_failure_stage(self):
+        progress = {"phase": "android-vpn-traffic", "runId": RUN_ID}
+        for milestone in ("config-loaded", "pin-rejected", "replay-rejected", "vpn-ready", "traffic-ok"):
+            phase = {"runId": RUN_ID, "phase": milestone, "pairingUri": SECRET}
+            self.assertEqual(smoke.observe_android_phase(phase, RUN_ID, progress), milestone)
+            self.assertEqual(progress["androidLastPhase"], milestone)
+
+        failed = {"runId": RUN_ID, "phase": "failed", "failedStage": "probe-http",
+                  "errorMessage": SECRET}
+        self.assertEqual(smoke.observe_android_phase(failed, RUN_ID, progress), "failed")
+        report = smoke.failure_summary(progress, smoke.SmokeError("android-reported-failure"))
+        self.assertEqual(report, {
+            "schemaVersion": 1, "status": "failed", "phase": "android-vpn-traffic",
+            "errorType": "SmokeError", "failureCode": "android-reported-failure",
+            "androidLastPhase": "traffic-ok", "androidFailedStage": "probe-http",
+        })
+
+    def test_stale_and_unknown_android_phase_snapshots_do_not_change_progress(self):
+        progress = {"phase": "android-vpn-traffic", "androidLastPhase": "vpn-ready"}
+        for payload, reason in [
+            ({"runId": "other", "phase": "traffic-ok"}, "stale-android-phase"),
+            ({"runId": RUN_ID, "phase": SECRET}, "invalid-android-phase"),
+            ({"runId": RUN_ID, "phase": [SECRET]}, "invalid-android-phase"),
+        ]:
+            with self.subTest(reason=reason), self.assertRaisesRegex(smoke.SmokeError, "^" + reason + "$"):
+                smoke.observe_android_phase(payload, RUN_ID, progress)
+            self.assertEqual(progress, {"phase": "android-vpn-traffic", "androidLastPhase": "vpn-ready"})
+
+    def test_failure_summary_omits_untrusted_optional_diagnostics(self):
+        progress = {"phase": "android-vpn-traffic", "runId": RUN_ID}
+        failed = {"runId": RUN_ID, "phase": "failed", "failedStage": SECRET}
+        self.assertEqual(smoke.observe_android_phase(failed, RUN_ID, progress), "failed")
+        for error in (smoke.SmokeError(SECRET), ValueError(SECRET)):
+            summary = smoke.failure_summary(progress, error)
+            self.assertEqual(summary, {
+                "schemaVersion": 1, "status": "failed", "phase": "android-vpn-traffic",
+                "errorType": type(error).__name__,
+            })
+            self.assertNotIn(SECRET, json.dumps(summary))
+            self.assertNotIn(RUN_ID, json.dumps(summary))
+
     def test_failure_output_and_summary_do_not_publish_exception_messages(self):
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "public.json"

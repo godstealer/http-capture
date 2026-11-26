@@ -23,6 +23,19 @@ PACKAGE = "dev.httpcapture.mobile"
 RUNNER = PACKAGE + ".test/" + PACKAGE + ".CaptureSmokeInstrumentation"
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 MAX_CONFIG = 16 * 1024
+ANDROID_PROGRESS = frozenset({
+    "config-loaded", "pin-rejected", "replay-rejected",
+    "vpn-consent-granted", "vpn-start-requested", "vpn-ready", "traffic-ok", "revoked-ok",
+})
+ANDROID_FAILED_STAGES = frozenset({
+    "config", "pin-check", "pairing", "vpn-consent", "vpn-start", "probe", "revocation",
+    "probe-config", "probe-uid-vpn", "probe-http", "probe-udp", "probe-dns-wire", "probe-virtual-dns",
+})
+TRAFFIC_FAILURE_CODES = frozenset({
+    "stale-android-phase", "invalid-android-phase", "oversized-android-phase",
+    "android-reported-failure", "android-ended-before-traffic", "pc-fixture-ended-before-traffic",
+    "android-vpn-traffic-timeout",
+})
 
 class SmokeError(RuntimeError):
     """Only fixed, credential-free error codes may be constructed here."""
@@ -151,6 +164,36 @@ def instrumentation_succeeded(output: str, run_id: str) -> None:
         raise SmokeError("android-instrumentation-did-not-pass")
 
 
+def observe_android_phase(report: dict, run_id: str, progress: dict) -> str:
+    if report.get("runId") != run_id:
+        raise SmokeError("stale-android-phase")
+    stage = report.get("phase")
+    if stage == "failed":
+        failed_stage = report.get("failedStage")
+        if isinstance(failed_stage, str) and failed_stage in ANDROID_FAILED_STAGES:
+            progress["androidFailedStage"] = failed_stage
+    elif isinstance(stage, str) and stage in ANDROID_PROGRESS:
+        progress["androidLastPhase"] = stage
+    else:
+        raise SmokeError("invalid-android-phase")
+    return stage
+
+
+def failure_summary(progress: dict, error: BaseException) -> dict:
+    summary = {"schemaVersion": 1, "status": "failed", "phase": progress["phase"],
+               "errorType": type(error).__name__}
+    for key, allowed in (("androidLastPhase", ANDROID_PROGRESS), ("androidFailedStage", ANDROID_FAILED_STAGES)):
+        value = progress.get(key)
+        if isinstance(value, str) and value in allowed:
+            summary[key] = value
+    # Only our exact diagnostic codes are public. Arbitrary exception text is private.
+    if isinstance(error, SmokeError) and error.args and isinstance(error.args[0], str):
+        code = error.args[0]
+        if code in TRAFFIC_FAILURE_CODES:
+            summary["failureCode"] = code
+    return summary
+
+
 def wait_file(path: Path, process: subprocess.Popen, seconds: float) -> dict:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -231,7 +274,11 @@ class Adb:
         for name in names:
             if not re.fullmatch(r"httpcapture-lan-[a-f0-9]{32}(?:-phase)?\.json", name):
                 raise SmokeError("invalid-private-cleanup-name")
-        self.run(["shell", "run-as", PACKAGE, "rm", "-f"] + ["files/" + name for name in names], check=False)
+        private_paths = ["files/" + name for name in names]
+        for name in names:
+            if name.endswith("-phase.json"):
+                private_paths.extend("files/" + name + suffix for suffix in (".new", ".bak"))
+        self.run(["shell", "run-as", PACKAGE, "rm", "-f", *private_paths], check=False)
 
 
 def run_case(args: argparse.Namespace, progress: dict) -> dict:
@@ -274,16 +321,15 @@ def run_case(args: argparse.Namespace, progress: dict) -> dict:
                     progress["phase"] = "android-vpn-traffic"
                     deadline = time.monotonic() + 130
                     while time.monotonic() < deadline:
-                        phase = adb.phase(phase_name)
-                        if phase:
-                            if phase.get("runId") != run_id:
-                                raise SmokeError("stale-android-phase")
-                            stage = phase.get("phase")
+                        finished = instrumentation.poll() is not None
+                        report = adb.phase(phase_name)
+                        if report is not None:
+                            stage = observe_android_phase(report, run_id, progress)
                             if stage == "traffic-ok":
                                 break
                             if stage == "failed":
                                 raise SmokeError("android-reported-failure")
-                        if instrumentation.poll() is not None:
+                        if finished:
                             raise SmokeError("android-ended-before-traffic")
                         if fixture.poll() is not None:
                             raise SmokeError("pc-fixture-ended-before-traffic")
@@ -379,8 +425,7 @@ def main() -> int:
         code = 0
         print("LAN E2E passed: production pinned pairing, two HTTP exchanges, UDP/DNS-wire, and session revocation")
     except (Exception, KeyboardInterrupt) as error:
-        summary = {"schemaVersion": 1, "status": "failed", "phase": progress["phase"],
-                   "errorType": type(error).__name__}
+        summary = failure_summary(progress, error)
         # Never print adb output, exception messages, arguments, private JSON,
         # logcat, or full Bundles; those can contain the one-use pairing URI.
         print("LAN E2E failed at " + progress["phase"] + " (" + type(error).__name__ + ")")

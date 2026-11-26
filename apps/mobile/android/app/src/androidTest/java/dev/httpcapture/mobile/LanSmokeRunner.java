@@ -104,6 +104,8 @@ final class LanSmokeRunner {
 
             phase = "vpn-consent";
             grantVpnConsent();
+            writePhase("vpn-consent-granted");
+            phase = "vpn-start";
             try (ServerSocket reservation = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
                 proxyPort = reservation.getLocalPort();
             }
@@ -114,7 +116,7 @@ final class LanSmokeRunner {
             start.putExtra(CaptureVpnService.EXTRA_SYSTEM_PROXY_HINT, false);
             startedVpn = true;
             context.startForegroundService(start);
-            phase = "vpn-start";
+            writePhase("vpn-start-requested");
             long readyDeadline = SystemClock.elapsedRealtime() + 30000;
             while (SystemClock.elapsedRealtime() < readyDeadline && !vpnReady()) Thread.sleep(100);
             require(vpnReady());
@@ -174,7 +176,7 @@ final class LanSmokeRunner {
             }
             if (ownsSession) LanPairingClient.setActiveSession(null);
             if (configFile != null) configFile.delete();
-            if (phaseFile != null) new AtomicFile(phaseFile).delete();
+            // The host removes the sanitized phase file after reading terminal status.
         }
         instrumentation.finish(success ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);
     }
@@ -204,8 +206,8 @@ final class LanSmokeRunner {
         return file;
     }
     private void writePhase(String next) throws Exception {
-        phase = next;
         JSONObject status = new JSONObject().put("schemaVersion", 1).put("runId", runId).put("phase", next);
+        if ("failed".equals(next)) status.put("failedStage", phase);
         AtomicFile file = new AtomicFile(phaseFile);
         FileOutputStream output = null;
         try {
