@@ -31,6 +31,17 @@ ANDROID_FAILED_STAGES = frozenset({
     "config", "pin-check", "pairing", "vpn-consent", "vpn-start", "probe", "revocation",
     "probe-config", "probe-uid-vpn", "probe-http", "probe-udp", "probe-dns-wire", "probe-virtual-dns",
 })
+HTTP_PROBE_DIAGNOSTICS = (
+    ("httpFailureStep", frozenset({
+        "connect", "request-one", "response-one-head", "response-one-body",
+        "request-two", "response-two-head", "socket-close",
+    })),
+    ("probeErrorType", frozenset({
+        "SocketTimeoutException", "ConnectException", "SocketException", "IllegalStateException",
+        "IllegalArgumentException", "EOFException", "SecurityException", "InterruptedException",
+        "IOException", "ProbeFailure",
+    })),
+)
 TRAFFIC_FAILURE_CODES = frozenset({
     "stale-android-phase", "invalid-android-phase", "oversized-android-phase",
     "android-reported-failure", "android-ended-before-traffic", "pc-fixture-ended-before-traffic",
@@ -164,6 +175,13 @@ def instrumentation_succeeded(output: str, run_id: str) -> None:
         raise SmokeError("android-instrumentation-did-not-pass")
 
 
+def http_probe_diagnostics(report: dict) -> dict:
+    return {
+        key: report[key] for key, allowed in HTTP_PROBE_DIAGNOSTICS
+        if isinstance(report.get(key), str) and report[key] in allowed
+    }
+
+
 def observe_android_phase(report: dict, run_id: str, progress: dict) -> str:
     if report.get("runId") != run_id:
         raise SmokeError("stale-android-phase")
@@ -172,6 +190,8 @@ def observe_android_phase(report: dict, run_id: str, progress: dict) -> str:
         failed_stage = report.get("failedStage")
         if isinstance(failed_stage, str) and failed_stage in ANDROID_FAILED_STAGES:
             progress["androidFailedStage"] = failed_stage
+            if failed_stage == "probe-http":
+                progress.update(http_probe_diagnostics(report))
     elif isinstance(stage, str) and stage in ANDROID_PROGRESS:
         progress["androidLastPhase"] = stage
     else:
@@ -186,6 +206,8 @@ def failure_summary(progress: dict, error: BaseException) -> dict:
         value = progress.get(key)
         if isinstance(value, str) and value in allowed:
             summary[key] = value
+    if summary.get("androidFailedStage") == "probe-http":
+        summary.update(http_probe_diagnostics(progress))
     # Only our exact diagnostic codes are public. Arbitrary exception text is private.
     if isinstance(error, SmokeError) and error.args and isinstance(error.args[0], str):
         code = error.args[0]

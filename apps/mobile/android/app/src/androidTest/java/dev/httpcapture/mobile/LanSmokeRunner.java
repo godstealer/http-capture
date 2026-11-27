@@ -43,7 +43,7 @@ final class LanSmokeRunner {
     private final Context context;
     private final Bundle arguments;
     private File configFile, phaseFile;
-    private String runId, phase = "config", probeFailureType;
+    private String runId, phase = "config", probeFailureType, probeHttpFailureStep;
     private boolean ownsSession, startedVpn;
     private int proxyPort;
 
@@ -207,7 +207,13 @@ final class LanSmokeRunner {
     }
     private void writePhase(String next) throws Exception {
         JSONObject status = new JSONObject().put("schemaVersion", 1).put("runId", runId).put("phase", next);
-        if ("failed".equals(next)) status.put("failedStage", phase);
+        if ("failed".equals(next)) {
+            status.put("failedStage", phase);
+            if ("probe-http".equals(phase)) {
+                status.put("httpFailureStep", probeHttpFailureStep);
+                status.put("probeErrorType", probeFailureType);
+            }
+        }
         AtomicFile file = new AtomicFile(phaseFile);
         FileOutputStream output = null;
         try {
@@ -286,6 +292,11 @@ final class LanSmokeRunner {
                 String type = result.getStringExtra("errorType");
                 for (String allowed : new String[] {"SocketTimeoutException", "ConnectException", "SocketException", "IllegalStateException", "IllegalArgumentException", "EOFException", "SecurityException", "InterruptedException", "IOException"})
                     if (allowed.equals(type)) probeFailureType = allowed;
+                if ("probe-http".equals(phase)) {
+                    String step = result.getStringExtra("httpFailureStep");
+                    for (String allowed : new String[] {"connect", "request-one", "response-one-head", "response-one-body", "request-two", "response-two-head", "socket-close"})
+                        if (allowed.equals(step)) probeHttpFailureStep = allowed;
+                }
                 require(false);
             }
             for (String field : new String[] {"vpnReady", "noProxyHint", "httpOk", "udpOk", "dnsWireOk", "virtualDnsOk", "ok"})

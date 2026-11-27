@@ -33,7 +33,7 @@ final class LanProbe {
 
     static void run(Context context, Intent request) {
         String runId = "";
-        String stage = "config", errorType = "";
+        String stage = "config", errorType = "", httpFailureStep = null;
         boolean vpnReady = false, noProxyHint = false;
         boolean httpOk = false, udpOk = false, dnsWireOk = false, virtualDnsOk = false;
         try {
@@ -67,6 +67,9 @@ final class LanProbe {
             dns("10.111.0.1", 53, runId, false);
             virtualDnsOk = true;
             stage = "done";
+        } catch (HttpProbeFailure failure) {
+            errorType = failure.errorType;
+            httpFailureStep = failure.step;
         } catch (Throwable failure) {
             errorType = fixedErrorType(failure.getClass().getSimpleName());
             if (runId == null || !runId.matches("[0-9a-f]{32}")) runId = "";
@@ -76,6 +79,7 @@ final class LanProbe {
             result.putExtra("runId", runId);
             result.putExtra("stage", stage);
             result.putExtra("errorType", errorType);
+            if (httpFailureStep != null) result.putExtra("httpFailureStep", httpFailureStep);
             result.putExtra("vpnReady", vpnReady);
             result.putExtra("noProxyHint", noProxyHint);
             result.putExtra("httpOk", httpOk);
@@ -107,26 +111,45 @@ final class LanProbe {
         throw new IllegalStateException();
     }
 
-    private static void http(String host, int port, String runId, byte[] requestBody, byte[] responseBody) throws Exception {
+    private static void http(String host, int port, String runId, byte[] requestBody, byte[] responseBody) throws HttpProbeFailure {
+        String step = "connect";
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(InetAddress.getByName(host), port), TIMEOUT);
             socket.setSoTimeout(TIMEOUT);
             String fields = "Host: " + host + ":" + port + "\r\nX-Order: one\r\nx-order: two\r\n";
+            step = "request-one";
             socket.getOutputStream().write(("POST /lan-" + runId + "/one HTTP/1.1\r\n"
                     + fields + "Content-Length: " + requestBody.length + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
             socket.getOutputStream().write(requestBody);
             socket.getOutputStream().flush();
+            step = "response-one-head";
             InputStream input = socket.getInputStream();
             String head = readHead(input);
             String expected = "HTTP/1.1 200 OK\r\nX-Order: one\r\nx-order: two\r\nContent-Length: " + responseBody.length + "\r\n\r\n";
-            if (!expected.equals(head) || !Arrays.equals(responseBody, readExactly(input, responseBody.length)))
+            if (!expected.equals(head)) throw new IllegalStateException();
+            step = "response-one-body";
+            if (!Arrays.equals(responseBody, readExactly(input, responseBody.length)))
                 throw new IllegalStateException();
+            step = "request-two";
             socket.getOutputStream().write(("GET /lan-" + runId + "/two HTTP/1.1\r\n" + fields + "\r\n").getBytes(StandardCharsets.US_ASCII));
             socket.getOutputStream().flush();
+            step = "response-two-head";
             if (!"HTTP/1.1 204 No Content\r\nX-Order: one\r\nx-order: two\r\n\r\n".equals(readHead(input)))
                 throw new IllegalStateException();
             // Close only after both framed replies were fully read. ProtectedRelay
             // currently closes both directions on EOF; early half-close is not tested.
+            step = "socket-close";
+        } catch (Exception failure) {
+            throw new HttpProbeFailure(step, fixedErrorType(failure.getClass().getSimpleName()));
+        }
+    }
+
+    private static final class HttpProbeFailure extends Exception {
+        final String step, errorType;
+
+        HttpProbeFailure(String step, String errorType) {
+            this.step = step;
+            this.errorType = errorType;
         }
     }
 

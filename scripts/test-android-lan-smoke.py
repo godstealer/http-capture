@@ -175,6 +175,25 @@ class LanSmokeBoundaries(unittest.TestCase):
             self.assertNotIn(SECRET, json.dumps(summary))
             self.assertNotIn(RUN_ID, json.dumps(summary))
 
+    def test_http_failure_diagnostics_are_exact_and_scoped(self):
+        error = smoke.SmokeError("android-reported-failure")
+        cases = (
+            ("probe-http", "response-two-head", "SocketTimeoutException",
+             {"httpFailureStep": "response-two-head", "probeErrorType": "SocketTimeoutException"}),
+            ("probe-http", SECRET, ["SocketTimeoutException"], {}),
+            ("probe-udp", "connect", "ConnectException", {}),
+        )
+        for stage, step, error_type, expected in cases:
+            with self.subTest(stage=stage, expected=expected):
+                progress = {"phase": "android-vpn-traffic"}
+                phase = {"runId": RUN_ID, "phase": "failed", "failedStage": stage,
+                         "httpFailureStep": step, "probeErrorType": error_type}
+                smoke.observe_android_phase(phase, RUN_ID, progress)
+                report = smoke.failure_summary(progress, error)
+                details = {key: report[key] for key in ("httpFailureStep", "probeErrorType") if key in report}
+                self.assertEqual(details, expected)
+                self.assertNotIn(SECRET, json.dumps(report))
+
     def test_failure_output_and_summary_do_not_publish_exception_messages(self):
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "public.json"
