@@ -42,6 +42,17 @@ HTTP_PROBE_DIAGNOSTICS = (
         "IOException", "ProbeFailure",
     })),
 )
+PC_HTTP_MILESTONES = (
+    "gateway-acknowledged", "origin-accepted", "request-one-exact",
+    "reply-one-sent", "request-two-exact", "reply-two-sent",
+)
+PC_HTTP_FAULTS = frozenset({
+    "peer-mismatch",
+    "request-one-read-eof", "request-one-read-timeout", "request-one-read-io", "request-one-mismatch",
+    "reply-one-write-timeout", "reply-one-write-io",
+    "request-two-read-eof", "request-two-read-timeout", "request-two-read-io", "request-two-mismatch",
+    "reply-two-write-timeout", "reply-two-write-io",
+})
 TRAFFIC_FAILURE_CODES = frozenset({
     "stale-android-phase", "invalid-android-phase", "oversized-android-phase",
     "android-reported-failure", "android-ended-before-traffic", "pc-fixture-ended-before-traffic",
@@ -199,6 +210,28 @@ def observe_android_phase(report: dict, run_id: str, progress: dict) -> str:
     return stage
 
 
+def read_pc_http_diagnostics(directory: Path, run_id: str) -> dict:
+    milestones = []
+    fault = None
+    for event in (*PC_HTTP_MILESTONES, "origin-fault"):
+        try:
+            record = read_json(directory / f"diagnostic-{event}.json")
+        except (OSError, SmokeError):
+            continue
+        if (type(record.get("schemaVersion")) is not int or record["schemaVersion"] != 1
+                or record.get("runId") != run_id or record.get("event") != event):
+            continue
+        if event == "origin-fault":
+            candidate = record.get("fault")
+            if isinstance(candidate, str) and candidate in PC_HTTP_FAULTS:
+                fault = candidate
+        else:
+            milestones.append(event)
+    if not milestones and fault is None:
+        return {}
+    return {"milestones": milestones, "fault": fault}
+
+
 def failure_summary(progress: dict, error: BaseException) -> dict:
     summary = {"schemaVersion": 1, "status": "failed", "phase": progress["phase"],
                "errorType": type(error).__name__}
@@ -208,6 +241,8 @@ def failure_summary(progress: dict, error: BaseException) -> dict:
             summary[key] = value
     if summary.get("androidFailedStage") == "probe-http":
         summary.update(http_probe_diagnostics(progress))
+        if progress.get("pcHttpDiagnostics"):
+            summary["pcHttpDiagnostics"] = progress["pcHttpDiagnostics"]
     # Only our exact diagnostic codes are public. Arbitrary exception text is private.
     if isinstance(error, SmokeError) and error.args and isinstance(error.args[0], str):
         code = error.args[0]
@@ -387,6 +422,11 @@ def run_case(args: argparse.Namespace, progress: dict) -> dict:
                             "systemDnsForwardedToPc": False, "dnsWireOverUdp": True,
                             "captureCaInstalled": False,
                             "remaining": ["camera-scan", "physical-device", "network-switch", "early-half-close"]}
+                except (Exception, KeyboardInterrupt):
+                    # Read fixed observations before cleanup can close a live stream.
+                    if progress.get("androidFailedStage") == "probe-http":
+                        progress["pcHttpDiagnostics"] = read_pc_http_diagnostics(state, run_id)
+                    raise
                 finally:
                     # Revoke before forced teardown. Every process below was
                     # started by this invocation; no user listener is discovered

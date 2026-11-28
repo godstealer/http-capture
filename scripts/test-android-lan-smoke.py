@@ -194,6 +194,36 @@ class LanSmokeBoundaries(unittest.TestCase):
                 self.assertEqual(details, expected)
                 self.assertNotIn(SECRET, json.dumps(report))
 
+    def test_pc_http_diagnostics_use_same_run_allowlisted_progress_and_fault(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def marker(event, *, schema=1, run_id=RUN_ID, **fields):
+                report = {"schemaVersion": schema, "runId": run_id, "event": event, **fields}
+                (root / f"diagnostic-{event}.json").write_text(json.dumps(report), encoding="utf-8")
+
+            self.assertEqual(smoke.read_pc_http_diagnostics(root, RUN_ID), {})
+            marker("gateway-acknowledged", secret=SECRET)
+            marker("origin-accepted", schema=True)
+            marker("request-one-exact", run_id="old-run")
+            (root / "diagnostic-reply-one-sent.json").write_text("{", encoding="utf-8")
+            marker("origin-fault", fault="request-one-read-eof", privateError=SECRET)
+            diagnostic = smoke.read_pc_http_diagnostics(root, RUN_ID)
+            self.assertEqual(diagnostic, {
+                "milestones": ["gateway-acknowledged"], "fault": "request-one-read-eof",
+            })
+            marker("origin-fault", fault=SECRET)
+            self.assertIsNone(smoke.read_pc_http_diagnostics(root, RUN_ID)["fault"])
+
+            progress = {"phase": "android-vpn-traffic", "androidFailedStage": "probe-http",
+                        "pcHttpDiagnostics": diagnostic}
+            error = smoke.SmokeError("android-reported-failure")
+            summary = smoke.failure_summary(progress, error)
+            self.assertEqual(summary["pcHttpDiagnostics"], diagnostic)
+            self.assertNotIn(SECRET, json.dumps(summary))
+            self.assertNotIn(RUN_ID, json.dumps(summary))
+            progress["androidFailedStage"] = "probe-udp"
+            self.assertNotIn("pcHttpDiagnostics", smoke.failure_summary(progress, error))
+
     def test_failure_output_and_summary_do_not_publish_exception_messages(self):
         with tempfile.TemporaryDirectory() as directory:
             summary = Path(directory) / "public.json"

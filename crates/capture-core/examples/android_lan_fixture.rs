@@ -7,7 +7,7 @@ use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use capture_core::{
     body_capture::{BodyCaptureState, VARIANTS},
-    mobile_gateway::MobileGateway,
+    mobile_gateway::{GatewayEvent, MobileGateway},
     model::{Flow, Header},
     Engine,
 };
@@ -15,7 +15,7 @@ use protocol::Traffic;
 use serde_json::{json, Value};
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -129,10 +129,26 @@ impl Fixture {
             "Origin source requires high ports"
         );
         fixture.traffic = Traffic::new(fixture.traffic.run_id.clone(), host, http_port)?;
+        let gateway = fixture.gateway.as_ref().expect("live gateway");
+        let mut events = gateway.events();
+        let directory = fixture.directory.clone();
+        let run_id = fixture.traffic.run_id.clone();
+        let http_host = host.to_string();
+        fixture.tasks.spawn(async move {
+            while let Ok(event) = events.recv().await {
+                if let GatewayEvent::Connected { host, port, .. } = event {
+                    if host == http_host && port == http_port {
+                        write_http_diagnostic(&directory, &run_id, "gateway-acknowledged", None);
+                        break;
+                    }
+                }
+            }
+        });
         let traffic = fixture.traffic.clone();
         let facts = fixture.facts.clone();
+        let directory = fixture.directory.clone();
         fixture.tasks.spawn(async move {
-            if http_origin(http, traffic, facts.clone()).await.is_err() {
+            if http_origin(http, traffic, facts.clone(), directory).await.is_err() {
                 fact_error(&facts, "HTTP origin failed");
             }
         });
@@ -341,7 +357,7 @@ fn validate_directory(directory: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn write_private_json(path: &Path, value: &Value) -> Result<()> {
+fn create_private_file(path: &Path) -> std::io::Result<fs::File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -349,8 +365,11 @@ fn write_private_json(path: &Path, value: &Value) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    options.open(path)
+}
+fn write_private_json(path: &Path, value: &Value) -> Result<()> {
     let bytes = serde_json::to_vec(value)?;
-    let mut file = options.open(path)?;
+    let mut file = create_private_file(path)?;
     let written = (|| -> Result<()> {
         file.write_all(&bytes)?;
         file.write_all(b"\n")?;
@@ -470,27 +489,96 @@ async fn bind_udp_origin(host: Ipv4Addr, excluded: &[u16]) -> Result<UdpSocket> 
     }
     anyhow::bail!("Unable to reserve a distinct high UDP fixture port")
 }
-async fn http_origin(listener: TcpListener, traffic: Traffic, facts: SharedFacts) -> Result<()> {
+fn write_http_diagnostic(directory: &Path, run_id: &str, event: &str, fault: Option<&str>) {
+    // Names and faults are fixed by this fixture. A diagnostic write failure
+    // cannot turn a successful transfer into a failed acceptance check.
+    let mut value = json!({"schemaVersion":1, "runId":run_id, "event":event});
+    if let Some(fault) = fault {
+        value["fault"] = json!(fault);
+    }
+    let path = directory.join(format!("diagnostic-{event}.json"));
+    let staging = path.with_extension("tmp");
+    let write_record = || -> Result<()> {
+        let mut file = create_private_file(&staging)?;
+        serde_json::to_writer(&mut file, &value)?;
+        drop(file);
+        // Readers see a complete record without an fsync on the HTTP path.
+        fs::rename(&staging, &path)?;
+        Ok(())
+    };
+    let _ = write_record();
+}
+
+enum HttpOriginFault {
+    PeerMismatch,
+    ReadEof,
+    ReadTimeout,
+    ReadIo,
+    RequestMismatch,
+    WriteTimeout,
+    WriteIo,
+}
+
+fn http_origin_fault(directory: &Path, run_id: &str, first: bool, fault: HttpOriginFault) {
+    let exchange = if first { "one" } else { "two" };
+    let code = match fault {
+        HttpOriginFault::PeerMismatch => "peer-mismatch".into(),
+        HttpOriginFault::ReadEof => format!("request-{exchange}-read-eof"),
+        HttpOriginFault::ReadTimeout => format!("request-{exchange}-read-timeout"),
+        HttpOriginFault::ReadIo => format!("request-{exchange}-read-io"),
+        HttpOriginFault::RequestMismatch => format!("request-{exchange}-mismatch"),
+        HttpOriginFault::WriteTimeout => format!("reply-{exchange}-write-timeout"),
+        HttpOriginFault::WriteIo => format!("reply-{exchange}-write-io"),
+    };
+    write_http_diagnostic(directory, run_id, "origin-fault", Some(&code));
+}
+
+async fn http_origin(
+    listener: TcpListener,
+    traffic: Traffic,
+    facts: SharedFacts,
+    directory: PathBuf,
+) -> Result<()> {
+    let fault = |first, kind| http_origin_fault(&directory, &traffic.run_id, first, kind);
+    let diagnostic = |event| write_http_diagnostic(&directory, &traffic.run_id, event, None);
     let (mut stream, peer) = listener.accept().await?;
-    ensure!(
-        peer.ip() == std::net::IpAddr::V4(traffic.host),
-        "Unexpected HTTP source address"
-    );
+    diagnostic("origin-accepted");
+    if peer.ip() != std::net::IpAddr::V4(traffic.host) {
+        fault(true, HttpOriginFault::PeerMismatch);
+        anyhow::bail!("Unexpected HTTP source address");
+    }
     for first in [true, false] {
         let expected = traffic.request(first);
         let mut received = vec![0; expected.len()];
-        timeout(Duration::from_secs(20), stream.read_exact(&mut received)).await??;
-        ensure!(received == expected, "HTTP origin request bytes differ");
+        timeout(Duration::from_secs(20), stream.read_exact(&mut received))
+            .await
+            .inspect_err(|_| fault(first, HttpOriginFault::ReadTimeout))?
+            .inspect_err(|error| {
+                let kind = if error.kind() == ErrorKind::UnexpectedEof {
+                    HttpOriginFault::ReadEof
+                } else {
+                    HttpOriginFault::ReadIo
+                };
+                fault(first, kind);
+            })?;
+        if received != expected {
+            fault(first, HttpOriginFault::RequestMismatch);
+            anyhow::bail!("HTTP origin request bytes differ");
+        }
         facts
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .http_requests += 1;
+        diagnostic(if first { "request-one-exact" } else { "request-two-exact" });
         timeout(
             Duration::from_secs(20),
             stream.write_all(&traffic.response(first)),
         )
-        .await??;
+        .await
+        .inspect_err(|_| fault(first, HttpOriginFault::WriteTimeout))?
+        .inspect_err(|_| fault(first, HttpOriginFault::WriteIo))?;
         facts.lock().unwrap_or_else(|e| e.into_inner()).http_replies += 1;
+        diagnostic(if first { "reply-one-sent" } else { "reply-two-sent" });
     }
     stream.shutdown().await?;
     drop(stream);
